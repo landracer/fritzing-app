@@ -58,6 +58,7 @@ const QString ModuleIDNames::BreadboardLogoTextModuleIDName = "BreadboardLogoTex
 const QString ModuleIDNames::BreadboardLogoImageModuleIDName = "BreadboardLogoImageModuleID";
 const QString ModuleIDNames::BoardLogoImageModuleIDName = "BoardLogoImageModuleID";
 const QString ModuleIDNames::OneLayerBoardLogoImageModuleIDName = "OneLayerBoardLogoImageModuleID";
+const QString ModuleIDNames::PanelBoardModuleIDName = "PanelBoardModuleID";
 const QString ModuleIDNames::HoleModuleIDName = "HoleModuleID";
 const QString ModuleIDNames::ViaModuleIDName = "ViaModuleID";
 const QString ModuleIDNames::PadModuleIDName = "PadModuleID";

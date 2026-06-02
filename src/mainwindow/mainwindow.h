@@ -249,6 +249,12 @@ public Q_SLOTS:
 	void groundFill();
 	void removeGroundFill();
 	void copperFill();
+	// NOTE: per-layer overloads used by the panelizer's batch Gerber export.
+	// They are thin public wrappers around the protected groundFillAux(),
+	// restoring the pre-refactor API the panelizer relies on without
+	// exposing the internal helper directly.
+	void copperFill(ViewLayer::ViewLayerID viewLayerID);
+	void groundFill(ViewLayer::ViewLayerID viewLayerID);
 	void setOneGroundFillSeed();
 	void setGroundFillSeeds();
 	void clearGroundFillSeeds();
@@ -277,6 +283,7 @@ protected Q_SLOTS:
 	void print();
 	void doExport();
 	void exportEtchable();
+	void showPanelizerWizard();
 	void about();
 	void tipsAndTricks();
 	void firstTimeHelp();
@@ -752,6 +759,7 @@ protected:
 	QAction *m_exportPdfAct = nullptr;
 	QAction *m_exportEagleAct = nullptr;
 	QAction *m_exportGerberAct = nullptr;
+	QAction *m_exportPanelAct = nullptr;  // Panelize wizard
 	QAction *m_exportEtchablePdfAct = nullptr;
 	QAction *m_exportEtchableSvgAct = nullptr;
 	QAction *m_exportBomAct = nullptr;

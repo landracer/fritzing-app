@@ -31,7 +31,8 @@ HEADERS += src/svg/svgfilesplitter.h \
     src/svg/gedaelementgrammar_p.h \
     src/svg/gedaelementlexer.h \
     src/svg/clipperhelpers.h \
-    $$PWD/../src/svg/svgtext.h
+    $$PWD/../src/svg/svgtext.h \
+    src/svg/fabexporter.h
 
 SOURCES += src/svg/svgfilesplitter.cpp \
     src/svg/svgpathparser.cpp \
@@ -51,4 +52,5 @@ SOURCES += src/svg/svgfilesplitter.cpp \
     src/svg/gedaelementparser.cpp \
     src/svg/gedaelementgrammar.cpp \
     src/svg/gedaelementlexer.cpp \
-    $$PWD/../src/svg/svgtext.cpp
+    $$PWD/../src/svg/svgtext.cpp \
+    src/svg/fabexporter.cpp
