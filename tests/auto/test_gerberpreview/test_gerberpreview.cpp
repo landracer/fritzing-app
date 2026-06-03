@@ -64,6 +64,7 @@ class TestGerberPreview : public QObject {
 private slots:
 	void parsesApertures();
 	void parsesCommands();
+	void apertureSelectForms();
 	void boundsCoverBox();
 	void rendererProducesNonEmptyImage();
 	void excellonHits();
@@ -94,6 +95,34 @@ void TestGerberPreview::parsesCommands() {
 	// Four sides of the box = 4 strokes; one D03 = 1 flash.
 	QCOMPARE(strokes, 4);
 	QCOMPARE(flashes, 1);
+}
+
+void TestGerberPreview::apertureSelectForms() {
+	// A stroke drawn after a bare "Dnn*" select (modern, G54 omitted)
+	// and one drawn after the deprecated "G54Dnn*" select must both
+	// resolve to the aperture that gives the correct trace width.
+	// Regression for the preview rendering all traces at the 0.1 mm
+	// fallback width when G54 was omitted.
+	static const char * kBareSelect =
+		"%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,0.5*%\n"
+		"G01*\nD10*\nX0Y0D02*\nX10000000Y0D01*\nM02*\n";
+	static const char * kG54Select =
+		"%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,0.5*%\n"
+		"G01*\nG54D10*\nX0Y0D02*\nX10000000Y0D01*\nM02*\n";
+
+	GerberParser p;
+	for (const char * src : { kBareSelect, kG54Select }) {
+		GerberDocument doc = p.parse(QString::fromLatin1(src));
+		const GerberCommand * stroke = nullptr;
+		for (const GerberCommand & c : doc.commands) {
+			if (c.kind == GerberCommand::Stroke) { stroke = &c; break; }
+		}
+		QVERIFY(stroke != nullptr);
+		// Must reference D10, not the -1 "no aperture" fallback.
+		QCOMPARE(stroke->apertureCode, 10);
+		QVERIFY(doc.apertures.contains(stroke->apertureCode));
+		QVERIFY(qFuzzyCompare(doc.apertures.value(stroke->apertureCode).strokeWidth(), 0.5));
+	}
 }
 
 void TestGerberPreview::boundsCoverBox() {

@@ -240,13 +240,19 @@ void handleStatement(const QString &s, GerberDocument &doc, ParserState &state)
 	if (s.startsWith(QLatin1String("G04")) ||
 	    s.startsWith(QLatin1String("G4 "))) return;
 
-	// Pure D-code: aperture select.
+	// Pure D-code: aperture select. Accept both the modern bare form
+	// "Dnn" and the deprecated "G54Dnn" prefix. Aperture codes are
+	// always >= 10; D01/D02/D03 are draw/move/flash operations and
+	// must fall through to parseCoordinate() below.
 	{
-		QRegularExpression re(QStringLiteral("^G?54?D(\\d+)$"));
+		QRegularExpression re(QStringLiteral("^(?:G54)?D(\\d+)$"));
 		auto mm = re.match(s);
 		if (mm.hasMatch()) {
-			state.activeAperture = mm.captured(1).toInt();
-			return;
+			const int code = mm.captured(1).toInt();
+			if (code >= 10) {
+				state.activeAperture = code;
+				return;
+			}
 		}
 	}
 
