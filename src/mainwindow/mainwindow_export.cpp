@@ -1077,6 +1077,10 @@ void MainWindow::createExportActions() {
 	m_exportGerberAct->setStatusTip(tr("Export the current sketch to Extended Gerber format (RS-274X) for professional PCB production"));
 	connect(m_exportGerberAct, SIGNAL(triggered()), this, SLOT(doExport()));
 
+	m_viewGerberAct = new QAction(tr("View Gerber..."), this);
+	m_viewGerberAct->setStatusTip(tr("Open a folder of Gerber files in the Gerber preview window"));
+	connect(m_viewGerberAct, SIGNAL(triggered()), this, SLOT(viewGerber()));
+
 	m_exportPanelAct = new QAction(tr("Panelize..."), this);
 	m_exportPanelAct->setStatusTip(tr("Open the panelizer wizard to create a panel from your PCB"));
 	connect(m_exportPanelAct, SIGNAL(triggered()), this, SLOT(showPanelizerWizard()));
@@ -1848,6 +1852,8 @@ void MainWindow::exportToGerber() {
 	if (exportDir.isEmpty()) return;
 
 	FileProgressDialog * fileProgressDialog = exportProgress();
+	fileProgressDialog->setMessage(tr("Generating Gerber files..."));
+	QApplication::processEvents();
 
 	FolderUtils::setOpenSaveFolder(exportDir);
 
@@ -1860,7 +1866,10 @@ void MainWindow::exportToGerber() {
 
 	m_statusBar->showMessage(tr("Sketch exported to Gerber"), 2000);
 
-	delete fileProgressDialog;
+	// Roll the same progress dialog over to the preview load so the user
+	// gets feedback while the standalone window builds its first frame.
+	fileProgressDialog->setMessage(tr("Opening Gerber preview..."));
+	QApplication::processEvents();
 
 	// Pop the standalone preview window so the user can verify the freshly
 	// written artifacts. Non-modal so they can keep editing while reviewing;
@@ -1868,6 +1877,28 @@ void MainWindow::exportToGerber() {
 	auto * preview = new GerberPreviewDialog(this);
 	preview->setAttribute(Qt::WA_DeleteOnClose);
 	preview->openDirectory(exportDir, prefix);
+	preview->show();
+	preview->raise();
+	// Let the preview paint its first frame before we dismiss the dialog.
+	QApplication::processEvents();
+
+	delete fileProgressDialog;
+}
+
+void MainWindow::viewGerber() {
+	// Re-open a previously exported folder of Gerber files in the standalone
+	// preview window. There is otherwise no way to inspect generated Gerbers
+	// without re-running the export.
+	QString dir = QFileDialog::getExistingDirectory(this, tr("Choose a folder of Gerber files to view"),
+	              defaultSaveFolder(),
+	              QFileDialog::ShowDirsOnly
+	              | QFileDialog::DontResolveSymlinks);
+
+	if (dir.isEmpty()) return;
+
+	auto * preview = new GerberPreviewDialog(this);
+	preview->setAttribute(Qt::WA_DeleteOnClose);
+	preview->openDirectory(dir, QFileInfo(dir).fileName());
 	preview->show();
 	preview->raise();
 }
