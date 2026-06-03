@@ -1079,7 +1079,7 @@ void MainWindow::createExportActions() {
 
 	m_viewGerberAct = new QAction(tr("View Gerber..."), this);
 	m_viewGerberAct->setStatusTip(tr("Open a folder of Gerber files in the Gerber preview window"));
-	connect(m_viewGerberAct, SIGNAL(triggered()), this, SLOT(viewGerber()));
+	connect(m_viewGerberAct, &QAction::triggered, this, &MainWindow::viewGerber);
 
 	m_exportPanelAct = new QAction(tr("Panelize..."), this);
 	m_exportPanelAct->setStatusTip(tr("Open the panelizer wizard to create a panel from your PCB"));
@@ -1873,12 +1873,14 @@ void MainWindow::exportToGerber() {
 
 	// Pop the standalone preview window so the user can verify the freshly
 	// written artifacts. Non-modal so they can keep editing while reviewing;
-	// WA_DeleteOnClose so we don't leak it across repeated exports.
+	// WA_DeleteOnClose so we don't leak it across repeated exports. Show it
+	// before loading so its own "Loading..." status is visible during the
+	// synchronous parse.
 	auto * preview = new GerberPreviewDialog(this);
 	preview->setAttribute(Qt::WA_DeleteOnClose);
-	preview->openDirectory(exportDir, prefix);
 	preview->show();
 	preview->raise();
+	preview->openDirectory(exportDir, prefix);
 	// Let the preview paint its first frame before we dismiss the dialog.
 	QApplication::processEvents();
 
@@ -1898,9 +1900,11 @@ void MainWindow::viewGerber() {
 
 	auto * preview = new GerberPreviewDialog(this);
 	preview->setAttribute(Qt::WA_DeleteOnClose);
-	preview->openDirectory(dir, QFileInfo(dir).fileName());
+	// Show before loading so the in-window "Loading..." status is visible
+	// while the files are parsed and rendered.
 	preview->show();
 	preview->raise();
+	preview->openDirectory(dir, QFileInfo(dir).fileName());
 }
 
 void MainWindow::connectStartSave(bool doConnect) {

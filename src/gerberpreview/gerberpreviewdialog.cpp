@@ -169,6 +169,14 @@ void GerberPreviewDialog::openFiles(const QStringList &paths, const QString &tit
 		setWindowTitle(tr("Gerber Preview - %1").arg(title));
 	}
 	if (m_preview != nullptr) {
+		// Parsing is synchronous and can take a moment on large boards.
+		// Show a "Loading..." line and let it paint so the window does
+		// not look frozen while the files are read and rendered.
+		if (m_status != nullptr && !paths.isEmpty()) {
+			m_status->setText(tr("Loading %1 Gerber file(s)...").arg(paths.size()));
+			m_status->setToolTip(QString());
+			QCoreApplication::processEvents();
+		}
 		m_preview->loadFiles(paths);
 		m_preview->zoomToFit();
 	}
