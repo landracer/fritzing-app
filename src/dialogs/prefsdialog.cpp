@@ -458,11 +458,26 @@ QWidget * PrefsDialog::createGerberBetaFeaturesForm() {
 	box->setChecked(settings.value("gerberExportImprovementsEnabled", true).toBool());
 	layout->addWidget(box);
 
+	layout->addSpacing(10);
+	QLabel * previewLabel = new QLabel(tr("Show a standalone Gerber preview window, reachable from "
+										  "File > Export > for Production > Gerber Preview. "
+										  "This is a beta feature and is disabled by default."));
+	previewLabel->setWordWrap(true);
+	layout->addWidget(previewLabel);
+
+	QCheckBox * previewBox = new QCheckBox(tr("Enable Gerber preview"));
+	previewBox->setChecked(settings.value("gerberPreviewEnabled", false).toBool());
+	layout->addWidget(previewBox);
+
 
 	gerberGroup->setLayout(layout);
 
 	connect(box, &QCheckBox::clicked, this, [this](bool checked) {
 		m_settings.insert("gerberExportImprovementsEnabled", QString::number(checked));
+	});
+
+	connect(previewBox, &QCheckBox::clicked, this, [this](bool checked) {
+		m_settings.insert("gerberPreviewEnabled", QString::number(checked));
 	});
 
 	return gerberGroup;

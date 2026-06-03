@@ -1469,7 +1469,7 @@ void MainWindow::populateExportMenu() {
 	productionMenu->addAction(m_exportEtchableSvgAct);
 	productionMenu->addSeparator();
 	productionMenu->addAction(m_exportGerberAct);
-	productionMenu->addAction(m_viewGerberAct);
+	productionMenu->addAction(m_gerberPreviewAct);
 	productionMenu->addAction(m_exportPanelAct);
 }
 

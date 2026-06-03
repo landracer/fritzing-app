@@ -1077,9 +1077,11 @@ void MainWindow::createExportActions() {
 	m_exportGerberAct->setStatusTip(tr("Export the current sketch to Extended Gerber format (RS-274X) for professional PCB production"));
 	connect(m_exportGerberAct, SIGNAL(triggered()), this, SLOT(doExport()));
 
-	m_viewGerberAct = new QAction(tr("View Gerber..."), this);
-	m_viewGerberAct->setStatusTip(tr("Open a folder of Gerber files in the Gerber preview window"));
-	connect(m_viewGerberAct, &QAction::triggered, this, &MainWindow::viewGerber);
+	m_gerberPreviewAct = new QAction(tr("Gerber Preview..."), this);
+	m_gerberPreviewAct->setStatusTip(tr("Open a folder of Gerber files in the Gerber preview window"));
+	connect(m_gerberPreviewAct, &QAction::triggered, this, &MainWindow::viewGerber);
+	// Beta feature: hidden unless the user opts in via Preferences > Beta Features.
+	applyGerberPreviewSetting();
 
 	m_exportPanelAct = new QAction(tr("Panelize..."), this);
 	m_exportPanelAct->setStatusTip(tr("Open the panelizer wizard to create a panel from your PCB"));
@@ -1866,23 +1868,10 @@ void MainWindow::exportToGerber() {
 
 	m_statusBar->showMessage(tr("Sketch exported to Gerber"), 2000);
 
-	// Roll the same progress dialog over to the preview load so the user
-	// gets feedback while the standalone window builds its first frame.
-	fileProgressDialog->setMessage(tr("Opening Gerber preview..."));
-	QApplication::processEvents();
-
-	// Pop the standalone preview window so the user can verify the freshly
-	// written artifacts. Non-modal so they can keep editing while reviewing;
-	// WA_DeleteOnClose so we don't leak it across repeated exports. Show it
-	// before loading so its own "Loading..." status is visible during the
-	// synchronous parse.
-	auto * preview = new GerberPreviewDialog(this);
-	preview->setAttribute(Qt::WA_DeleteOnClose);
-	preview->show();
-	preview->raise();
-	preview->openDirectory(exportDir, prefix);
-	// Let the preview paint its first frame before we dismiss the dialog.
-	QApplication::processEvents();
+	// Note: the Gerber preview is intentionally NOT opened automatically here.
+	// Users reach it deliberately via File > Export > for Production > Gerber
+	// Preview (when the beta feature is enabled), so export never spawns an
+	// unexpected window.
 
 	delete fileProgressDialog;
 }
@@ -1905,6 +1894,13 @@ void MainWindow::viewGerber() {
 	preview->show();
 	preview->raise();
 	preview->openDirectory(dir, QFileInfo(dir).fileName());
+}
+
+void MainWindow::applyGerberPreviewSetting() {
+	// Hide the menu entry entirely unless the user has opted into the beta
+	// preview. Live-applied from FApplication::updatePrefs so no restart is needed.
+	bool enabled = QSettings().value("gerberPreviewEnabled", false).toBool();
+	if (m_gerberPreviewAct) m_gerberPreviewAct->setVisible(enabled);
 }
 
 void MainWindow::connectStartSave(bool doConnect) {
