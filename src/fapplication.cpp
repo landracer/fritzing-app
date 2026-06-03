@@ -1549,6 +1549,11 @@ void FApplication::updatePrefs(PrefsDialog & prefsDialog)
 		else if (key.compare("autosaveEnabled") == 0) {
 			MainWindow::setAutosaveEnabled(hash.value(key).toInt() != 0);
 		}
+		else if (key.compare("connectorDebugHighlightEnabled") == 0) {
+			Q_FOREACH (MainWindow * mainWindow, mainWindows) {
+				mainWindow->applyConnectorDebugSetting();
+			}
+		}
 		else if (key.contains("curvy", Qt::CaseInsensitive)) {
 			Q_FOREACH (MainWindow * mainWindow, mainWindows) {
 				Q_FOREACH (SketchWidget * sketchWidget, mainWindow->sketchWidgets()) {

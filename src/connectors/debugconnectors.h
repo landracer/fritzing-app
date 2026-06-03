@@ -36,9 +36,13 @@ public:
 public slots:
 	void monitorConnections(bool enabled);
 	void onChangeConnection();
+	void applyMonitorSetting();
 
 	void onSelectErrors();
 	void onRepairErrors();
+
+public:
+	static bool highlightEnabled();
 
 signals:
 	void repairErrorsCompleted();

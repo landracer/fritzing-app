@@ -168,6 +168,7 @@ void PrefsDialog::initBetaFeatures(QWidget * widget)
 {
 	QVBoxLayout * vLayout = new QVBoxLayout();
 	vLayout->addWidget(createGerberBetaFeaturesForm());
+	vLayout->addWidget(createConnectorDebugForm());
 	vLayout->addWidget(createProjectPropertiesForm());
 	vLayout->addSpacerItem(new QSpacerItem(1, 1, QSizePolicy::Preferred, QSizePolicy::Expanding));
 	widget->setLayout(vLayout);
@@ -465,6 +466,32 @@ QWidget * PrefsDialog::createGerberBetaFeaturesForm() {
 	});
 
 	return gerberGroup;
+}
+
+QWidget * PrefsDialog::createConnectorDebugForm() {
+	QSettings settings;
+	QGroupBox * group = new QGroupBox(tr("Connector debugging"), this);
+
+	QVBoxLayout * layout = new QVBoxLayout();
+
+	QLabel * label = new QLabel(tr("When enabled, the breadboard, schematic and PCB backgrounds turn red "
+								   "whenever Fritzing detects inconsistent or unrouted connectors. "
+								   "This is a developer diagnostic and is disabled by default."));
+	label->setWordWrap(true);
+	layout->addWidget(label);
+	layout->addSpacing(10);
+
+	QCheckBox * box = new QCheckBox(tr("Highlight connector errors in red"));
+	box->setChecked(settings.value("connectorDebugHighlightEnabled", false).toBool());
+	layout->addWidget(box);
+
+	group->setLayout(layout);
+
+	connect(box, &QCheckBox::clicked, this, [this](bool checked) {
+		m_settings.insert("connectorDebugHighlightEnabled", QString::number(checked));
+	});
+
+	return group;
 }
 
 QWidget *PrefsDialog::createProjectPropertiesForm() {

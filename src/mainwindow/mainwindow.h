@@ -183,6 +183,8 @@ public:
 
 	void redrawSketch();
 
+	void applyConnectorDebugSetting();
+
 	// if we consider a part as the smallest ("atomic") entity inside
 	// fritzing, then this functions may help with the bundle tasks
 	// on the complex entities: sketches, bins, modules (?)
