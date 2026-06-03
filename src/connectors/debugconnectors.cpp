@@ -30,6 +30,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QEventLoop>
 #include <QLineF>
+#include <QSettings>
 
 DebugConnectors::DebugConnectors(SketchWidget *breadboardGraphicsView, SketchWidget *schematicGraphicsView, SketchWidget *pcbGraphicsView)
 	: m_breadboardGraphicsView(breadboardGraphicsView),
@@ -55,12 +56,35 @@ DebugConnectors::DebugConnectors(SketchWidget *breadboardGraphicsView, SketchWid
 			this,
 			&DebugConnectors::onChangeConnection);
 
-	monitorConnections(true);
+	applyMonitorSetting();
 }
 
 void DebugConnectors::monitorConnections(bool enabled)
 {
 	m_monitorEnabled = enabled;
+}
+
+bool DebugConnectors::highlightEnabled()
+{
+	QSettings settings;
+	return settings.value("connectorDebugHighlightEnabled", false).toBool();
+}
+
+void DebugConnectors::applyMonitorSetting()
+{
+	bool enabled = highlightEnabled();
+	monitorConnections(enabled);
+	if (enabled) {
+		onChangeConnection();
+	} else if (colorChanged) {
+		// restore any background we turned red before the feature was disabled
+		m_breadboardGraphicsView->setBackgroundColor(breadboardBackgroundColor, false);
+		m_schematicGraphicsView->setBackgroundColor(schematicBackgroundColor, false);
+		m_pcbGraphicsView->setBackgroundColor(pcbBackgroundColor, false);
+		colorChanged = false;
+	} else {
+		fixColor();
+	}
 }
 
 void logConnector(QString info, ConnectorItem *connectorItem)

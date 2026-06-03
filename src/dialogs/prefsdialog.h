@@ -67,6 +67,7 @@ protected:
 	QWidget * createAutosaveForm();
 	QWidget *createProgrammerForm(QList<Platform *> platforms);
 	QWidget *createGerberBetaFeaturesForm();
+	QWidget *createConnectorDebugForm();
 	QWidget *createProjectPropertiesForm();
 	void updateWheelText();
 	void initGeneral(QWidget * general, QFileInfoList & languages);

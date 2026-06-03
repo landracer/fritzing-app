@@ -1554,6 +1554,11 @@ void FApplication::updatePrefs(PrefsDialog & prefsDialog)
 				mainWindow->applyGerberPreviewSetting();
 			}
 		}
+		else if (key.compare("connectorDebugHighlightEnabled") == 0) {
+			Q_FOREACH (MainWindow * mainWindow, mainWindows) {
+				mainWindow->applyConnectorDebugSetting();
+			}
+		}
 		else if (key.contains("curvy", Qt::CaseInsensitive)) {
 			Q_FOREACH (MainWindow * mainWindow, mainWindows) {
 				Q_FOREACH (SketchWidget * sketchWidget, mainWindow->sketchWidgets()) {

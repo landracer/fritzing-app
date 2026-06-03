@@ -184,6 +184,7 @@ public:
 	void redrawSketch();
 
 	void applyGerberPreviewSetting();
+	void applyConnectorDebugSetting();
 
 	// if we consider a part as the smallest ("atomic") entity inside
 	// fritzing, then this functions may help with the bundle tasks
