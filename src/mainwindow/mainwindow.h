@@ -183,6 +183,8 @@ public:
 
 	void redrawSketch();
 
+	void applyGerberPreviewSetting();
+
 	// if we consider a part as the smallest ("atomic") entity inside
 	// fritzing, then this functions may help with the bundle tasks
 	// on the complex entities: sketches, bins, modules (?)
@@ -503,6 +505,7 @@ protected:
 	void setActionsIcons(int index, QList<QAction *> &);
 	void exportToEagle();
 	void exportToGerber();
+	void viewGerber();
 	void exportBOM();
 	void exportBOM_CSV();
 	void exportNetlist();
@@ -752,6 +755,7 @@ protected:
 	QAction *m_exportPdfAct = nullptr;
 	QAction *m_exportEagleAct = nullptr;
 	QAction *m_exportGerberAct = nullptr;
+	QAction *m_gerberPreviewAct = nullptr;  // Beta: re-open generated Gerbers in the standalone preview
 	QAction *m_exportEtchablePdfAct = nullptr;
 	QAction *m_exportEtchableSvgAct = nullptr;
 	QAction *m_exportBomAct = nullptr;

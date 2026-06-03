@@ -46,6 +46,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "sketch/pcbsketchwidget.h"
 #include "svg/svgfilesplitter.h"
 #include "svg/gerbergenerator.h"
+#include "gerberpreview/gerberpreviewdialog.h"
 #include "utils/fileprogressdialog.h"
 #include "utils/folderutils.h"
 #include "utils/graphicsutils.h"
@@ -1051,6 +1052,12 @@ void MainWindow::createExportActions() {
 	m_exportGerberAct->setStatusTip(tr("Export the current sketch to Extended Gerber format (RS-274X) for professional PCB production"));
 	connect(m_exportGerberAct, SIGNAL(triggered()), this, SLOT(doExport()));
 
+	m_gerberPreviewAct = new QAction(tr("Gerber Preview..."), this);
+	m_gerberPreviewAct->setStatusTip(tr("Open a folder of Gerber files in the Gerber preview window"));
+	connect(m_gerberPreviewAct, &QAction::triggered, this, &MainWindow::viewGerber);
+	// Beta feature: hidden unless the user opts in via Preferences > Beta Features.
+	applyGerberPreviewSetting();
+
 	m_exportEtchablePdfAct = new QAction(tr("Etchable (PDF)..."), this);
 	m_exportEtchablePdfAct->setStatusTip(tr("Export the current sketch to PDF for DIY PCB production (photoresist)"));
 	m_exportEtchablePdfAct->setProperty("svg", false);
@@ -1818,6 +1825,8 @@ void MainWindow::exportToGerber() {
 	if (exportDir.isEmpty()) return;
 
 	FileProgressDialog * fileProgressDialog = exportProgress();
+	fileProgressDialog->setMessage(tr("Generating Gerber files..."));
+	QApplication::processEvents();
 
 	FolderUtils::setOpenSaveFolder(exportDir);
 
@@ -1830,7 +1839,39 @@ void MainWindow::exportToGerber() {
 
 	m_statusBar->showMessage(tr("Sketch exported to Gerber"), 2000);
 
+	// Note: the Gerber preview is intentionally NOT opened automatically here.
+	// Users reach it deliberately via File > Export > for Production > Gerber
+	// Preview (when the beta feature is enabled), so export never spawns an
+	// unexpected window.
+
 	delete fileProgressDialog;
+}
+
+void MainWindow::viewGerber() {
+	// Re-open a previously exported folder of Gerber files in the standalone
+	// preview window. There is otherwise no way to inspect generated Gerbers
+	// without re-running the export.
+	QString dir = QFileDialog::getExistingDirectory(this, tr("Choose a folder of Gerber files to view"),
+	              defaultSaveFolder(),
+	              QFileDialog::ShowDirsOnly
+	              | QFileDialog::DontResolveSymlinks);
+
+	if (dir.isEmpty()) return;
+
+	auto * preview = new GerberPreviewDialog(this);
+	preview->setAttribute(Qt::WA_DeleteOnClose);
+	// Show before loading so the in-window "Loading..." status is visible
+	// while the files are parsed and rendered.
+	preview->show();
+	preview->raise();
+	preview->openDirectory(dir, QFileInfo(dir).fileName());
+}
+
+void MainWindow::applyGerberPreviewSetting() {
+	// Hide the menu entry entirely unless the user has opted into the beta
+	// preview. Live-applied from FApplication::updatePrefs so no restart is needed.
+	bool enabled = QSettings().value("gerberPreviewEnabled", false).toBool();
+	if (m_gerberPreviewAct) m_gerberPreviewAct->setVisible(enabled);
 }
 
 void MainWindow::connectStartSave(bool doConnect) {
