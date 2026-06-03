@@ -60,6 +60,7 @@ public:
 	static const QString BreadboardLogoImageModuleIDName;
 	static const QString BoardLogoImageModuleIDName;
 	static const QString OneLayerBoardLogoImageModuleIDName;
+	static const QString PanelBoardModuleIDName;
 	static const QString HoleModuleIDName;
 	static const QString ViaModuleIDName;
 	static const QString PadModuleIDName;

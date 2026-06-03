@@ -52,6 +52,7 @@ HEADERS += \
     src/items/FProbeR1PosPCB.h \
     src/items/FProbeRPartLabel.h \
 	src/items/FProbeSwitchProperty.h \
+    src/items/panelboarditem.h \
 
 
 SOURCES += \
@@ -93,3 +94,4 @@ SOURCES += \
     src/items/FProbeR1PosPCB.cpp \
     src/items/FProbeRPartLabel.cpp \
 	src/items/FProbeSwitchProperty.cpp \
+	src/items/panelboarditem.cpp \

@@ -1470,6 +1470,7 @@ void MainWindow::populateExportMenu() {
 	productionMenu->addSeparator();
 	productionMenu->addAction(m_exportGerberAct);
 	productionMenu->addAction(m_gerberPreviewAct);
+	productionMenu->addAction(m_exportPanelAct);
 }
 
 
@@ -3266,6 +3267,17 @@ void MainWindow::tidyWires()
 
 void MainWindow::copperFill() {
 	groundFillAux2(false);
+}
+
+// NOTE: per-layer fill overloads used by the panelizer batch Gerber export.
+// Thin public wrappers around the protected groundFillAux() helper so the
+// panelizer can fill a specific copper layer without exposing internals.
+void MainWindow::copperFill(ViewLayer::ViewLayerID viewLayerID) {
+	groundFillAux(false, viewLayerID);
+}
+
+void MainWindow::groundFill(ViewLayer::ViewLayerID viewLayerID) {
+	groundFillAux(true, viewLayerID);
 }
 
 void MainWindow::groundFill()

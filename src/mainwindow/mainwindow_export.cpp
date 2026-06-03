@@ -46,6 +46,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "sketch/pcbsketchwidget.h"
 #include "svg/svgfilesplitter.h"
 #include "svg/gerbergenerator.h"
+#include "autoroute/panelizerstartdialog.h"
+#include "autoroute/panelizerinteractivedialog.h"
 #include "gerberpreview/gerberpreviewdialog.h"
 #include "utils/fileprogressdialog.h"
 #include "utils/folderutils.h"
@@ -560,6 +562,28 @@ void MainWindow::doExport() {
 #endif
 }
 
+void MainWindow::showPanelizerWizard()
+{
+	// Two-step panelizer UX:
+	//   1. A small start dialog asks only quantity + whether to blend in
+	//      other boards.
+	//   2. One big interactive window holds everything else -- panel size,
+	//      separation, extras, the drag-to-arrange surface with alignment
+	//      guides, and an embedded Gerber preview -- with a Generate button
+	//      that overwrites the output and refreshes the preview in place so
+	//      the user can iterate without re-opening anything.
+	PanelizerStartDialog start(this, QFileInfo(m_fwFilename).completeBaseName());
+	if (start.exec() != QDialog::Accepted) return;
+
+	PanelizerInteractiveDialog interactive(
+	    this,
+	    m_fwFilename,
+	    start.copies(),
+	    start.allowRotate(),
+	    start.blendPaths());
+	interactive.exec();
+}
+
 void MainWindow::exportAux(QString fileName, QImage::Format format, int quality, bool removeBackground)
 {
 	if (m_currentGraphicsView == nullptr) return;
@@ -1057,6 +1081,10 @@ void MainWindow::createExportActions() {
 	connect(m_gerberPreviewAct, &QAction::triggered, this, &MainWindow::viewGerber);
 	// Beta feature: hidden unless the user opts in via Preferences > Beta Features.
 	applyGerberPreviewSetting();
+
+	m_exportPanelAct = new QAction(tr("Panelize..."), this);
+	m_exportPanelAct->setStatusTip(tr("Open the panelizer wizard to create a panel from your PCB"));
+	connect(m_exportPanelAct, SIGNAL(triggered()), this, SLOT(showPanelizerWizard()));
 
 	m_exportEtchablePdfAct = new QAction(tr("Etchable (PDF)..."), this);
 	m_exportEtchablePdfAct->setStatusTip(tr("Export the current sketch to PDF for DIY PCB production (photoresist)"));
