@@ -2776,6 +2776,12 @@ void MainWindow::redrawSketch() {
 	}
 }
 
+void MainWindow::applyConnectorDebugSetting() {
+	if (!m_debugConnectors.isNull()) {
+		m_debugConnectors->applyMonitorSetting();
+	}
+}
+
 void MainWindow::statusMessage(QString message, int timeout) {
 	QStatusBar * sb = realStatusBar();
 	if (sb != nullptr) {
