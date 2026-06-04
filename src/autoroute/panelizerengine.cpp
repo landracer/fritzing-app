@@ -35,8 +35,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../referencemodel/referencemodel.h"
 #include "../fapplication.h"
 
-#include "cmrouter/tileutils.h"
-#include "cmrouter/tile.h"
+#include "binpacking/GuillotineBinPack.h"
+#include "binpacking/Rect.h"
 
 #include <QFile>
 #include <QDomDocument>
@@ -46,6 +46,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <qmath.h>
 #include <limits>
 #include <algorithm>
+#include <cmath>
 
 // ======================================================================
 // Internal helpers — these wrap the legacy Panelizer API to ensure
@@ -54,8 +55,9 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace PanelizerEngine {
 
-// Legacy PanelItem struct (from panelizer.h) — we need this to
-// call the legacy bestFitOne() API.
+// Per-copy placement record. Mirrors only the fields the panel emitter
+// needs (board name/path, physical size, final position and rotation);
+// it deliberately carries none of the legacy corner-stitching machinery.
 struct LegacyPanelItem {
     QString boardName;
     QString path;
@@ -69,31 +71,6 @@ struct LegacyPanelItem {
     bool rotate90 = false;
 
     LegacyPanelItem() = default;
-};
-
-// Legacy PlanePair struct (from panelizer.h)
-struct LegacyPlanePair {
-    Plane * thePlane;
-    Plane * thePlane90;
-    TileRect tilePanelRect;
-    TileRect tilePanelRect90;
-    double panelWidth;
-    double panelHeight;
-    QStringList svgs;
-    QString layoutSVG;
-    int index;
-};
-
-// Legacy BestPlace struct (from panelizer.h)
-struct LegacyBestPlace {
-    Tile * bestTile = nullptr;
-    TileRect bestTileRect;
-    TileRect maxRect;
-    int width = 0;
-    int height = 0;
-    double bestArea = std::numeric_limits<double>::max();
-    bool rotate90 = false;
-    Plane* plane = nullptr;
 };
 
 // Convert SourceBoard to LegacyPanelItem
@@ -124,28 +101,34 @@ static PlacedBoard legacyToPlaced(const LegacyPanelItem& item, const SourceBoard
 } // namespace PanelizerEngine
 
 // ======================================================================
-// PanelizerEngine::layout() — corner-stitching bin packing
+// PanelizerEngine::layout() — GuillotineBinPack bin packing
 // ======================================================================
 
 namespace PanelizerEngine {
 
 /**
- * @brief Corner-stitching bin packing implementation.
+ * @brief Lay the requested board copies out on the panel.
+ *
+ * Uses rbp::GuillotineBinPack — the same production rectangle packer
+ * Fritzing already uses to pack a sketch onto a board (see
+ * PCBSketchWidget) — with the best-area-fit choice heuristic and the
+ * minimize-area split heuristic.
  *
  * Algorithm:
- * 1. Initialize tile grid with one tile covering the usable
- *    panel area (panelSize - 2*border).
- * 2. For each SourceBoard (in input order):
- *    a. Try bestFitOne() for each remaining copy.
- *    b. If fit found, placeBestFit() and split tiles.
- *    c. If no fit, try 90° rotation if allowRotate90.
- *    d. If still no fit, return false with errorOut.
- * 3. On success, fill outItems with all placed PlacedBoards.
+ * 1. Expand every SourceBoard into one entry per requested copy.
+ * 2. Inflate each board by one gutter (right/bottom), scale inches to
+ *    integer mils, sort largest-area first and Insert() each into a
+ *    bin sized to the usable panel area (panel minus border).
+ * 3. Translate the packed integer rectangles back to panel-local
+ *    inches (offset by the border) and record rotation.
  *
- * NOTE: Coordinates are in inches throughout. The legacy code mixes
- * mm and mils silently — this implementation keeps inches until
- * Gerber emission where TextUtils::convertToInches() is used.
- * Corner-stitching: see Ousterhout 1984.
+ * Rotation: RectBestAreaFit only rotates a board when it would not
+ * otherwise fit, so a reported rotation is a genuine necessity. If the
+ * source forbids rotation (allowRotate90 == false) the layout fails
+ * rather than silently rotating the board.
+ *
+ * Coordinates are in inches throughout, converted to mils only for the
+ * packer and back again immediately afterwards.
  */
 bool layout(const QList<SourceBoard>& sources,
             const PanelSpec&        spec,
@@ -196,20 +179,16 @@ bool layout(const QList<SourceBoard>& sources,
         return false;
     }
 
-    // == Step 2: Shelf bin-packing in inches ==
+    // == Step 2: GuillotineBinPack in integer mils ==
     //
-    // FIX(landracer): the previous tile-plane-based layout crashed on
-    // the first board because TiNewPlane(nullptr,...) leaves pl_hint
-    // null and the fallback pl_left is a sentinel wall tile whose TR
-    // pointer is NULL - WIDTH(tile) then dereferences NULL.
+    // Replaces the bespoke shelf packer (and the abandoned legacy
+    // corner-stitching Tile engine) with rbp::GuillotineBinPack, the
+    // packer Fritzing already ships and uses elsewhere. The packer works
+    // in integer units, so inches are scaled to thousandths of an inch.
     //
-    // Replaced with classic shelf bin-packing (Coffman/Garey/Johnson
-    // First-Fit Decreasing Height variant). Boards are sorted by
-    // height descending and laid left-to-right on the current shelf;
-    // a new shelf opens above when the next board does not fit.
-    //
-    // Coordinate system: panel-local inches, origin at panel top-left.
-    // Usable area excludes the border on all four sides.
+    // Coordinate system: the bin's (0,0) is the usable panel top-left
+    // (panel minus border on every side); placements are shifted back by
+    // borderInches when written to LegacyPanelItem.
 
     const double usableW = qMax(0.0, spec.panelSizeInches.width()  - 2 * spec.borderInches);
     const double usableH = qMax(0.0, spec.panelSizeInches.height() - 2 * spec.borderInches);
@@ -223,75 +202,44 @@ bool layout(const QList<SourceBoard>& sources,
         return false;
     }
 
-    // Build (index, w, h, rotated) candidates. For boards that allow
-    // rotation, the candidate height is max(w, h) so FFDH puts the
-    // tallest "natural" side down. Rotation is decided per-placement
-    // below to honor whichever orientation actually fits the shelf.
-    struct Cand { int idx; double w, h; };
+    // 1000 integer units per inch keeps sub-mil board dimensions distinct
+    // while staying comfortably inside int range for any realistic panel.
+    constexpr double kUnitsPerInch = 1000.0;
+    auto toUnits = [](double inches) {
+        return static_cast<int>(std::lround(inches * kUnitsPerInch));
+    };
+
+    rbp::GuillotineBinPack binPack(toUnits(usableW), toUnits(usableH));
+
+    // Each board is inflated by one gutter on the right/bottom so that
+    // packed neighbours never touch; the trailing gutter is part of the
+    // usable-area budget. Pack largest-area boards first.
+    const double gutter = spec.gutterInches;
+
+    struct Cand { int idx; int w, h; };
     QList<Cand> work;
     work.reserve(legacyItems.size());
     for (int i = 0; i < legacyItems.size(); ++i) {
         Cand c;
         c.idx = i;
-        c.w = legacyItems[i].boardSizeInches.width();
-        c.h = legacyItems[i].boardSizeInches.height();
-        // FFDH key: pick the larger dimension as "height" so we sort
-        // tall-first regardless of the source orientation.
-        if (remainingSources[i].allowRotate90 && c.w > c.h) std::swap(c.w, c.h);
+        c.w = toUnits(legacyItems[i].boardSizeInches.width()  + gutter);
+        c.h = toUnits(legacyItems[i].boardSizeInches.height() + gutter);
         work.append(c);
     }
     std::sort(work.begin(), work.end(), [](const Cand & a, const Cand & b) {
-        return a.h > b.h; // tallest first
+        return (static_cast<long long>(a.w) * a.h) > (static_cast<long long>(b.w) * b.h);
     });
-
-    // Shelves grow downward from (border, border).
-    const double gutter = spec.gutterInches;
-    double shelfY      = spec.borderInches;     // top of current shelf
-    double shelfH      = 0.0;                   // tallest board so far on this shelf
-    double cursorX     = spec.borderInches;     // next free X on current shelf
 
     for (const Cand & c : work) {
         LegacyPanelItem & item = legacyItems[c.idx];
-        const bool allowRot    = remainingSources[c.idx].allowRotate90;
 
-        // Two candidate orientations; honor allowRotate90.
-        struct Orient { double w, h; bool rotated; };
-        QList<Orient> tries;
-        tries.append({ item.boardSizeInches.width(), item.boardSizeInches.height(), false });
-        if (allowRot && item.boardSizeInches.width() != item.boardSizeInches.height()) {
-            tries.append({ item.boardSizeInches.height(), item.boardSizeInches.width(), true });
-        }
+        rbp::Rect packed = binPack.Insert(
+            c.w, c.h, /*merge*/ true,
+            rbp::GuillotineBinPack::RectBestAreaFit,
+            rbp::GuillotineBinPack::SplitMinimizeArea);
 
-        bool placed = false;
-        for (int pass = 0; pass < 2 && !placed; ++pass) {
-            // pass 0: try to fit on the current shelf
-            // pass 1: open a new shelf above and try again
-            for (const Orient & o : tries) {
-                const double needX = (cursorX > spec.borderInches) ? (cursorX + gutter) : cursorX;
-                const double xRight = needX + o.w;
-                // Right edge must stay within usable area.
-                if (xRight > spec.borderInches + usableW + 1e-9) continue;
-                // Bottom edge must stay within usable area.
-                if (shelfY + o.h > spec.borderInches + usableH + 1e-9) continue;
-                // Fit! Commit.
-                item.x = needX;
-                item.y = shelfY;
-                item.rotate90 = o.rotated;
-                cursorX = needX + o.w;
-                if (o.h > shelfH) shelfH = o.h;
-                placed = true;
-                break;
-            }
-            if (!placed) {
-                // Open a new shelf.
-                if (shelfH <= 0.0) break; // empty shelf already; cannot help
-                shelfY  += shelfH + gutter;
-                shelfH   = 0.0;
-                cursorX  = spec.borderInches;
-            }
-        }
-
-        if (!placed) {
+        // A zero-area result means the board did not fit anywhere.
+        if (packed.width == 0 || packed.height == 0) {
             if (errorOut) {
                 *errorOut = QObject::tr("Failed to place board %1 (%2 x %3 in) on a %4 x %5 in panel")
                                 .arg(item.boardName)
@@ -302,6 +250,24 @@ bool layout(const QList<SourceBoard>& sources,
             }
             return false;
         }
+
+        // The packer swaps width/height when it rotates the rectangle.
+        const bool rotated = (packed.width != c.w);
+        if (rotated && !remainingSources[c.idx].allowRotate90) {
+            if (errorOut) {
+                *errorOut = QObject::tr("Board %1 only fits when rotated 90\u00b0, "
+                                        "but rotation is disabled for it")
+                                .arg(item.boardName);
+            }
+            return false;
+        }
+
+        // packed.(x,y) is the top-left of the inflated rect; the board's
+        // own top-left coincides with it because the gutter pads the far
+        // edges. Shift back into panel-local inches past the border.
+        item.x = spec.borderInches + packed.x / kUnitsPerInch;
+        item.y = spec.borderInches + packed.y / kUnitsPerInch;
+        item.rotate90 = rotated;
     }
 
     // == Step 3: Convert results to PlacedBoard ==

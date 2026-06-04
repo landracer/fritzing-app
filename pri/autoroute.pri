@@ -39,8 +39,6 @@ src/autoroute/panelizerpages/panelseparationpage.h \
 src/autoroute/panelizerpages/panelextrasspage.h \
 src/autoroute/panelizerpages/panellayouteditor.h \
 src/autoroute/panelizerpages/panelpreviewpage.h \
-src/autoroute/cmrouter/tile.h \
-src/autoroute/cmrouter/tileutils.h \
 
 SOURCES += \
 src/autoroute/autorouter.cpp \
@@ -67,5 +65,4 @@ src/autoroute/panelizerpages/panelcandidatepage.cpp \
 src/autoroute/panelizerpages/panelseparationpage.cpp \
 src/autoroute/panelizerpages/panelextrasspage.cpp \
 src/autoroute/panelizerpages/panellayouteditor.cpp \
-src/autoroute/panelizerpages/panelpreviewpage.cpp \
-src/autoroute/cmrouter/tile.cpp \
+src/autoroute/panelizerpages/panelpreviewpage.cpp
