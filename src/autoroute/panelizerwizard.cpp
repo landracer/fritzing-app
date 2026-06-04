@@ -492,6 +492,11 @@ QSizeF PanelizerWizard::probedBoardSizeInches()
 		// suppresses the "save changes?" prompt on tear-down.
 		MainWindow * probe = fapp->openWindowForService(false, 3);
 		if (probe != nullptr) {
+			// Keep the probe window completely off-screen so loadWhich()'s
+			// internal show()/raise() never flashes a second Fritzing window
+			// into view (matches PanelizerInteractiveDialog::probeBoardSize()).
+			probe->setAttribute(Qt::WA_DontShowOnScreen, true);
+			probe->hide();
 			probe->setCloseSilently(true);
 			if (probe->loadWhich(m_currentSketchPath, false, false, false, QString())) {
 				QList<ItemBase*> boards = probe->pcbView()->findBoard();

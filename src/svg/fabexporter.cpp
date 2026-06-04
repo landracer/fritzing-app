@@ -411,6 +411,13 @@ bool FabExporter::renderRealPanelLayers(
 			warnings << QObject::tr("FabExporter: openWindowForService returned null");
 			continue;
 		}
+		// Keep this headless render window completely off-screen. Without
+		// WA_DontShowOnScreen, loadWhich() internally calls show()/raise()
+		// and a second Fritzing window pops into view for every source board
+		// during panel generation. This matches the probe path in
+		// PanelizerInteractiveDialog::probeBoardSize().
+		mw->setAttribute(Qt::WA_DontShowOnScreen, true);
+		mw->hide();
 		mw->setCloseSilently(true);
 		if (!mw->loadWhich(fzz, false, false, false, QString())) {
 			warnings << QObject::tr("FabExporter: failed to load %1").arg(fzz);
