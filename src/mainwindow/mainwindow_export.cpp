@@ -1848,9 +1848,10 @@ void MainWindow::exportToGerber() {
 }
 
 void MainWindow::viewGerber() {
-	// Re-open a previously exported folder of Gerber files in the standalone
-	// preview window. There is otherwise no way to inspect generated Gerbers
-	// without re-running the export.
+	// Open a folder of Gerber files in the standalone preview window.
+	// Every invocation creates a fresh dialog and re-parses + re-renders the
+	// chosen folder, so the preview is never stale: if the files changed on
+	// disk since the last view, the user sees the up-to-date result.
 	QString dir = QFileDialog::getExistingDirectory(this, tr("Choose a folder of Gerber files to view"),
 	              defaultSaveFolder(),
 	              QFileDialog::ShowDirsOnly

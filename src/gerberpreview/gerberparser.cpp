@@ -59,7 +59,13 @@ double decodeCoord(const QString &raw, int decDigits, double unitScale)
 void parseAperture(const QString &body, GerberDocument &doc, ParserState &state)
 {
 	// body looks like: "D10C,0.0100"  or  "11R,0.060X0.040X0.0157"
-	QRegularExpression head(QStringLiteral("^D?(\\d+)([CROP]),(.*)$"));
+	// Built once: this is called for every aperture definition. JIT-
+	// optimised up front so the Regex engine never re-compiles per call.
+	static const QRegularExpression head = [] {
+		QRegularExpression r(QStringLiteral("^D?(\\d+)([CROP]),(.*)$"));
+		r.optimize();
+		return r;
+	}();
 	auto m = head.match(body);
 	if (!m.hasMatch()) {
 		doc.warnings << QStringLiteral("malformed AD: ") + body;
@@ -104,7 +110,11 @@ void parseAperture(const QString &body, GerberDocument &doc, ParserState &state)
 void parseExtended(const QString &s, GerberDocument &doc, ParserState &state)
 {
 	if (s.startsWith(QLatin1String("FS"))) {
-		QRegularExpression re(QStringLiteral("X(\\d)(\\d)Y(\\d)(\\d)"));
+		static const QRegularExpression re = [] {
+			QRegularExpression r(QStringLiteral("X(\\d)(\\d)Y(\\d)(\\d)"));
+			r.optimize();
+			return r;
+		}();
 		auto m = re.match(s);
 		if (m.hasMatch()) {
 			state.xIntDigits = m.captured(1).toInt();
@@ -152,7 +162,13 @@ void parseCoordinate(const QString &s, GerberDocument &doc, ParserState &state)
 {
 	QPointF target = state.cursor;   // modal: omitted axis reuses prior
 
-	QRegularExpression coord(QStringLiteral("([XYIJ])(-?\\d+)"));
+	// Hot path: runs for every coordinate line in the file. Keep the
+	// compiled regex in a JIT-optimised static so it is built only once.
+	static const QRegularExpression coord = [] {
+		QRegularExpression r(QStringLiteral("([XYIJ])(-?\\d+)"));
+		r.optimize();
+		return r;
+	}();
 	auto it = coord.globalMatch(s);
 	while (it.hasNext()) {
 		auto m = it.next();
@@ -167,7 +183,11 @@ void parseCoordinate(const QString &s, GerberDocument &doc, ParserState &state)
 	}
 
 	int op = 1;    // default D01 if implicit
-	QRegularExpression dop(QStringLiteral("D0?(\\d)$"));
+	static const QRegularExpression dop = [] {
+		QRegularExpression r(QStringLiteral("D0?(\\d)$"));
+		r.optimize();
+		return r;
+	}();
 	auto m = dop.match(s);
 	if (m.hasMatch()) op = m.captured(1).toInt();
 
@@ -245,7 +265,12 @@ void handleStatement(const QString &s, GerberDocument &doc, ParserState &state)
 	// always >= 10; D01/D02/D03 are draw/move/flash operations and
 	// must fall through to parseCoordinate() below.
 	{
-		QRegularExpression re(QStringLiteral("^(?:G54)?D(\\d+)$"));
+		// Called for every statement line; build + JIT-optimise once.
+		static const QRegularExpression re = [] {
+			QRegularExpression r(QStringLiteral("^(?:G54)?D(\\d+)$"));
+			r.optimize();
+			return r;
+		}();
 		auto mm = re.match(s);
 		if (mm.hasMatch()) {
 			const int code = mm.captured(1).toInt();
