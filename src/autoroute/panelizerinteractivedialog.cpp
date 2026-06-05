@@ -59,6 +59,46 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 static const double kMmToIn = 1.0 / 25.4;
 static const double kInToMm = 25.4;
 
+/**
+ * @brief Tile @p count boards into a plain grid, in millimetres.
+ *
+ * Used to seed the arrange editor when the auto-packer can't fit
+ * everything: we still want every requested board on screen so the user
+ * can hand-arrange them. Boards may spill past the panel edge — the
+ * editor flags those red, and the user drags them in. If the board is
+ * wider than the usable panel but would fit turned sideways, the whole
+ * grid is laid out rotated (the obvious "a 90° turn fits" case the
+ * shelf packer sometimes misses).
+ */
+static void fallbackGridSeed(int count, const QSizeF & boardMm, const QSizeF & panelMm,
+                             double borderMm, double gutterMm,
+                             QList<QPointF> & outTops, QList<bool> & outRot)
+{
+	outTops.clear();
+	outRot.clear();
+	if (count <= 0) return;
+
+	double cellW = boardMm.width();
+	double cellH = boardMm.height();
+	bool   rot   = false;
+	const double usableW = qMax(1.0, panelMm.width() - 2.0 * borderMm);
+	if (cellW > usableW && cellH <= usableW) {
+		std::swap(cellW, cellH);
+		rot = true;
+	}
+
+	const double stepX = cellW + gutterMm;
+	const double stepY = cellH + gutterMm;
+	const int cols = qMax(1, int((usableW + gutterMm + 1e-6) / qMax(0.001, stepX)));
+
+	for (int i = 0; i < count; ++i) {
+		const int r = i / cols;
+		const int c = i % cols;
+		outTops << QPointF(borderMm + c * stepX, borderMm + r * stepY);
+		outRot  << rot;
+	}
+}
+
 PanelizerInteractiveDialog::PanelizerInteractiveDialog(QWidget * parent,
                                                        const QString & currentSketchPath,
                                                        int copies,
@@ -529,6 +569,24 @@ QList<PanelizerEngine::SourceBoard> PanelizerInteractiveDialog::currentSources()
 	return sources;
 }
 
+QList<PanelizerEngine::SourceBoard> PanelizerInteractiveDialog::expandedSources()
+{
+	// One SourceBoard per physical instance (copies flattened to 1 each).
+	// The engine's layout() expands copies in exactly this source order,
+	// so this list lines up index-for-index with the arrange editor's
+	// placements — that 1:1 mapping is what lets Generate emit the user's
+	// hand arrangement instead of re-running the auto-packer.
+	QList<PanelizerEngine::SourceBoard> flat;
+	for (const PanelizerEngine::SourceBoard & sb : currentSources()) {
+		for (int c = 0; c < sb.copies; ++c) {
+			PanelizerEngine::SourceBoard one = sb;
+			one.copies = 1;
+			flat.append(one);
+		}
+	}
+	return flat;
+}
+
 // ======================================================================
 // Board geometry probe (headless)
 // ======================================================================
@@ -637,41 +695,60 @@ void PanelizerInteractiveDialog::reseedEditor()
 	const QList<PanelizerEngine::SourceBoard> sources = currentSources();
 	const PanelizerEngine::PanelSpec spec = currentPanelSpec();
 
-	QString err;
-	QList<PanelizerEngine::PlacedBoard*> placed;
-	const bool ok = PanelizerEngine::layout(sources, spec, placed, &err);
-
-	if (!ok || placed.isEmpty()) {
-		// Don't wipe a usable prior layout; just warn. The user can
-		// enlarge the panel or drop the copy count and try again.
-		qDeleteAll(placed);
-		m_statusLabel->setText(tr("⚠ These boards don't fit: %1")
-			.arg(err.isEmpty() ? tr("panel too small") : err));
-		m_statusLabel->setStyleSheet(QStringLiteral("color:#b00020;"));
-		return;
-	}
-
-	// Convert engine inches → editor millimetres for seeding.
-	QList<QPointF> seedTops;
-	QList<bool>    seedRot;
-	for (PanelizerEngine::PlacedBoard * pb : placed) {
-		seedTops << QPointF(pb->positionInches.x() * kInToMm,
-		                    pb->positionInches.y() * kInToMm);
-		seedRot  << pb->rotated90;
-	}
-
-	const QSizeF boardMm = probeBoardSize(m_currentSketchPath) * kInToMm;
+	const QSizeF boardMm  = probeBoardSize(m_currentSketchPath) * kInToMm;
 	const QSizeF panelMm(m_panelWidth->value(), m_panelHeight->value());
 	const double borderMm = m_border->value();
+
+	// Total number of physical board instances we must show on the canvas.
+	int total = 0;
+	for (const PanelizerEngine::SourceBoard & sb : sources) total += sb.copies;
+	if (total <= 0) total = 1;
+
+	// Ask the auto-packer for a tidy starting arrangement. Whether or not
+	// it fits everything, we ALWAYS seed the editor: the fit heuristic is
+	// just a suggestion, never a gate on showing the panel. The user
+	// fiddles the layout by hand (a computer is poor at production layup),
+	// and the real fit check happens only when they click Generate.
+	QString err;
+	QList<PanelizerEngine::PlacedBoard*> placed;
+	const bool autoFit = PanelizerEngine::layout(sources, spec, placed, &err);
+
+	QList<QPointF> seedTops;
+	QList<bool>    seedRot;
+
+	if (autoFit && placed.size() == total) {
+		// Use the packer's positions (inches → mm).
+		for (PanelizerEngine::PlacedBoard * pb : placed) {
+			seedTops << QPointF(pb->positionInches.x() * kInToMm,
+			                    pb->positionInches.y() * kInToMm);
+			seedRot  << pb->rotated90;
+		}
+	} else {
+		// Packer gave up (or count mismatch) — tile a plain grid instead so
+		// every requested board still appears, ready to be dragged into place.
+		fallbackGridSeed(total, boardMm, panelMm, borderMm,
+		                 m_gutter->value(), seedTops, seedRot);
+	}
+	qDeleteAll(placed);
 
 	m_editor->seed(panelMm, borderMm, boardMm, seedTops, seedRot);
 	m_editor->zoomToFit();
 
-	qDeleteAll(placed);
-
-	m_statusLabel->setText(tr("✔ %1 boards fit. Drag to arrange, then Generate.")
-		.arg(seedTops.size()));
-	m_statusLabel->setStyleSheet(QString());
+	if (autoFit && seedTops.size() == total) {
+		m_statusLabel->setText(
+			tr("✔ %1 boards auto-arranged. Drag to fine-tune, then Generate.")
+				.arg(seedTops.size()));
+		m_statusLabel->setStyleSheet(QString());
+	} else {
+		// Amber, not error red: this is a "you've got work to do" hint,
+		// not a failure. Generation is still allowed once the boards are
+		// arranged so nothing overlaps or spills off the panel.
+		m_statusLabel->setText(
+			tr("%1 boards placed — auto-fit couldn't pack them all. "
+			   "Arrange them by hand (rotate/drag) so none are red, then Generate.")
+				.arg(seedTops.size()));
+		m_statusLabel->setStyleSheet(QStringLiteral("color:#a06000;"));
+	}
 }
 
 void PanelizerInteractiveDialog::browseOutputDir()
@@ -730,34 +807,48 @@ bool PanelizerInteractiveDialog::runPanelize(QStringList & outFiles, QString & o
 	const PanelizerEngine::PanelSpec      spec   = currentPanelSpec();
 	const PanelizerEngine::SeparationSpec sep    = currentSeparationSpec();
 	const PanelizerEngine::ExtrasSpec     extras = currentExtrasSpec();
-	QList<PanelizerEngine::SourceBoard>   sources = currentSources();
-
 	const QString outputDir = m_outputDir->text().trimmed();
 
-	QString errorOut;
-	QList<PanelizerEngine::PlacedBoard*> placed;
-	if (!PanelizerEngine::layout(sources, spec, placed, &errorOut)) {
-		qDeleteAll(placed);
-		outErr = tr("Layout failed: %1")
-			.arg(errorOut.isEmpty() ? tr("the boards do not fit the panel") : errorOut);
+	// The arrange editor is the source of truth. The user hand-tunes the
+	// layout (the auto-packer is only a starting suggestion), so we emit
+	// exactly what they see rather than re-running it. Pair each editor
+	// placement with its per-instance source board — same order as the
+	// engine's copy expansion, guaranteed by expandedSources().
+	const QList<PanelizerEngine::SourceBoard>  flat   = expandedSources();
+	const QList<PanelLayoutEditor::Placement>  userPl = m_editor->placements();
+
+	if (userPl.isEmpty() || userPl.size() != flat.size()) {
+		outErr = tr("The arrangement is out of sync with the board list.\n"
+		            "Click Auto-arrange, then try Generate again.");
 		return false;
 	}
 
-	// Honour the interactive arrange editor: when the per-instance counts
-	// match, the user's hand placements override the auto-layout verbatim.
-	const QList<PanelLayoutEditor::Placement> userPl = m_editor->placements();
-	if (userPl.size() == placed.size()) {
-		for (int i = 0; i < placed.size(); ++i) {
-			placed[i]->positionInches    = userPl[i].topLeftInches;
-			placed[i]->rotationDegrees   = userPl[i].rotationDegrees;
-			placed[i]->flippedHorizontal = userPl[i].flippedHorizontal;
-			// Keep the legacy 90°-set selector in sync so the renderer
-			// picks the right pre-rendered SVG base set.
-			placed[i]->rotated90 =
-				(userPl[i].rotationDegrees == 90 || userPl[i].rotationDegrees == 270);
-		}
-		DebugDialog::debug(QString("[Panelize] applied %1 user placements").arg(userPl.size()));
+	// The fit gate lives HERE, at Generate — not on the arrange view. If
+	// any board overlaps a neighbour or spills past the panel edge, refuse
+	// and tell the user how to fix it.
+	if (!m_editor->isLayoutValid()) {
+		outErr = tr("Some boards overlap or extend past the panel edge "
+		            "(shown in red).\n\n"
+		            "Drag/rotate them so nothing is red — or enlarge the "
+		            "panel — then Generate again.");
+		return false;
 	}
+
+	// Build the placed-board list straight from the user's arrangement.
+	QList<PanelizerEngine::PlacedBoard*> placed;
+	for (int i = 0; i < flat.size(); ++i) {
+		PanelizerEngine::PlacedBoard * pb = new PanelizerEngine::PlacedBoard();
+		pb->positionInches    = userPl[i].topLeftInches;
+		pb->rotationDegrees   = userPl[i].rotationDegrees;
+		pb->flippedHorizontal = userPl[i].flippedHorizontal;
+		// Keep the legacy 90°-set selector in sync so the renderer picks
+		// the right pre-rendered SVG base set.
+		pb->rotated90 = (userPl[i].rotationDegrees == 90 || userPl[i].rotationDegrees == 270);
+		pb->boardId   = QString("board_%1").arg(i);
+		pb->source    = flat[i];
+		placed.append(pb);
+	}
+	DebugDialog::debug(QString("[Panelize] emitting %1 hand-placed boards").arg(placed.size()));
 
 	FApplication * app = qobject_cast<FApplication*>(qApp);
 	PanelizerEngine::Result result =

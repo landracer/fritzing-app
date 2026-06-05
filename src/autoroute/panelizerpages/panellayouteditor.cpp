@@ -254,6 +254,17 @@ void PanelLayoutEditor::rebuildSeed()
 	m_scene->setSceneRect(QRectF(-10, -10,
 	                             m_panelMm.width() + 20, m_panelMm.height() + 20));
 
+	// The auto-packer keeps boards inside the panel, but the grid fallback
+	// (used when boards don't auto-fit) can spill copies past the bottom
+	// or right edge. Grow the scene rect to enclose every seeded board so
+	// those overflow copies stay scrollable and visible — otherwise they
+	// land outside the scrollable area and the user can't drag them in.
+	QRectF content = m_scene->itemsBoundingRect();
+	if (content.isValid()) {
+		content = content.adjusted(-10, -10, 10, 10);
+		m_scene->setSceneRect(m_scene->sceneRect().united(content));
+	}
+
 	// Centre the alignment guides on the fresh panel.
 	m_vGuideMm = m_panelMm.width()  * 0.5;
 	m_hGuideMm = m_panelMm.height() * 0.5;

@@ -122,6 +122,12 @@ private:
 	PanelizerEngine::ExtrasSpec currentExtrasSpec() const;
 	/// Build the engine source-board list (current sketch + any blend boards).
 	QList<PanelizerEngine::SourceBoard> currentSources();
+	/// Flatten currentSources() to one entry per physical board instance
+	/// (copies expanded to 1 each), in the same order the engine's
+	/// layout() expands them — and therefore in the same order as the
+	/// arrange editor's placements. This is the bridge the Generate step
+	/// uses to pair each hand-placed board with its source geometry.
+	QList<PanelizerEngine::SourceBoard> expandedSources();
 
 	/**
 	 * @brief Probe a .fzz file for its PCB board size, in inches.
