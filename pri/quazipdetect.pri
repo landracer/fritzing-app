@@ -10,9 +10,13 @@ message("Using Fritzing quazip detect script.")
 # issues that need # work. Code review is welcome for all pull requests.
 # If you are well versed in # Qt and C/C++ please start helping around
 # and check https://github.com/stachenov/quazip/issues/185
-QUAZIP_VERSION=1.4
-QUAZIP_PATH=$$absolute_path($$PWD/../../quazip-$$QT_VERSION-$$QUAZIP_VERSION)intuisphere
-QUAZIP_INCLUDE_PATH=$$QUAZIP_PATH/include/QuaZip-Qt6-$$QUAZIP_VERSION
+# FLOATING NOTE: the quazip install is keyed by Qt MAJOR version only
+# (quazip_qt6 / quazip_qt5), NOT by the full Qt patch version. Keying the path
+# on $QT_VERSION (patch-precise, e.g. quazip-6.11.1-...) broke configure on
+# every Qt patch bump, which is incompatible with tracking the newest Qt.
+# The library itself is major-versioned (libquazip1-qt6.so), so major-keying is
+# both correct and stable across patch/minor bumps.
+QUAZIP_PATH=$$absolute_path($$PWD/../../quazip_qt$$QT_MAJOR_VERSION)
 QUAZIP_LIB_PATH=$$QUAZIP_PATH/lib
 
 SOURCES += \

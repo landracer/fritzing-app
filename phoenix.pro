@@ -18,10 +18,12 @@
 #
 # ********************************************************************
 
+# FLOATING Qt: we track the newest Qt (owner is on a rolling distro). The old
+# hard ceiling (QT_MOST=6.5.10) was self-imposed and only existed because of the
+# QString::arg()/QChar() enum->int sites now fixed by the forward-compat casts.
+# We keep a floor (QT_LEAST) for reproducibility but no longer cap the top end.
 QT_LEAST=6.5.3
-QT_MOST=6.5.10
 !versionAtLeast(QT_VERSION, $${QT_LEAST}):error("Use at least Qt version $${QT_LEAST}")
-!versionAtMost(QT_VERSION, $${QT_MOST}):error("Use at most Qt version $${QT_MOST}")
 
 CONFIG += debug_and_release
 CONFIG += c++17
