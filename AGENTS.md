@@ -98,7 +98,8 @@ make -j"$(nproc)"
 
 ## 6. Domain knowledge: copper "ground fill" (mass fill) & the DRC
 
-This is subtle and was the subject of upstream issue #4338; knowing it cold saves a future session hours.
+Subtle; subject of upstream issue #4338 (closed as not-reproducible — see gameplan 8.19). These are DESIGN
+LIMITATIONS to be aware of, NOT open defects. Knowing them cold saves a future session hours.
 
 - **Two separate "keepout" settings** (do not conflate them):
   - `DRC::KeepoutSettingName` (`"Keepout"`, default via `DRC::KeepoutDefaultMils`) - read by

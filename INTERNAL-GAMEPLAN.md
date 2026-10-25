@@ -539,3 +539,15 @@ Reporter .fzz unpacked: 8 fills, ALL fillType="ground" (seeded ground pour). Ful
   10 mil that collapses to a near-bridge on dense boards.
 - Owner (human, strong at debug) will supply personal .fzz boards + open the reporter .fzz to reproduce
   visually; I provide exact repro steps + a unit test for the geometry core.
+
+### 8.19 #4338 CLOSED AS NOT-REPRODUCIBLE / LIKELY USER ERROR (2026-10-24)
+Owner ran the FULL repro (ground-fill seed -> fill -> DRC, both on the reporter's board minus its missing
+part, and on the owner's own board, across several fill/keepout variations). Result, verbatim: "I can only
+get it to fail DRC with legit size mismatches... non issues as I see it working as expected." No fill ever
+overlaid/bridged a foreign net that wasn't a real, already-flagged trace-trace clearance problem.
+DISPOSITION: close #4338. Ground-fill carve + DRC behave as designed for a normal board. The latent
+conditions noted in 8.18 (GroundPlane carries no net; DRC strips GroundPlane0/1) are a DESIGN LIMITATION
+worth knowing, NOT a demonstrated defect. No speculative fix will be written against an unreproducible
+report. Branch fix/ground-fill-drc-4338 carries only the docs capture (no code change). If a future report
+ships a board that ACTUALLY stores fillType="ground" and visibly bridges two nets in the GUI, reopen with
+that file; the 8.18 mechanism doc is the head start.
