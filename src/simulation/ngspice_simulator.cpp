@@ -85,6 +85,17 @@ void NgSpiceSimulator::init()
 				libPaths.prepend(libPath);
 			}
 		}
+
+		// Also search the standard system library directories, so a system-installed
+		// libngspice.so (e.g. /usr/lib64/libngspice.so) is found regardless of where this
+		// binary or the app was launched from.
+		for (const QString &systemDir : {QStringLiteral("/usr/local/lib64"), QStringLiteral("/usr/local/lib"),
+		                                 QStringLiteral("/usr/lib64"), QStringLiteral("/usr/lib"),
+		                                 QStringLiteral("/lib64"), QStringLiteral("/lib")}) {
+			if (QDir(systemDir).exists() && !libPaths.contains(systemDir)) {
+				libPaths.append(systemDir);
+			}
+		}
 #endif // Q_OS_LINUX
 
 
