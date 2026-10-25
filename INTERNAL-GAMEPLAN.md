@@ -474,3 +474,15 @@ tests/auto/test_qsysinfo/ exists but is NOT in auto.pro SUBDIRS, and that is cor
 a specific machine ("ubuntu", kernel 5.11.0-38-generic, 20.04). It can only ever pass on that exact host,
 so it is a scratch/demo test, not a portable suite. Leaving it unwired is the right call. (If ever revived,
 it must be rewritten to assert behavior, not a machine-specific golden.)
+
+### 8.15 PUSH TO GITHUB BLOCKED BY AUTH (2026-10-24) — NOT a code issue
+`git push landracer feature/qt6-modern-fixed` -> HTTP 403: "Permission to landracer/fritzing-app.git denied
+to landracer." The credential this environment holds can READ both repos (ls-remote succeeds) but is not
+authorized to PUSH. This is an environment/credential limitation, not a repo/code problem. All 18 commits
+are committed locally on feature/qt6-modern-fixed (tip 7908fe0a); pushing them is a one-command action
+(`git push -u landracer feature/qt6-modern-fixed`) once a writable credential is in place.
+Local safety applied meanwhile: origin (upstream fritzing/fritzing-app) push URL disabled so upstream can
+never be pushed to from here. Branch-topology note: feature/qt6-modern (d33d3145, merge-based, the messy
+"snapshot clobbering clean files" line) is SUPERSEDED by feature/qt6-modern-fixed (linear cherry-picked
+history). Do NOT promote/force-move feature/qt6-modern to fixed without owner sign-off - that rewrites a
+shared branch. Recommend: rename the clean branch to the canonical name and delete the messy one, not FF.
