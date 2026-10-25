@@ -96,7 +96,30 @@ make -j"$(nproc)"
   sources/headers. Mixing `$$files(*.h)` globs (which key rules differently) with absolute entries emits
   *duplicate* moc object rules and breaks the link.
 
-## 6. How to pick up this project in a new session
+## 6. Domain knowledge: copper "ground fill" (mass fill) & the DRC
+
+This is subtle and was the subject of upstream issue #4338; knowing it cold saves a future session hours.
+
+- **Two separate "keepout" settings** (do not conflate them):
+  - `DRC::KeepoutSettingName` (`"Keepout"`, default via `DRC::KeepoutDefaultMils`) - read by
+    `PCBSketchWidget::getKeepout()`; the *netlist* clearance DRC enforces.
+  - `GroundPlaneGenerator::KeepoutSettingName` (`"GPG_Keepout"`, default `KeepoutDefaultMils = 10`) -
+    read by `PCBSketchWidget::getKeepoutMils()`; the *clearance the pour keeps* from foreign copper.
+- **Seeded ground fill** (`fillType="ground"`) flow: `PCBSketchWidget::groundFill()`
+  (`src/sketch/pcbsketchwidget.cpp:1411`) -> `collectGroundFillSeeds` + `ConnectorItem::collectEqualPotential`
+  expand each user-picked seed connector to its whole net -> `GroundPlaneGenerator::generateGroundPlaneFn`
+  (`src/svg/groundplanegenerator.cpp:257`) rasterizes the whole copper layer, keeps copper inside the
+  ground-seed zones, and carves everything else out as the keepout -> result merged onto the
+  `groundplane`/`groundplane1` layer as new `GroundPlane` items (`src/items/groundplane.cpp`).
+- **CRITICAL (root of #4338):** `GroundPlane` carries **no net**, and `DRC::startAux`
+  (`src/autoroute/drc.cpp`) builds its per-net raster from `ViewLayer::copperLayers()` then explicitly
+  `.removeOne(GroundPlane0/1)` (drc.cpp:392-393 and 488-489). So the poured copper is **not** part of any
+  net and is **excluded from every DRC clearance/short check** -> a pour that bridges two nets is invisible
+  to DRC by design. A fix that "makes DRC see the fill" must stop stripping those layers AND give the fill
+  a net (or treat it as a foreign-net obstacle in `splitNet`).
+
+## 7. How to pick up this project in a new session
+
 
 1. `git fetch landracer && git checkout develop && git pull` (canonical line).
 2. Skim `docs/panelizer.md` and `docs/internal/*` for current feature state.

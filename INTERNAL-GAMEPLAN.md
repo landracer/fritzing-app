@@ -512,3 +512,30 @@ token could not:
   MERGEABLE, 100 commits. (develop already == the feature tip 26cd1112; the PR is the traceable record of
   that landing into master. Merge it when ready to make master carry the modernized line too.)
 All prior 'blocked by token scope' items are now DONE. Nothing left waiting on auth.
+
+### 8.18 #4338 ROOT CAUSE FULLY PINNED (2026-10-24) - owner said "do both, robustly"
+Reporter .fzz unpacked: 8 fills, ALL fillType="ground" (seeded ground pour). Full mechanism traced:
+- groundFill() (src/sketch/pcbsketchwidget.cpp:1411): collectGroundFillSeeds ->
+  ConnectorItem::collectEqualPotential expands each seed to its whole net; the ground nets' copper is
+  rendered and the fill polygon is the board MINUS all other copper (the keepout). The fill SVG is then
+  merged onto the board's groundplane/groundplane1 layer as new GroundPlane items.
+- generateGroundPlaneFn (src/svg/groundplanegenerator.cpp:257): copper = whole layer; keepout carved via
+  ctDifference with copperWithoutGroundConnectors; foreign copper shrunk by keepoutMils both sides.
+  Keepout default 10 mil (GroundPlaneGenerator::KeepoutDefaultMils, read via getKeepoutMils()).
+- THE DRC SMOKING GUN (src/autoroute/drc.cpp:392-393 AND 488-489): both the master render and the
+  per-net clearance loop call viewLayerIDs = ViewLayer::copperLayers(placement) then
+  .removeOne(GroundPlane0); .removeOne(GroundPlane1). i.e. the poured copper is DELIBERATELY excluded
+  from every DRC clearance/short check. A pour-induced bridge to a foreign net is invisible to DRC BY
+  DESIGN. That is exactly reporter complaint #2 ("DRC should include mass filling").
+- Root cause of the SHORT itself (#1): a GroundPlane fill carries NO net. DRC builds each net as an
+  equal-potential ConnectorItem set (startAux:305-342) and rasterizes per net; because the pour has no
+  net, it is neither a checked conductor nor assigned to any net, so when it touches two nets it silently
+  joins them. The geometry carve only preserves clearance to copper that was RENDERED as copper in svg0/
+  svg1; any copper not in that render (or inside `exceptions`) is not carved -> overlap -> short.
+- FIX #1 (DRC coverage; bounded, unit-testable): stop stripping GroundPlane0/1 from viewLayerIDs, and
+  treat the fill as a conductor belonging to the net(s) it contacts, so DRC reports pour-induced bridges.
+- FIX #2 (fill robustness; hard, GUI-verifiable only): harden generateGroundPlaneFn so ALL foreign copper
+  is reliably carved (not just rendered/exceptions-listed copper), and/or raise default keepout above the
+  10 mil that collapses to a near-bridge on dense boards.
+- Owner (human, strong at debug) will supply personal .fzz boards + open the reporter .fzz to reproduce
+  visually; I provide exact repro steps + a unit test for the geometry core.
