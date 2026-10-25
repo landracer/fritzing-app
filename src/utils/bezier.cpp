@@ -219,8 +219,8 @@ bool Bezier::operator==(const Bezier & other) const
 
 bool Bezier::operator!=(const Bezier & other) const
 {
-	return (m_isEmpty != other.isEmpty()) &&
-	       (m_cp0 != other.cp0()) &&
+	return (m_isEmpty != other.isEmpty()) ||
+	       (m_cp0 != other.cp0()) ||
 	       (m_cp1 != other.cp1());
 }
 
@@ -371,7 +371,7 @@ double Bezier::cubicF(double t) const noexcept
 
 void Bezier::copy(const Bezier * other)
 {
-	if (!other) {
+	if (other == nullptr) {
 		m_isEmpty = true;
 		return;
 	}
@@ -423,7 +423,7 @@ void Bezier::translate(QPointF p) {
 }
 
 Bezier Bezier::join(const Bezier* other) const {
-	if (!other || other->isEmpty()) {
+	if ((other == nullptr) || other->isEmpty()) {
 		return {};
 	} else {
 		return join(*other);

@@ -20,21 +20,19 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "bus.h"
 #include "busshared.h"
-#include "../debugdialog.h"
-#include "connectoritem.h"
+#include "src/utils/misc.h"
 #include "../model/modelpart.h"
 
-Bus::Bus(BusShared * busShared, ModelPart * modelPart) 
+Bus::Bus(BusShared * busShared, ModelPart * modelPart)
 	: QObject(),
 	m_connectors(),
-	m_subConnector(nullptr),
 	m_busShared(busShared),
 	m_modelPart(modelPart)
 {
 }
 
 const QString & Bus::id() const noexcept {
-	if (!m_busShared) return ___emptyString___;
+	if (m_busShared == nullptr) return ___emptyString___;
 	return m_busShared->id();
 }
 
@@ -49,12 +47,4 @@ void Bus::addConnector(Connector * connector) {
 
 ModelPart * Bus::modelPart() const noexcept {
 	return m_modelPart;
-}
-
-void Bus::addSubConnector(Connector * subConnector) {
-	m_subConnector = subConnector;
-}
-
-Connector * Bus::subConnector() const noexcept {
-	return m_subConnector;
 }

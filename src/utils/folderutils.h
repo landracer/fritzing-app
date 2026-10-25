@@ -26,7 +26,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QStringList>
 #include <QFileDialog>
 
-#include "misc.h"
 
 class FolderUtils
 {
@@ -64,6 +63,8 @@ public:
 	static bool slamCopy(QFile &, const QString & dest);
 	static void showInFolder(const QString & path);
 	static void createUserDataStoreFolders();
+	static QString addToBasename(const QString &filePath, const QString &addition);
+	static bool checkFileLoadability(QWidget* parent, const QString& filePath);
 
 protected:
 	FolderUtils();

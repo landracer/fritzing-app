@@ -46,6 +46,7 @@ public:
 	static const QString LeftNetLabelModuleIDName;
 	static const QString JustPowerModuleIDName;
 	static const QString ResistorModuleIDName;
+	static const QString PhotocellModuleIDName;
 	static const QString LogoTextModuleIDName;
 	static const QString LogoImageModuleIDName;
 	static const QString Silkscreen0LogoImageModuleIDName;
@@ -59,6 +60,7 @@ public:
 	static const QString BreadboardLogoImageModuleIDName;
 	static const QString BoardLogoImageModuleIDName;
 	static const QString OneLayerBoardLogoImageModuleIDName;
+	static const QString PanelBoardModuleIDName;
 	static const QString HoleModuleIDName;
 	static const QString ViaModuleIDName;
 	static const QString PadModuleIDName;

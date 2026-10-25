@@ -29,12 +29,21 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 class PointRect {
 	public:
 		PointRect() = default;
-		PointRect(bool _svgVisible, bool _processed, QRectF _rect, QPointF _point) noexcept : 
+		PointRect(bool _svgVisible, bool _processed, QRectF _rect, QPointF _point) noexcept :
 			rect(_rect),
 			point(_point),
 			processed(_processed),
 			svgVisible(_svgVisible) { }
 		PointRect(const PointRect& other);
+		PointRect& operator=(const PointRect& pointRect) {
+			rect = pointRect.rect;
+			point = pointRect.point;
+			processed = pointRect.processed;
+			svgVisible = pointRect.svgVisible;
+			return *this;
+		}
+
+
 		void unprocess() noexcept;
 		void setInvisible() noexcept;
 		constexpr QPointF getPoint() const noexcept { return point; }

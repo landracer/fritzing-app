@@ -23,7 +23,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "nonconnectoritem.h"
 #include "connector.h"
-#include "../utils/cursormaster.h"
+#include "utils/cursormaster.h"
+#include "utils/bezier.h"
 
 #include <QThread>
 #include <QGraphicsLineItem>
@@ -52,13 +53,14 @@ public:
 	ConnectorItem(Connector *, ItemBase* attachedTo);
 	~ConnectorItem();
 
+	void detach();
 	Connector * connector();
 	void connectorHover(ItemBase *, bool hovering);
 	bool connectorHovering();
 	void clearConnectorHover();
 	void connectTo(ConnectorItem *);
 	int connectionsCount();
-	void attachedMoved(bool includeRatsnest, QList<ConnectorItem *> & already);
+	void attachedMoved(bool includeRatsnest, bool includeOnlyRatsnest, QList<ConnectorItem *> & already);
 	ConnectorItem * removeConnection(ItemBase *);
 	void removeConnection(ConnectorItem *, bool emitChange);
 	ConnectorItem * firstConnectedToIsh();
@@ -114,7 +116,7 @@ public:
 	bool isHybrid();
 	void setBigDot(bool);
 	bool isBigDot();
-	ConnectorItem * findConnectorUnder(bool useTerminalPoint, bool allowAlready, const QList<ConnectorItem *> & exclude, bool displayDragTooltip, ConnectorItem * other);
+	ConnectorItem * findConnectorUnder(bool useTerminalPoint, bool allowAlready, const QList<ConnectorItem *> & exclude, bool displayDragTooltip, ConnectorItem * other, bool enableHoverFeedback = true);
 	ConnectorItem * releaseDrag();
 
 	// rubberBand leg functions
@@ -125,6 +127,9 @@ public:
 	void setLeg(const QPolygonF &, bool relative, const QString & why);
 	void resetLeg(const QPolygonF &, bool relative, bool active, const QString & why);
 	const QPolygonF & leg();
+	QString pathMoveTo(QPointF p, QPointF offset, double dpi, double printerScale);
+	QString pathCubicTo(Bezier * bezier, QPointF p, QPointF offset, double dpi, double printerScale);
+	QString makePathSvg(QString color, double strokeWidth, double opacity, QString path);
 	QString makeLegSvg(QPointF offset, double dpi, double printerScale, bool blackOnly);
 	QPolygonF sceneAdjustedLeg();
 	void prepareToStretch(bool activeStretch);
@@ -235,7 +240,7 @@ protected:
 	static void collectPart(ConnectorItem * connectorItem, QList<ConnectorItem *> & partsConnectors, ViewLayer::ViewLayerPlacement);
 
 public:
-	static void collectEqualPotential(QList<ConnectorItem *> & connectorItems, bool crossLayers, ViewGeometry::WireFlags skipFlags);
+	static void collectEqualPotential(QList<ConnectorItem *> & connectorItems, bool crossLayers, ViewGeometry::WireFlags skipFlags, bool skipBuses = false);
 	static void collectParts(QList<ConnectorItem *> & connectorItems, QList<ConnectorItem *> & partsConnectors, bool includeSymbols, ViewLayer::ViewLayerPlacement);
 	static void clearEqualPotentialDisplay();
 	static bool isGrounded(ConnectorItem * c1, ConnectorItem * c2);

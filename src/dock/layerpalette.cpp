@@ -23,10 +23,10 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QAction>
 
 
-ViewLayerCheckBox::ViewLayerCheckBox(QWidget * parent) : QCheckBox(parent), m_viewLayer(nullptr) { } 
+ViewLayerCheckBox::ViewLayerCheckBox(QWidget * parent) : QCheckBox(parent), m_viewLayer(nullptr) { }
 //////////////////////////////////////
 
-LayerPalette::LayerPalette(QWidget * parent) 
+LayerPalette::LayerPalette(QWidget * parent)
 	: QScrollArea(parent),
 	m_showAllWidget(new QCheckBox(tr("show all layers"))),
 	m_checkBoxes(),
@@ -36,12 +36,12 @@ LayerPalette::LayerPalette(QWidget * parent)
 	m_hideAllLayersAct(nullptr)
 {
 
-	auto frame = new QFrame(this);
-    
+	auto *frame = new QFrame(this);
+   
 	m_mainLayout->setSizeConstraint( QLayout::SetMinAndMaxSize );
 	m_mainLayout->setObjectName("LayerWindowFrame");
 	for (int i = 0; i < ViewLayer::ViewLayerCount; i++) {
-		auto cb = new ViewLayerCheckBox(this);
+		auto *cb = new ViewLayerCheckBox(this);
 		connect(cb, SIGNAL(clicked(bool)), this, SLOT(setLayerVisibility(bool)));
 		m_checkBoxes.append(cb);
 		cb -> setObjectName("LayerCheckBox");
@@ -49,7 +49,7 @@ LayerPalette::LayerPalette(QWidget * parent)
 	}
 
 	m_groupBox -> setObjectName("LayerWindowList");
-	auto groupLayout = new QVBoxLayout();
+	auto *groupLayout = new QVBoxLayout();
 	groupLayout -> setObjectName("LayerWindowBoxes");
 	connect(m_showAllWidget, SIGNAL(clicked(bool)), this, SLOT(setAllLayersVisible(bool)));
 
@@ -68,13 +68,13 @@ LayerPalette::LayerPalette(QWidget * parent)
 
 void LayerPalette::resetLayout(LayerHash & viewLayers, LayerList & keys) {
 	m_mainLayout->removeWidget(m_groupBox);
-	foreach (ViewLayerCheckBox * cb, m_checkBoxes) {
+	Q_FOREACH (ViewLayerCheckBox * cb, m_checkBoxes) {
 		m_mainLayout->removeWidget(cb);
 		cb->setVisible(false);
 	}
 
 	int ix = 0;
-	foreach (ViewLayer::ViewLayerID key, keys) {
+	Q_FOREACH (ViewLayer::ViewLayerID key, keys) {
 		ViewLayer * viewLayer = viewLayers.value(key);
 		//if (viewLayer->parentLayer()) continue;
 
@@ -96,7 +96,7 @@ void LayerPalette::updateLayerPalette(LayerHash & viewLayers, LayerList & keys)
 	m_showAllWidget->setChecked(!m_showAllLayersAct->isEnabled());
 
 	int ix = 0;
-	foreach (ViewLayer::ViewLayerID key, keys) {
+	Q_FOREACH (ViewLayer::ViewLayerID key, keys) {
 		ViewLayer * viewLayer = viewLayers.value(key);
 		//if (viewLayer->parentLayer()) continue;
 
@@ -107,8 +107,8 @@ void LayerPalette::updateLayerPalette(LayerHash & viewLayers, LayerList & keys)
 }
 
 void LayerPalette::setLayerVisibility(bool) {
-	ViewLayerCheckBox * cb = qobject_cast<ViewLayerCheckBox *>(sender());
-	if (!cb) return;
+	auto * cb = qobject_cast<ViewLayerCheckBox *>(sender());
+	if (cb == nullptr) return;
 
 	// want to toggle layer individually in this case
 	cb->viewLayer()->setIncludeChildLayers(false);
@@ -128,12 +128,12 @@ void LayerPalette::setHideAllLayersAction(QAction * action)
 
 void LayerPalette::setAllLayersVisible(bool vis) {
 	if (vis) {
-		if (m_showAllLayersAct) {
+		if (m_showAllLayersAct != nullptr) {
 			m_showAllLayersAct->trigger();
 		}
 	}
 	else {
-		if (m_hideAllLayersAct) {
+		if (m_hideAllLayersAct != nullptr) {
 			m_hideAllLayersAct->trigger();
 		}
 	}

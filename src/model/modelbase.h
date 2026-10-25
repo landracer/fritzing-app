@@ -37,7 +37,7 @@ public:
 	virtual ModelPart* retrieveModelPart(const QString & moduleID);
 	virtual ModelPart * addModelPart(ModelPart * parent, ModelPart * copyChild);
 	bool loadFromFile(const QString & fileName, ModelBase* referenceModel, QList<ModelPart *> & modelParts, bool checkInstances);
-	void save(const QString & fileName, bool asPart);
+	bool save(const QString & fileName, bool asPart);
 	void save(const QString & fileName, class QXmlStreamWriter &, bool asPart);
 	virtual ModelPart * addPart(QString newPartPath, bool addToReference);
 	virtual bool addPart(ModelPart * modelPart, bool update);
@@ -52,13 +52,14 @@ public:
 public:
 	static bool onCoreList(const QString & moduleID);
 
-signals:
+Q_SIGNALS:
 	void loadedViews(ModelBase *, QDomElement & views);
+	void loadedProjectProperties(const QDomElement & projectProperties);
 	void loadedRoot(const QString & fileName, ModelBase *, QDomElement & root);
 	void loadingInstances(ModelBase *, QDomElement & instances);
 	void loadingInstance(ModelBase *, QDomElement & instance);
-	void loadedInstances(ModelBase *, QDomElement & instances);
 	void obsoleteSMDOrientationSignal();
+	void migratePartLabelOffset(const QString &fritzingVersion);
 	void oldSchematicsSignal(const QString & filename, bool & useOldSchematics);
 
 protected:

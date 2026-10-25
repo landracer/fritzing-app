@@ -14,6 +14,9 @@
 # ********************************************************************/
 
 HEADERS += \
+	$$PWD/../src/utils/duplicatetracker.h \
+	$$PWD/../src/utils/fpsmonitor.h \
+	$$PWD/../src/utils/ftooltip.h \
 src/utils/abstractstatesbutton.h \
 src/utils/autoclosemessagebox.h \
 src/utils/bendpointaction.h \
@@ -40,9 +43,14 @@ src/utils/ratsnestcolors.h \
 src/utils/schematicrectconstants.h \
 src/utils/s2s.h \
 src/utils/textutils.h \
-src/utils/zoomslider.h
+src/utils/textmetrics.h \
+src/utils/zoomslider.h \
+src/utils/FMessageLogProbe.h \
+src/utils/uploadpair.h
 
 SOURCES += \
+	$$PWD/../src/utils/fpsmonitor.cpp \
+	$$PWD/../src/utils/ftooltip.cpp \
 src/utils/autoclosemessagebox.cpp \
 src/utils/bendpointaction.cpp \
 src/utils/bezier.cpp \
@@ -65,4 +73,7 @@ src/utils/ratsnestcolors.cpp \
 src/utils/schematicrectconstants.cpp \
 src/utils/s2s.cpp \
 src/utils/textutils.cpp \
-src/utils/zoomslider.cpp
+src/utils/textmetrics.cpp \
+src/utils/zoomslider.cpp \
+src/utils/FMessageLogProbe.cpp \
+src/utils/uploadpair.cpp

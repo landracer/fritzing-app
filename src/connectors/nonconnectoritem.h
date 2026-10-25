@@ -49,6 +49,7 @@ public:
 	const QString & attachedToTitle();
 	const QString & attachedToInstanceTitle();
 	void setCircular(bool);
+	bool isCircular();
 	void setRadius(double radius, double strokeWidth);
 	constexpr double radius() const noexcept { return m_radius; }
 	constexpr double strokeWidth() const noexcept { return m_strokeWidth; }
@@ -58,9 +59,10 @@ public:
 	void setIsPath(bool);
 	constexpr bool isPath() const noexcept { return m_isPath; }
 	int attachedToItemType();
+	bool forWire();
 
 protected:
-	constexpr bool doNotPaint() const noexcept { 
+	constexpr bool doNotPaint() const noexcept {
         return (m_hidden || m_inactive || !m_paint || m_layerHidden);
     }
 

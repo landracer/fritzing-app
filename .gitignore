@@ -4,6 +4,25 @@
 
 Makefile*
 
+# Qt build-generated sources (moc/uic/rcc) — never commit these
+moc_*.cpp
+moc_*.h
+moc_predefs.h
+*.moc
+qrc_*.cpp
+ui_*.h
+tests/auto/*/target_wrapper.sh
+
+# Compiled qtest binaries (source is test_*.cpp; the bare same-name file is the binary)
+tests/auto/test_*/test_gerber
+tests/auto/test_*/test_gerberpreview
+tests/auto/test_*/test_panelizer
+tests/auto/test_*/test_svg
+tests/auto/test_*/test_textutils
+tests/auto/test_*/test_svg2gerber
+tests/auto/test_*/test_ngspice_simulator
+tests/auto/test_*/test_project_properties
+
 phoenix.pro.user
 /phoenix-build-*
 /release*
@@ -61,3 +80,6 @@ ehthumbs.db
 Thumbs.db
 .bash_history
 saved_state
+*.qm
+index
+/.qtc_clangd/compile_commands.json

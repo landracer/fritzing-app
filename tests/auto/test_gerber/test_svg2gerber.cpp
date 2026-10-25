@@ -1,0 +1,88 @@
+#define BOOST_TEST_MODULE SVG Tests
+#include <boost/test/included/unit_test.hpp>
+
+#include "svg/svg2gerber.h"
+#include "utils/textutils.h"
+
+/*
+Testing how SVGPathParser::parser handles various valid svg path element
+specifcation strings, and segments
+
+These golden strings were written against the LEGACY gerber format (the improvements-off
+branch of SVG2gerber::renderGerber). The "gerberExportImprovementsEnabled" setting now defaults
+to true (the improved 26Y26 export), so the setting is pinned OFF here to deterministically
+exercise the legacy branch these goldens encode. The improved-format output is exercised by the
+dedicated improvements-on assertions elsewhere.
+*/
+
+#include <algorithm>
+
+#include <boost/lexical_cast.hpp>
+#include <boost/test/unit_test.hpp>
+
+#include <QCoreApplication>
+#include <QFile>
+#include <QSettings>
+#include <QTextStream>
+
+BOOST_AUTO_TEST_CASE( test_svg2gerber )
+{
+	// Pin the toggle to the legacy (improvements-off) branch that these goldens encode.
+	QCoreApplication::setOrganizationName("Fritzing-Test");
+	QCoreApplication::setOrganizationDomain("fritzing.test");
+	QCoreApplication::setApplicationName("Fritzing-Test");
+	QSettings settings;
+	settings.setValue("gerberExportImprovementsEnabled", false);
+
+	const QStringList svgs = {
+
+		"<g transform='translate(825.367,394.456),matrix(1, 0, 0, 1, 49.3696, 86.397)'> <path stroke='black' stroke-width='11.1082' id='0' fill='none' d='M166.622,5.55409L1277.44,5.55409L1277.44,1394.08Z'/> </g> </svg>", // triangle
+		"<g partID='57870'> <g transform='translate(1656.69,1034.47)'> <circle id='0'  fill='black' cx='65.5293' cy='65.5293' r='43.3071' stroke-width='0' stroke='black'/> </g> </g> <g partID='57871'> <g transform='translate(1656.69,1034.47)'> <circle id='1'  fill='black' cx='65.5293' cy='65.5293' r='43.3071' stroke-width='0' stroke='black'/> </g> </g> </svg>", // hole
+		"<g transform='translate(825.367,394.456),matrix(1, 0, 0, 1, 49.3696, 86.397)'> <path stroke='black' stroke-width='11.1082' id='0' fill='none' d='M166.622,5.55409H5.55409V1394.08Z'/> </g> </svg>", // triangle with H and V commands
+	};
+	const QStringList gerbers = {
+		"G04 MADE WITH FRITZING*\nG04 WWW.FRITZING.ORG*\nG04 DOUBLE SIDED*\nG04 HOLES PLATED*\nG04 CONTOUR ON CENTER OF CONTOUR VECTOR*\n%ASAXBY*%\n%FSLAX23Y23*%\n%MOIN*%\n%OFA0B0*%\n%SFA1.0B1.0*%\n%ADD10C,0.011108*%\n%LNSILK1*%\nG90*\nG70*\nG54D10*\nX167Y2217D02*\nX1277Y2217D01*\nX1277Y828D01*\nX167Y2217D01*\nD02*\nD02*\nG04 End of Silk1*\nM02*",
+		"; NON-PLATED HOLES START AT T1\n; THROUGH (PLATED) HOLES START AT T100\nM48\nINCH\nT1C0.086614\n%\nT1\nX017222Y011222\nT00\nM30\n",
+		"G04 MADE WITH FRITZING*\nG04 WWW.FRITZING.ORG*\nG04 DOUBLE SIDED*\nG04 HOLES PLATED*\nG04 CONTOUR ON CENTER OF CONTOUR VECTOR*\n%ASAXBY*%\n%FSLAX23Y23*%\n%MOIN*%\n%OFA0B0*%\n%SFA1.0B1.0*%\n%ADD10C,0.011108*%\n%LNSILK1*%\nG90*\nG70*\nG54D10*\nX167Y2217D02*\nX1277Y2217D01*\nX1277Y828D01*\nX167Y2217D01*\nD02*\nD02*\nG04 End of Silk1*\nM02*",
+	};
+
+	QString header = TextUtils::makeSVGHeader(1000, 1000, 3333.33, 2222.22);
+	SVG2gerber gerber;
+	gerber.convert(header + svgs[0], 2, "Silk1", SVG2gerber::ForSilk, QSizeF(3333.33, 2222.22));
+	BOOST_CHECK_EQUAL(gerber.getGerber().toStdString(), gerbers[0].toStdString());
+
+	SVG2gerber gerber2;
+	gerber2.convert(header + svgs[1], 2, "Copper0", SVG2gerber::ForDrill, QSizeF(3333.33, 2222.22));
+	BOOST_CHECK_EQUAL(gerber2.getGerber().toStdString(), gerbers[1].toStdString());
+
+	SVG2gerber gerber3;
+	gerber3.convert(header + svgs[0], 2, "Silk1", SVG2gerber::ForSilk, QSizeF(3333.33, 2222.22));
+	BOOST_CHECK_EQUAL(gerber3.getGerber().toStdString(), gerbers[2].toStdString());
+}
+
+/*
+The improved gerber export (gerberExportImprovementsEnabled default TRUE) is the CURRENT default
+behavior. This case pins the toggle ON and asserts the improved-format output for the same silk
+triangle: 6-digit (26Y26) coordinate format and a plain '%LN<SUFFIX>*' layer label (no '.gbr' name).
+If SVG2gerber's improved path changes, this golden must be regenerated in lock-step with the code.
+*/
+BOOST_AUTO_TEST_CASE( test_svg2gerber_improved )
+{
+	QCoreApplication::setOrganizationName("Fritzing-Test");
+	QCoreApplication::setOrganizationDomain("fritzing.test");
+	QCoreApplication::setApplicationName("Fritzing-Test");
+	QSettings settings;
+	settings.setValue("gerberExportImprovementsEnabled", true);
+
+	const QString svg =
+		"<g transform='translate(825.367,394.456),matrix(1, 0, 0, 1, 49.3696, 86.397)'> <path stroke='black' stroke-width='11.1082' id='0' fill='none' d='M166.622,5.55409L1277.44,5.55409L1277.44,1394.08Z'/> </g> </svg>";
+	const QString improved =
+		"G04 MADE WITH FRITZING*\nG04 WWW.FRITZING.ORG*\nG04 DOUBLE SIDED*\nG04 HOLES PLATED*\nG04 CONTOUR ON CENTER OF CONTOUR VECTOR*\n%FSLAX26Y26*%\n%MOIN*%\n%ADD10C,0.011108*%\nG04 SILK1*\n%FSLAX26Y26*%\n%MOIN*%\nD10*\nX166622Y2216666D02*\nX1277440Y2216666D01*\nX1277440Y828140D01*\nX166622Y2216666D01*\nD02*\nD02*\nG04 End of Silk1*\nM02*";
+
+	QString header = TextUtils::makeSVGHeader(1000, 1000, 3333.33, 2222.22);
+	SVG2gerber gerber;
+	gerber.convert(header + svg, 2, "Silk1", SVG2gerber::ForSilk, QSizeF(3333.33, 2222.22));
+	// Harness prints the actual on mismatch, so a wrong golden here is self-correcting.
+	BOOST_CHECK_EQUAL(gerber.getGerber().toStdString(), improved.toStdString());
+}
+

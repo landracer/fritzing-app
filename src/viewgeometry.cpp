@@ -21,14 +21,14 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "viewgeometry.h"
 #include "utils/graphicsutils.h"
 
-ViewGeometry::ViewGeometry(  ) 
+ViewGeometry::ViewGeometry(  )
 	: m_loc(-1, -1),
 	m_line(-1, -1, -1, -1),
 	m_wireFlags(WireFlag::NoFlag)
 {
 }
 
-ViewGeometry::ViewGeometry(const ViewGeometry& that) 
+ViewGeometry::ViewGeometry(const ViewGeometry& that)
 	: m_z(that.m_z),
 	m_loc(that.m_loc),
 	m_line(that.m_line),
@@ -36,7 +36,18 @@ ViewGeometry::ViewGeometry(const ViewGeometry& that)
 	m_wireFlags(that.m_wireFlags),
 	m_transform(that.m_transform) { }
 
-ViewGeometry::ViewGeometry(QDomElement & geometry) 
+ViewGeometry& ViewGeometry::operator=(const ViewGeometry& that)
+{
+	m_z = that.m_z;
+	m_loc = that.m_loc;
+	m_line = that.m_line;
+	m_rect = that.m_rect;
+	m_wireFlags = that.m_wireFlags;
+	m_transform = that.m_transform;
+	return *this;
+}
+
+ViewGeometry::ViewGeometry(QDomElement & geometry)
 	: m_z(geometry.attribute("z").toDouble()),
 	m_loc(geometry.attribute("x").toDouble(),
 	      geometry.attribute("y").toDouble()),
@@ -178,11 +189,11 @@ void ViewGeometry::setWireFlags(WireFlags wireFlags) {
 }
 
 bool ViewGeometry::hasFlag(ViewGeometry::WireFlag flag) {
-	return (m_wireFlags & flag) ? true : false;
+	return (m_wireFlags & flag) != 0u ? true : false;
 }
 
 bool ViewGeometry::hasAnyFlag(ViewGeometry::WireFlags flags) {
-	return (m_wireFlags & flags) ? true : false;
+	return (m_wireFlags & flags) != 0u ? true : false;
 }
 
 

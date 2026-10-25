@@ -13,11 +13,17 @@
 # along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 # ********************************************************************/
 
+CONFIG += c++17
+
 # specify absolute path so that unit test compiles will find the folder
 absolute_boost = 1
 include($$absolute_path(../../../pri/boostdetect.pri))
+include($$absolute_path(../../../pri/svgppdetect.pri))
 
 QT += core xml svg
+equals(QT_MAJOR_VERSION, 6) {
+  QT += core5compat svgwidgets
+}
 
 HEADERS += $$files(*.h)
 SOURCES += $$files(*.cpp)
@@ -27,6 +33,7 @@ INCLUDEPATH += $$absolute_path(../../../src)
 HEADERS += $$files(../../../src/svg/svgtext.h)
 HEADERS += $$files(../../../src/svg/svgpathlexer.h)
 HEADERS += $$files(../../../src/utils/textutils.h)
+HEADERS += $$files(../../../src/utils/textmetrics.h)
 HEADERS += $$files(../../../src/svg/svgpathgrammar_p.h)
 HEADERS += $$files(../../../src/svg/svgpathparser.h)
 
@@ -35,5 +42,6 @@ SOURCES += $$files(../../../src/svg/svgpathlexer.cpp)
 SOURCES += $$files(../../../src/svg/svgpathparser.cpp)
 SOURCES += $$files(../../../src/svg/svgpathgrammar.cpp)
 SOURCES += $$files(../../../src/utils/textutils.cpp)
+SOURCES += $$files(../../../src/utils/textmetrics.cpp)
 #INCLUDEPATH += $$top_srcdir
 # unix:QMAKE_POST_LINK = $$PWD/generated/test_svg

@@ -27,16 +27,20 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QHash>
 #include <QList>
 #include <QGraphicsSceneHoverEvent>
+#include <QtGlobal>
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QGraphicsSvgItem>
+#else
+#include <QtSvgWidgets/QGraphicsSvgItem>
+#endif
 #include <QPointer>
 #include <QUrl>
 #include <QMap>
 #include <QTimer>
 #include <QCursor>
 
-#include "../viewgeometry.h"
-#include "../viewlayer.h"
-#include "../utils/misc.h"
+#include "viewgeometry.h"
+#include "viewlayer.h"
 
 class ConnectorItem;
 class ModelPart;
@@ -72,10 +76,11 @@ public:
 	};
 
 public:
-	ItemBase(ModelPart*, ViewLayer::ViewID, const ViewGeometry &, long id, QMenu * itemMenu);
+	explicit ItemBase(ModelPart*, ViewLayer::ViewID, const ViewGeometry &, long id, QMenu * itemMenu);
 	virtual ~ItemBase();
 
 	constexpr qint64 id() const noexcept { return m_id; }
+	QString subpartID() const;
 	void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget);
 	double z();
 	virtual void saveGeometry() = 0;
@@ -87,15 +92,16 @@ public:
 	void setModelPart(ModelPart *);
 	ModelPartShared * modelPartShared();
 	virtual void writeXml(QXmlStreamWriter &) {}
-	virtual void saveInstance(QXmlStreamWriter &);
+	virtual void saveInstance(QXmlStreamWriter &, bool flipAware);
 	virtual void saveInstanceLocation(QXmlStreamWriter &) = 0;
 	virtual void writeGeometry(QXmlStreamWriter &);
 	virtual void moveItem(ViewGeometry &) = 0;
-	virtual void setItemPos(QPointF & pos);
+	virtual void setItemPos(const QPointF & pos);
+	virtual void setLocation(const QPointF & loc);
 	virtual void rotateItem(double degrees, bool includeRatsnest);
 	virtual void flipItem(Qt::Orientations orientation);
 	virtual void transformItem(const QTransform &, bool includeRatsnest);
-	virtual void transformItem2(const QMatrix &);
+	virtual void transformItem2(const QTransform &);
 	virtual void removeLayerKin();
 	ViewLayer::ViewID viewID();
 	QString & viewIDName();
@@ -106,7 +112,7 @@ public:
 
 	void collectConnectors(ConnectorPairHash & connectorHash, SkipCheckFunction);
 
-	virtual void busConnectorItems(Bus * bus, ConnectorItem *, QList<ConnectorItem *> & items);
+	virtual bool busConnectorItems(ConnectorItem *, QList<ConnectorItem *> & items);
 	virtual void setHidden(bool hidden);
 	virtual void setLayerHidden(bool hidden);
 	constexpr bool hidden() const noexcept { return m_hidden; }
@@ -151,7 +157,7 @@ public:
 	ViewLayer::ViewLayerID partLabelViewLayerID();
 	void clearPartLabel();
 	bool isPartLabelVisible();
-	void restorePartLabel(QDomElement & labelGeometry, ViewLayer::ViewLayerID);				// on loading from a file
+	void restorePartLabel(QDomElement & labelGeometry, ViewLayer::ViewLayerID, bool flipAware = false);				// on loading from a file
 	void movePartLabel(QPointF newPos, QPointF newOffset);												// coming down from the command object
 	void partLabelMoved(QPointF oldPos, QPointF oldOffset, QPointF newPos, QPointF newOffset);			// coming up from the label
 	void partLabelSetHidden(bool hide);
@@ -162,6 +168,7 @@ public:
 	QRectF partLabelSceneBoundingRect();
 	virtual bool isSwappable();
 	virtual void setSwappable(bool);
+	virtual bool allowSwapReconnectByDescription();
 	void mousePressEvent(QGraphicsSceneMouseEvent *event);
 	virtual void collectWireConnectees(QSet<Wire *> & wires);
 	virtual bool collectFemaleConnectees(QSet<ItemBase *> & items);
@@ -209,7 +216,6 @@ public:
 	virtual void setDropOffset(QPointF offset);
 	bool hasRubberBandLeg() const;
 	void killRubberBandLeg();
-	bool sceneEvent(QEvent *event);
 	void clearConnectorItemCache();
 	const QList<ConnectorItem *> & cachedConnectorItems();
 	const QList<ConnectorItem *> & cachedConnectorItemsConst() const;
@@ -236,6 +242,7 @@ public:
 	const QString & spice() const;
 	const QString & spiceModel() const;
 	void addSubpart(ItemBase *);
+	void removeSubpart(ItemBase *);
 	void setSuperpart(ItemBase *);
 	ItemBase * superpart();
 	ItemBase * findSubpart(const QString & connectorID, ViewLayer::ViewLayerPlacement);
@@ -246,6 +253,8 @@ public:
 	void initLayerAttributes(LayerAttributes & layerAttributes, ViewLayer::ViewID, ViewLayer::ViewLayerID, ViewLayer::ViewLayerPlacement, bool doConnectors, bool doCreateShape);
 	virtual QString getInspectorTitle();
 	virtual void setInspectorTitle(const QString & oldText, const QString & newText);
+	void addSimulationGraphicsItem(QGraphicsObject *);
+	void removeSimulationGraphicsItem();
 
 public:
 	virtual void getConnectedColor(ConnectorItem *, QBrush &, QPen &, double & opacity, double & negativePenWidth, bool & negativeOffsetRect);
@@ -301,18 +310,20 @@ public:
 	virtual void connectedMoved(ConnectorItem * from, ConnectorItem * to, QList<ConnectorItem *> & already);
 	virtual ItemBase * layerKinChief();
 	virtual const QList<ItemBase *> & layerKin();
-	virtual void findConnectorsUnder() = 0;
+	virtual void findConnectorsUnder(bool enableHoverFeedback = true, bool allowAlready = false) = 0;
 	virtual ConnectorItem* newConnectorItem(Connector *connector);
 	virtual ConnectorItem* newConnectorItem(ItemBase * layerkin, Connector *connector);
 
 	virtual void setInstanceTitle(const QString &title, bool initial);
 	void updatePartLabelInstanceTitle();
+	std::pair<QString, bool> migratePartLabel();
 
-public slots:
+public Q_SLOTS:
 	void showPartLabel(bool show, ViewLayer *);
 	void hidePartLabel();
 	void partLabelChanged(const QString &newText);
 	virtual void swapEntry(const QString & text);
+	virtual void swapEntry(int index);
 	void showInFolder();
 
 public:
@@ -331,6 +342,9 @@ protected:
 	QVariant itemChange(QGraphicsItem::GraphicsItemChange change, const QVariant & value);
 
 	virtual QStringList collectValues(const QString & family, const QString & prop, QString & value);
+	virtual QList<QPair<QString, QString> > collectPartsOfFamilyWithProp(const QString &family,
+													 const QString &prop);
+
 
 	void setInstanceTitleTooltip(const QString& text);
 	virtual void setDefaultTooltip();
@@ -340,7 +354,7 @@ protected:
 	virtual ViewLayer::ViewID useViewIDForPixmap(ViewLayer::ViewID, bool swappingEnabled);
 	virtual bool makeLocalModifications(QByteArray & svg, const QString & filename);
 	void updateHidden();
-	void createShape(LayerAttributes & layerAttributes);
+	virtual void createShape(LayerAttributes & layerAttributes);
 
 protected:
 	static bool getFlipDoc(ModelPart * modelPart, const QString & filename, ViewLayer::ViewLayerID viewLayerID, ViewLayer::ViewLayerPlacement, QDomDocument &, Qt::Orientations);
@@ -386,14 +400,13 @@ protected:
 	QList< QPointer<ItemBase> > m_subparts;
 	bool m_squashShape = false;
 	QPainterPath m_selectionShape;
+	QGraphicsObject * m_simItem = nullptr;
 
 protected:
 	static long nextID;
 	static QPointer<ReferenceModel> TheReferenceModel;
 
 public:
-	static const QString ITEMBASE_FONT_PREFIX;
-	static const QString ITEMBASE_FONT_SUFFIX;
 	static QHash<QString, QString> TranslatedPropertyNames;
 	static QString PartInstanceDefaultTitle;
 	static const QList<ItemBase *> EmptyList;
@@ -409,7 +422,6 @@ public:
 	static QString translatePropertyName(const QString & key);
 	static void setReferenceModel(ReferenceModel *);
 	static void renderOne(QDomDocument *, QImage *, const QRectF & renderRect);
-
 
 
 };

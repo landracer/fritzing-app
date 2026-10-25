@@ -51,11 +51,11 @@ class SymbolPaletteItem : public PaletteItem
 	Q_OBJECT
 
 public:
-	SymbolPaletteItem(ModelPart *, ViewLayer::ViewID, const ViewGeometry & viewGeometry, long id, QMenu * itemMenu, bool doLabel);
+	explicit SymbolPaletteItem(ModelPart *, ViewLayer::ViewID, const ViewGeometry & viewGeometry, long id, QMenu * itemMenu, bool doLabel);
 	~SymbolPaletteItem();
 
 	ConnectorItem* newConnectorItem(class Connector *connector);
-	void busConnectorItems(class Bus * bus, ConnectorItem *, QList<ConnectorItem *> & items);
+	bool busConnectorItems(ConnectorItem *, QList<ConnectorItem *> & items);
 	double voltage();
 	void setProp(const QString & prop, const QString & value);
 	void setVoltage(double);
@@ -78,9 +78,10 @@ public:
 public:
 	static double DefaultVoltage;
 
-public slots:
-	void voltageEntry(const QString & text);
+public Q_SLOTS:
+	void voltageEntry(int index);
 	void labelEntry();
+	void swapEntry(int index);
 
 protected:
 	void removeMeFromBus(double voltage);
@@ -96,6 +97,7 @@ protected:
 	QPointer<ConnectorItem> m_connector1;
 	bool m_voltageReference;
 	bool m_isNetLabel;
+	QString m_label;
 };
 
 
@@ -113,6 +115,7 @@ public:
 	bool isOnlyNetLabel();
 	QString getInspectorTitle();
 	void setInspectorTitle(const QString & oldText, const QString & newText);
+	QString getVersion(); // Only used in NetLabel currenty, but a candiate for PartBase or similar, to support future migrations
 
 protected:
 	QString makeSvg(ViewLayer::ViewLayerID);

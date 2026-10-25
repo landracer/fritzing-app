@@ -25,7 +25,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "fapplication.h"
 #include "version/version.h"
-#include "debugdialog.h"
 #include "utils/folderutils.h"
 
 #ifdef Q_OS_WIN
@@ -89,11 +88,14 @@ int main(int argc, char *argv[])
 #endif
 #endif
 
+#ifdef Q_OS_WIN
+	qputenv("QT_QPA_PLATFORM", "windows:darkmode=0");
+#endif
+
 	int result = 0;
 	try {
 		//QApplication::setGraphicsSystem("raster");
-		QGuiApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
-		FApplication * app = new FApplication(argc, argv);
+		auto * app = new FApplication(argc, argv);
 		switch (app->init()) {
 		case FInitResultNormal: {
 			//DebugDialog::setDebugLevel(DebugDialog::Error);
@@ -128,7 +130,8 @@ int main(int argc, char *argv[])
 			     "Options:\n"
 			     "\n"
 			     "User options:\n"
-			     "  -d, -debug                    run Fritzing in debug mode, providing additional debug information\n"
+			     "  -d, -debug [FILENAME]         run Fritzing in debug mode, providing additional debug information\n"
+			     "                                (optional FILENAME parameter writes debug output to specified file)\n"
 			     //" drc filename : runs a design rule check on the given sketch file\n"
 			     "  -f, -folder FOLDER            use Fritzing parts, sketches, bins and translations in folders under FOLDER\n"
 			     "  -geda FOLDER                  convert all gEDA footprint (.fp) files in FOLDER to Fritzing SVGs\n"

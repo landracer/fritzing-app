@@ -1,61 +1,136 @@
 # Fritzing
 
-|Branch|Badge|
-|------|-----|
-|master|[![Build Status](https://travis-ci.org/fritzing/fritzing-app.svg?branch=master)](https://travis-ci.org/fritzing/fritzing-app)|
-|develop|[![Build Status](https://travis-ci.org/fritzing/fritzing-app.svg?branch=develop)](https://travis-ci.org/fritzing/fritzing-app)|
+**This is the `landracer` fork-of-record of the Fritzing application** - a modernized,
+actively-maintained line of the original project. Upstream
+[`fritzing/fritzing-app`](https://github.com/fritzing/fritzing-app) is kept as a read-only
+remote that we cherry-pick from; this repository is the canonical line we drive.
 
-The Fritzing application is an Electronic Design Automation software with a low entry barrier, suited for the needs of makers and hobbyists. It offers a unique real-life "breadboard" view, and a parts library with many commonly used high-level components. Fritzing makes it very easy to communicate about circuits, as well as to turn them into PCB layouts ready for production. It is particularly popular among Arduino and Raspberry Pi users, and is widely used in education and creative tinkering.
+The Fritzing application is an Electronic Design Automation tool with a low entry barrier,
+suited for the needs of makers and hobbyists. It offers a unique real-life "breadboard" view,
+and a parts library with many commonly used high-level components. Fritzing makes it easy to
+communicate about circuits, and to turn them into PCB layouts ready for production. It is
+particularly popular among Arduino and Raspberry Pi users, and is widely used in education and
+creative tinkering.
 
-* For more information on Fritzing and its related activities, visit [http://fritzing.org](http://fritzing.org). There you can also [download](http://fritzing.org/download) the latest releases for all platforms and get help on getting started.
+## What is different in this fork
 
-* To report a problem or suggest improvements, use the [issue tracker](https://github.com/fritzing/fritzing-app/issues) or the [user forum](http://forum.fritzing.org).
-Please provide steps, what operating system you are on, including the version. Add screenshots or copies of error messages, describe what behavior you saw and what you expected.
+* **Modern Qt 6.x, version-floating.** The app builds against a current Qt 6 (e.g. 6.11.x) and is
+  no longer pinned to an old Qt point release. The build keys off the Qt *major* version, so it
+  tracks modern Qt without a hard version ceiling.
+* **PCB panelizer** and a standalone **Gerber preview** (opt-in beta feature) are first-class.
+* **The full automated test suite builds and passes** against floating Qt 6 (Boost.Test and QtTest
+  suites covering SVG parsing, text utilities, gerber export in both the legacy and improved
+  formats, the ngspice simulator bridge, project properties, and the panelizer/gerber-preview
+  widgets).
 
-* If you would like to help with the development, please take a look at those labels:
-  * [![label: easy start][~easy start]](https://github.com/fritzing/fritzing-app/labels/easy%20start)
-  * [![label: challenging start][~challenging start]](https://github.com/fritzing/fritzing-app/labels/challenging%20start)
+## For contributors & AI agents
 
-Some of those don't need C++ skills, like reproducing an issue on a certain platform, or verifying translations of languages we don't speak. If there is something for you, you might want to check the [developer instructions](https://github.com/fritzing/fritzing-app/wiki) next. This includes information about how to compile and run the Fritzing app.
+If you are picking this project up — human or AI agent — **start at [`AGENTS.md`](AGENTS.md)**. It
+is the onboarding contract: what the repo is, how it is built and tested, the conventions to follow,
+and how to open a clean slice. The rest of the living documentation lives under [`docs/`](docs/):
+
+| Doc | What it covers |
+|-----|----------------|
+| [`AGENTS.md`](AGENTS.md) | Agent/human onboarding, conventions, build/test commands, how to start a session. |
+| [`docs/panelizer.md`](docs/panelizer.md) | User-facing panelizer guide. |
+| [`docs/design/panelizer-v2.md`](docs/design/panelizer-v2.md) | Panelizer design reference. |
+| [`docs/design/gerbview-port-reference.md`](docs/design/gerbview-port-reference.md) | Gerber-preview port reference. |
+| [`docs/internal/panelizer-progress.md`](docs/internal/panelizer-progress.md) | Newest-first working log of the feature effort. |
+
+Quick start:
+
+```sh
+git checkout develop                                   # canonical line
+mkdir build && cd build && qmake6 ../phoenix.pro && make -j"$(nproc)" && ./Fritzing
+```
+
+(See `AGENTS.md` §3 for the full out-of-tree build, and §5 for running the test suite.)
+
+## Building from source
+
+You need a **Qt 6** installation (Core, Gui, Widgets, Xml, Svg, SvgWidgets, PrintSupport,
+SerialPort, Sql + the sqlite driver, Core5Compat), **QuaZip built for Qt 6**, **Boost**,
+**libgit2**, **OpenSSL 3**, **QtSerialPort**, **ngspice** (shared library, for simulation), and
+**svgpp**. On a Fedora/RHEL-style box that is roughly:
+
+```sh
+sudo dnf install qt6-qtbase-devel qt6-qtsvg-devel qt6-qtserialport-devel \\
+                 qt6-qt5compat-devel quazip-qt6-devel boost-devel libgit2-devel \\
+                 openssl-devel ngspice-devel
+```
+
+QuaZip is located by `pri/quazipdetect.pri`. The part definitions live in a **separate
+repository** ([`fritzing/fritzing-parts`](https://github.com/fritzing/fritzing-parts)) that is
+checked out into `parts/` as an embedded repository (not a git submodule).
+
+### Configure + build the app (out-of-tree)
+
+```sh
+mkdir build && cd build
+qmake6 ../phoenix.pro
+make -j"$(nproc)"
+./Fritzing
+```
+
+### Build + run the automated tests
+
+The suites are wired through `tests/auto/auto.pro`:
+
+```sh
+mkdir build-tests && cd build-tests
+qmake6 ../tests/auto/auto.pro
+make -j"$(nproc)"
+# Boost suites:
+./test_svg/test_svg
+./test_textutils/test_textutils
+./test_gerber/test_gerber              # holds both the legacy and improved gerber cases
+./test_svg2gerber/test_svg2gerber
+./test_ngspice_simulator/test_ngspice_simulator
+./test_project_properties/test_project_properties
+# QtTest suites (headless):
+./test_panelizer/test_panelizer -platform offscreen
+./test_gerberpreview/test_gerberpreview -platform offscreen
+```
 
 ## Project Structure
 
-* **help** - End-user documentation included with the app. 
+* **help** - End-user documentation shipped with the app.
 
-* **parts** - All the part definitions, including meta data (.fzp) and graphics (.svg), as well as some utility tools. They are kept in a separate repository at [https://github.com/fritzing/fritzing-parts](http://github.com/fritzing/fritzing-parts) and only linked from here.
+* **parts** - Part definitions (metadata `.fzp` + graphics `.svg`). Kept in a separate repository
+  at [https://github.com/fritzing/fritzing-parts](https://github.com/fritzing/fritzing-parts)
+  and checked out into this directory as an embedded repository (not a git submodule).
 
-* **pri** - Submodule definitions for Qt
+* **pri** - qmake `.pri` include files: one per subsystem (items, model, svg, simulation, dock, ...)
+  plus dependency-detection files (`quazipdetect.pri`, `boostdetect.pri`, `svgppdetect.pri`,
+  `libgit2detect.pri`, `openssl3.pri`, ...).
 
-* **resources** - Binaries and definitions that are supposed not to be touched by users, such as fonts, images, special parts, etc.
+* **resources** - Binaries and definitions not meant to be edited by users (fonts, images, special
+  parts, etc.).
 
-* **sketches** - Example circuits/sketches shipped with the application
+* **sketches** - Example circuits/sketches shipped with the application.
 
-* **src** - Application logic!
+* **src** - Application logic.
+
+* **tests/auto** - The automated test suites and their `.pro` wiring (`auto.pro` selects the suites
+  that build/run by default).
 
 * **tools** - Utility tools for making releases, converting parts, etc.
 
-* **translations** - Language translations
+* **translations** - Language translations.
 
 ## Credits
 
-The Fritzing app was maintained by the Friends-of-Fritzing e.V., a non-profit foundation based in Berlin, Germany. The project has grown out of a state-funded research project at the [Interaction Design Lab](http://idl.fh-potsdam.de) at [Potsdam University of Applied Sciences](http://fh-potsdam.de). 
+The Fritzing app was originally maintained by the Friends-of-Fritzing e.V., a non-profit foundation
+based in Berlin, Germany. The project grew out of a state-funded research project at the Interaction
+Design Lab at Potsdam University of Applied Sciences. The founding team consisted of Prof. Reto
+Wettach, Andre Knorig, Jonathan Cohen, and Stefan Hermann, with many contributors over the years.
 
-The founding team consists of Prof. Reto Wettach, André Knörig, Jonathan Cohen, and Stefan Hermann. Many [fantastic people](http://fritzing.org/about/people/) have contributed to it over the years.
+This fork continues that work as a standalone fork-of-record.
 
-Since 2019, the project is maintained by Kjell Morgenstern, with great support from Peter Van Epp, André Knörig, and AISLER.
-
-The Fritzing app is written on top of the [Qt cross-platform framework](http://qt-project.org).
+The Fritzing app is written on top of the Qt cross-platform framework.
 
 ## Licensing
 
-The source code of Fritzing is under GNU GPL v3, the documentation and part designs under Creative Commons Attribution-ShareALike 3.0 Unported. The full texts of these licenses are shipped with this download.
-
-This means that you can create your own variation of Fritzing, as long as you credit us and also publish it under GPL. Similarly, you may re-publish our documentation, as long as you credit us, and publish it under the same
-license. You may publish circuits and diagrams that you create with Fritzing and that use our graphics, again as long as you credit us, and
-publish your works under the same license.  A credit can be as simple as "this image was created with Fritzing."
-
-Lookup [our FAQs](http://fritzing.org/faq/) for more details on licensing.
-
-[~help wanted]: https://img.shields.io/badge/-help%20wanted-%23159818
-[~easy start]: https://img.shields.io/badge/-easy%20start-%2333AAFF
-[~challenging start]: https://img.shields.io/badge/-challenging%20start-%235500EE
+The source code of Fritzing is under GNU GPL v3; the documentation and part designs are under
+Creative Commons Attribution-ShareAlike 3.0 Unported. The full texts of these licenses are shipped
+with this download.

@@ -24,15 +24,16 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QDragEnterEvent>
 #include <QMessageBox>
 
+#include "itemdrag.h"
+#include "items/itembase.h"
 #include "partsbinview.h"
 #include "partsbinpalettewidget.h"
-#include "../itemdrag.h"
-#include "../utils/misc.h"
+
 
 QHash<QString, QString> PartsBinView::TranslatedCategoryNames;
 QHash<QString, ItemBase *> PartsBinView::ItemBaseHash;
 
-PartsBinView::PartsBinView(ReferenceModel *referenceModel, PartsBinPaletteWidget *parent) 
+PartsBinView::PartsBinView(ReferenceModel *referenceModel, PartsBinPaletteWidget *parent)
 	: m_referenceModel(referenceModel),
 	m_parent(parent)
 {
@@ -52,11 +53,12 @@ PartsBinView::PartsBinView(ReferenceModel *referenceModel, PartsBinPaletteWidget
 		TranslatedCategoryNames.insert("LilyPad",  QObject::tr("LilyPad"));
 		TranslatedCategoryNames.insert("Other",  QObject::tr("Other"));
 		TranslatedCategoryNames.insert("Sensors",  QObject::tr("Sensors"));
+		TranslatedCategoryNames.insert("Measuring Tools",  QObject::tr("Measuring Tools"));
 	}
 }
 
 void PartsBinView::cleanup() {
-	foreach (ItemBase * itemBase, ItemBaseHash.values()) {
+	Q_FOREACH (ItemBase * itemBase, ItemBaseHash.values()) {
 		delete itemBase;
 	}
 }
@@ -66,7 +68,7 @@ void PartsBinView::setPaletteModel(PaletteModel * model, bool clear) {
 		doClear();
 	}
 
-	if (model->root() == NULL) return;
+	if (model->root() == nullptr) return;
 
 	setItemAux(model->root());
 	setItem(model->root());
@@ -82,7 +84,7 @@ void PartsBinView::doClear() {
 
 void PartsBinView::removePartReference(const QString & moduleID) {
 	ItemBase * itemBase = ItemBaseHash.value(moduleID);
-	if (itemBase) {
+	if (itemBase != nullptr) {
 		ItemBaseHash.remove(moduleID);
 		itemBase->deleteLater();
 	}
@@ -113,14 +115,14 @@ void PartsBinView::mousePressOnItem(const QPoint &dragStartPos, const QString &m
 
 	dataStream << moduleId << dataPoint;
 
-	QMimeData *mimeData = new QMimeData;
+	auto *mimeData = new QMimeData;
 	mimeData->setData("application/x-dnditemdata", itemData);
 	mimeData->setData("action", "part-reordering");
 
 	ItemDrag::setOriginator(this->m_parent);
 	ItemDrag::setOriginatorIsTempBin(m_parent->isTempPartsBin());
 
-	QDrag * drag = new QDrag(dynamic_cast<QWidget*>(this));
+	auto * drag = new QDrag(dynamic_cast<QWidget*>(this));
 
 	drag->setMimeData(mimeData);
 
@@ -189,7 +191,7 @@ void PartsBinView::dropEventAux(QDropEvent* event, bool justAppend) {
 		toIndex = -1;
 		trustResult = true;
 	} else {
-		toIndex = itemIndexAt(event->pos(), trustResult);
+		toIndex = itemIndexAt(event->position().toPoint(), trustResult);
 	}
 
 	if(!trustResult) return;
@@ -209,9 +211,9 @@ void PartsBinView::dropEventAux(QDropEvent* event, bool justAppend) {
 
 		ModelPart * mp = m_referenceModel->retrieveModelPart(moduleID);
 		m_parent->copyFilesToContrib(mp, ItemDrag::originator());
-		if(mp) {
+		if(mp != nullptr) {
 			if(m_parent->contains(moduleID)) {
-				QMessageBox::information(NULL, QObject::tr("Part already in bin"), QObject::tr("The part that you have just added,\nis already there, we won't add it again, right?"));
+				QMessageBox::information(nullptr, QObject::tr("Part already in bin"), QObject::tr("The part that you have just added,\nis already there, we won't add it again, right?"));
 			} else {
 				m_parent->addPart(mp,toIndex);
 				m_parent->setDirty();

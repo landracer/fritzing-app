@@ -36,17 +36,21 @@ class FritzingWindow : public QMainWindow, public Bundler
 	Q_OBJECT
 
 public:
-	FritzingWindow(const QString &untitledFileName, int &untitledFileCount, QString fileExt, QWidget * parent = 0, Qt::WindowFlags f = Qt::WindowFlags());
+	FritzingWindow(QWidget *parent = 0, Qt::WindowFlags f = Qt::WindowFlags());
+	~FritzingWindow();
+
+	void initializeTitle(const QString &untitledFileName, int &untitledFileCount, QString fileExt);
+
 	const QString &fileName();
 	void setFileName(const QString &);
 
 	virtual void notClosableForAWhile();
 	static bool alreadyHasExtension(const QString &fileName, const QString &extension=___emptyString___);
 
-signals:
+Q_SIGNALS:
 	void readOnlyChanged(bool isReadOnly);
 
-protected slots:
+protected Q_SLOTS:
 	void undoStackCleanChanged(bool isClean);
 	virtual bool save();
 	virtual bool saveAs();

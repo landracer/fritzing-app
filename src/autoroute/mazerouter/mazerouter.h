@@ -33,12 +33,9 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QUndoCommand>
 #include <QPointer>
 
-#include <limits>
 #include <queue>
 
-#include "../../viewgeometry.h"
 #include "../../viewlayer.h"
-#include "../../commands.h"
 #include "../autorouter.h"
 
 typedef quint64 GridValue;
@@ -235,7 +232,7 @@ protected:
 	void optimizeTraces(QList<int> & order, QMultiHash<int, QList< QPointer<TraceWire> > > &, QMultiHash<int, Via *> &, QMultiHash<int, JumperItem *> &, QMultiHash<int, SymbolPaletteItem *> &, NetList &, ConnectionThing &);
 	void reducePoints(QList<QPointF> & points, QPointF topLeft, QList<TraceWire *> & bundle, int startIndex, int endIndex, ConnectionThing &, int netIndex, ViewLayer::ViewLayerPlacement);
 
-public slots:
+public Q_SLOTS:
 	void incCommandProgress();
 	void setMaxCycles(int);
 

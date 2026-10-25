@@ -100,8 +100,8 @@ public:
 	bool canFlipHorizontal(ViewLayer::ViewID);
 	bool canFlipVertical(ViewLayer::ViewID);
 	bool hasViewID(ViewLayer::ViewID viewID);
-	LayerList viewLayers(ViewLayer::ViewID viewID);
-	LayerList viewLayersFlipped(ViewLayer::ViewID viewID);
+	LayerList viewLayers(ViewLayer::ViewID viewID) const;
+	LayerList viewLayersFlipped(ViewLayer::ViewID viewID) const;
 
 	const QString & path();
 	void setPath(QString path);
@@ -138,14 +138,12 @@ public:
 	void setFlippedSMD(bool);
 	bool flippedSMD();
 	bool needsCopper1();
-	bool hasViewFor(ViewLayer::ViewID);
-	bool hasViewFor(ViewLayer::ViewID, ViewLayer::ViewLayerID);
+	bool hasViewFor(ViewLayer::ViewID) const;
+	bool hasViewFor(ViewLayer::ViewID, ViewLayer::ViewLayerID) const;
 	QString hasBaseNameFor(ViewLayer::ViewID);
 	void setViewImage(ViewImage *);
 	void addConnector(ConnectorShared *);
 	void insertBus(class BusShared *);
-	void lookForZeroConnector();
-	bool hasZeroConnector();
 	void addOwner(QObject *);
 	void setSubpartOffset(QPointF);
 	QPointF subpartOffset() const;
@@ -158,14 +156,16 @@ protected:
 	void commonInit();
 	void ensurePartNumberProperty();
 	void copyPins(ViewLayer::ViewLayerID from, ViewLayer::ViewLayerID to);
-	LayerList viewLayersAux(ViewLayer::ViewID viewID, qulonglong (*accessor)(ViewImage *));
+	LayerList viewLayersAux(ViewLayer::ViewID viewID, qulonglong (*accessor)(ViewImage *)) const;
 	void addSchematicText(ViewImage *);
 	bool setDomDocument(QDomDocument &);
 
-protected slots:
+protected Q_SLOTS:
 	void removeOwner();
 
 public:
+	static const QString MNPropertyName;
+	static const QString MPNPropertyName;
 	static const QString PartNumberPropertyName;
 
 protected:
@@ -203,9 +203,8 @@ protected:
 	bool m_flippedSMD;
 	bool m_needsCopper1;				// for converting pre-two-layer parts
 	qulonglong m_dbid;
-	bool m_hasZeroConnector;
 	int m_ownerCount;
-	QList< QPointer<ModelPartShared> > m_subparts;
+	QList<QPointer<ModelPartShared> > m_subparts{};
 	QPointer<ModelPartShared> m_superpart;
 	QString m_subpartID;
 	QPointF m_subpartOffset;

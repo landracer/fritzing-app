@@ -13,11 +13,17 @@
 # along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 # ********************************************************************/
 
+CONFIG += c++17
+
 # specify absolute path so that unit test compiles will find the folder
 absolute_boost = 1
 include($$absolute_path(../../../pri/boostdetect.pri))
+include($$absolute_path(../../../pri/svgppdetect.pri))
 
 QT += core xml
+equals(QT_MAJOR_VERSION, 6) {
+  QT += core5compat svgwidgets
+}
 #concurrent core gui network printsupport serialport sql svg widgets xml
 
 HEADERS += $$files(*.h)
@@ -27,7 +33,9 @@ INCLUDEPATH += $$absolute_path(../../../src)
 #INCLUDEPATH += $$top_srcdir
 
 HEADERS += $$files(../../../src/utils/textutils.h)
+HEADERS += $$files(../../../src/utils/textmetrics.h)
 SOURCES += $$files(../../../src/utils/textutils.cpp)
+SOURCES += $$files(../../../src/utils/textmetrics.cpp)
 INCLUDEPATH += $$absolute_path(../../../src/utils)
 # FLIBS += textutils
 

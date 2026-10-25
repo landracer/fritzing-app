@@ -18,6 +18,7 @@ HEADERS += \
     src/items/capacitor.h \
     src/items/clipablewire.h \
     src/items/dip.h \
+    src/items/dipv2.h \
     src/items/groundplane.h \
     src/items/hole.h \
     src/items/itembase.h \
@@ -48,6 +49,10 @@ HEADERS += \
     src/items/via.h \
     src/items/virtualwire.h \
     src/items/wire.h \
+    src/items/FProbeR1PosPCB.h \
+    src/items/FProbeRPartLabel.h \
+	src/items/FProbeSwitchProperty.h \
+    src/items/panelboarditem.h \
 
 
 SOURCES += \
@@ -55,6 +60,7 @@ SOURCES += \
     src/items/capacitor.cpp \
     src/items/clipablewire.cpp \
     src/items/dip.cpp \
+    src/items/dipv2.cpp \
     src/items/groundplane.cpp \
     src/items/hole.cpp \
     src/items/itembase.cpp \
@@ -85,3 +91,7 @@ SOURCES += \
     src/items/via.cpp \
     src/items/virtualwire.cpp \
     src/items/wire.cpp \
+    src/items/FProbeR1PosPCB.cpp \
+    src/items/FProbeRPartLabel.cpp \
+	src/items/FProbeSwitchProperty.cpp \
+	src/items/panelboarditem.cpp \
