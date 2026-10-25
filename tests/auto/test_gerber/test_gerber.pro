@@ -20,40 +20,43 @@ absolute_boost = 1
 include($$absolute_path(../../../pri/boostdetect.pri))
 include($$absolute_path(../../../pri/svgppdetect.pri))
 
-QT += core xml svg widgets
+QT += core xml svg gui widgets concurrent core gui network printsupport serialport sql svg widgets xml
 equals(QT_MAJOR_VERSION, 6) {
   QT += core5compat svgwidgets
 }
 
-HEADERS += $$files(*.h)
-SOURCES += $$files(*.cpp)
+# Note: list sources explicitly (no $$files() glob of this dir). A self-glob of *.h plus
+# explicit absolute src/svg/*.h entries made qmake emit BOTH a relative- and an
+# absolute-path-keyed rule for each moc_<x>.o, so every Q_OBJECT meta-object was compiled
+# and linked twice -> "multiple definition of ...::qt_metacall". Explicit, single-sourced
+# entries (matching tests/auto/test_svg2gerber/test_svg2gerber.pro, which links cleanly)
+# produce exactly one moc rule per header.
+HEADERS += $$absolute_path(../../../src/svg/svg2gerber.h)
+HEADERS += $$absolute_path(../../../src/svg/svgfilesplitter.h)
+HEADERS += $$absolute_path(../../../src/svg/svgflattener.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathgrammar_p.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathlexer.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathparser.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathrunner.h)
+HEADERS += $$absolute_path(../../../src/svg/svgtext.h)
+HEADERS += $$absolute_path(../../../src/utils/graphicsutils.h)
+HEADERS += $$absolute_path(../../../src/utils/textutils.h)
+HEADERS += $$absolute_path(../../../src/utils/textmetrics.h)
+HEADERS += $$absolute_path(../../../src/debugdialog.h)
+
+SOURCES += test_svg2gerber.cpp
+SOURCES += $$absolute_path(../../../src/svg/svg2gerber.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgfilesplitter.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgflattener.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgtext.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathlexer.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathparser.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathgrammar.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathrunner.cpp)
+SOURCES += $$absolute_path(../../../src/utils/graphicsutils.cpp)
+SOURCES += $$absolute_path(../../../src/utils/textutils.cpp)
+SOURCES += $$absolute_path(../../../src/utils/textmetrics.cpp)
+SOURCES += $$absolute_path(../../../src/debugdialog.cpp)
 
 INCLUDEPATH += $$absolute_path(../../../src)
 
-HEADERS += $$files(../../../src/debugdialog.h)
-HEADERS += $$files(../../../src/svg/svg2gerber.h)
-HEADERS += $$files(../../../src/svg/svgfilesplitter.h)
-HEADERS += $$files(../../../src/svg/svgflattener.h)
-HEADERS += $$files(../../../src/svg/svgpathgrammar_p.h)
-HEADERS += $$files(../../../src/svg/svgpathlexer.h)
-HEADERS += $$files(../../../src/svg/svgpathparser.h)
-HEADERS += $$files(../../../src/svg/svgpathrunner.h)
-HEADERS += $$files(../../../src/svg/svgtext.h)
-HEADERS += $$files(../../../src/utils/graphicsutils.h)
-HEADERS += $$files(../../../src/utils/textutils.h)
-HEADERS += $$files(../../../src/utils/textmetrics.h)
-
-SOURCES += $$files(../../../src/debugdialog.cpp)
-SOURCES += $$files(../../../src/svg/svg2gerber.cpp)
-SOURCES += $$files(../../../src/svg/svgfilesplitter.cpp)
-SOURCES += $$files(../../../src/svg/svgflattener.cpp)
-SOURCES += $$files(../../../src/svg/svgtext.cpp)
-SOURCES += $$files(../../../src/svg/svgpathlexer.cpp)
-SOURCES += $$files(../../../src/svg/svgpathparser.cpp)
-SOURCES += $$files(../../../src/svg/svgpathgrammar.cpp)
-SOURCES += $$files(../../../src/svg/svgpathrunner.cpp)
-SOURCES += $$files(../../../src/utils/graphicsutils.cpp)
-SOURCES += $$files(../../../src/utils/textutils.cpp)
-SOURCES += $$files(../../../src/utils/textmetrics.cpp)
-#INCLUDEPATH += $$top_srcdir
-# unix:QMAKE_POST_LINK = $$PWD/generated/test_gerber
