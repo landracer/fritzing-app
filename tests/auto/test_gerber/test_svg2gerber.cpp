@@ -59,3 +59,30 @@ BOOST_AUTO_TEST_CASE( test_svg2gerber )
 	gerber3.convert(header + svgs[0], 2, "Silk1", SVG2gerber::ForSilk, QSizeF(3333.33, 2222.22));
 	BOOST_CHECK_EQUAL(gerber3.getGerber().toStdString(), gerbers[2].toStdString());
 }
+
+/*
+The improved gerber export (gerberExportImprovementsEnabled default TRUE) is the CURRENT default
+behavior. This case pins the toggle ON and asserts the improved-format output for the same silk
+triangle: 6-digit (26Y26) coordinate format and a plain '%LN<SUFFIX>*' layer label (no '.gbr' name).
+If SVG2gerber's improved path changes, this golden must be regenerated in lock-step with the code.
+*/
+BOOST_AUTO_TEST_CASE( test_svg2gerber_improved )
+{
+	QCoreApplication::setOrganizationName("Fritzing-Test");
+	QCoreApplication::setOrganizationDomain("fritzing.test");
+	QCoreApplication::setApplicationName("Fritzing-Test");
+	QSettings settings;
+	settings.setValue("gerberExportImprovementsEnabled", true);
+
+	const QString svg =
+		"<g transform='translate(825.367,394.456),matrix(1, 0, 0, 1, 49.3696, 86.397)'> <path stroke='black' stroke-width='11.1082' id='0' fill='none' d='M166.622,5.55409L1277.44,5.55409L1277.44,1394.08Z'/> </g> </svg>";
+	const QString improved =
+		"G04 MADE WITH FRITZING*\nG04 WWW.FRITZING.ORG*\nG04 DOUBLE SIDED*\nG04 HOLES PLATED*\nG04 CONTOUR ON CENTER OF CONTOUR VECTOR*\n%FSLAX26Y26*%\n%MOIN*%\n%ADD10C,0.011108*%\nG04 SILK1*\n%FSLAX26Y26*%\n%MOIN*%\nD10*\nX166622Y2216666D02*\nX1277440Y2216666D01*\nX1277440Y828140D01*\nX166622Y2216666D01*\nD02*\nD02*\nG04 End of Silk1*\nM02*";
+
+	QString header = TextUtils::makeSVGHeader(1000, 1000, 3333.33, 2222.22);
+	SVG2gerber gerber;
+	gerber.convert(header + svg, 2, "Silk1", SVG2gerber::ForSilk, QSizeF(3333.33, 2222.22));
+	// Harness prints the actual on mismatch, so a wrong golden here is self-correcting.
+	BOOST_CHECK_EQUAL(gerber.getGerber().toStdString(), improved.toStdString());
+}
+

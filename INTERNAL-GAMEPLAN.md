@@ -460,3 +460,11 @@ RESULT: test_panelizer 6/6, test_gerberpreview 8/8, and test_svg/test_textutils/
 Note: I did NOT auto-fix these blindly - each was root-caused via git history first; two were stale
   tests (fixed the test), one was a real loader gap (fixed the code). That distinction is why git-history
   triage mattered before editing.
+
+### 8.13 IMPROVED-FORMAT GERBER COVERAGE (2026-10-24)
+Added test_svg2gerber_improved: pins gerberExportImprovementsEnabled=ON and asserts the DEFAULT
+(improved) export for the same silk triangle. Real improved output (captured from the code, NOT
+hand-guessed) differs from legacy in: no %ASAXBY%/%OFA0B0%/%SFA%, %FSLAX26Y26%+%MOIN% emitted twice,
+'G04 SILK1*' comment line, 'D10*' (not 'G54D10*') aperture select, 6-digit coords. Both branches
+(legacy-on-off + improved-on) are now under golden coverage. QSettings is read fresh per case (scoped
+org/app "Fritzing-Test"), so the two cases don't bleed into each other - verified.
