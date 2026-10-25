@@ -419,3 +419,15 @@ dangling-var bug: line 31 now 'INCLUDEPATH += QUAZIP_PATH/include' (was referenc
 QUAZIP_INCLUDE_PATH, so folderutils.cpp could not find <quazip/quazip.h>). Deprecation warnings
 (QDomDocument::setContent etc.) remain but are non-fatal. tools/build-with-qt.sh (temp-cap workaround)
 is now obsolete since the cap is permanently gone.
+
+### 8.11 TEST MATRIX (2026-10-24) — 7/8 build; my two wired suites PASS; test_gerber has a latent moc bug
+Ran the full tests/auto matrix on Qt 6.11.2:
+  PASS test_panelizer (6/6), test_gerberpreview (8/8)  <- the two I wired into SUBDIRS
+  BUILT test_svg, test_textutils, test_svg2gerber, test_ngspice_simulator, test_project_properties
+  FAIL test_gerber: link error 'multiple definition of SVGPathRunner::qt_metacall' (moc compiled twice).
+ROOT CAUSE (test_gerber, pre-existing, NOT from my changes): test_gerber.pro lists svgpathrunner.cpp
+  (and other svg cpp) via SOURCES lines 46-54 WHILE line 30 already does 'SOURCES += $$files(*.cpp)'
+  style glob for the test's OWN dir; svgpathrunner.h is also in HEADERS (line 40), so moc_svgpathrunner
+  is generated AND the .cpp compiled twice -> duplicate qt_metacall. This bug predates the modernization.
+DECISION NEEDED (deferred to owner): fixing test_gerber.pro requires knowing which svg sources the test
+  actually intends to compile. Not a blocker for the fork goal but blocks a fully-green test matrix.
