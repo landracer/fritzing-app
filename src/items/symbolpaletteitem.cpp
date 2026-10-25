@@ -102,11 +102,9 @@ SymbolPaletteItem::SymbolPaletteItem( ModelPart * modelPart, ViewLayer::ViewID v
 			m_voltage = temp;
 		}
 		else {
-			if (ok) {
-				m_voltage = SymbolPaletteItem::DefaultVoltage;
-			}
-			modelPart->setLocalProp("voltage", m_voltage);
+			m_voltage = SymbolPaletteItem::DefaultVoltage;
 		}
+		modelPart->setLocalProp("voltage", m_voltage);
 		if (!Voltages.contains(m_voltage)) {
 			Voltages.append(m_voltage);
 		}
