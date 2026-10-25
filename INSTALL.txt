@@ -1,39 +1,59 @@
-# Installing Fritzing
+# Building / installing Fritzing (this fork)
 
-Please make sure your system satisfies one of these requirements:
-Windows 10, 64 Bit
-Windows 7 was reported to work, too
-Mac - OSX 10.14 and up, though 10.13 might work too. MacOS 10.15 is currently untested.
-Linux - a fairly recent linux distro with libc >= 2.6
+This fork is built on **Qt 6** (tested against Qt 6.11.x). The build no longer pins an old Qt point
+release, so any current Qt 6 works. You build it from source; there is no prebuilt package here.
 
-Start downloading the Fritzing package that's right for you.
-Unzip your Fritzing folder somewhere convenient on your hard drive.
-This may also be a good time for you to create a shortcut to the Fritzing application.
-A free unzipping program can be found here, should you need it.
+## Prerequisites
 
-## Notes on Windows
+A recent Linux (glibc ≥ 2.6), or a recent macOS / Windows 10+ install, plus the Qt 6 dev packages
+and the native deps the app links against:
 
-On Windows, unzipping Fritzing might be much slower than the download itself. We recommend
-using 7zip.
+* Qt 6: `qtbase` (Core/Gui/Widgets/Xml/Sql + sqlite driver), `qtsvg` (Svg/SvgWidgets),
+  `qtserialport`, `qt5compat` (Core5Compat), `qttools` (lrelease/lconvert at build time)
+* QuaZip built for Qt 6
+* Boost (headers)
+* libgit2
+* OpenSSL 3
+* ngspice (shared library, used for circuit simulation)
+* svgpp (header-only SVG parser)
 
-To start Fritzing on Windows: Wait until unzipping is finished. Then open the destination folder and double-click fritzing.exe
+On a Fedora/RHEL-style box:
 
-## Notes on Linux
-To start Fritzing double-click Fritzing, or try ./Fritzing in your shell window
+```sh
+sudo dnf install qt6-qtbase-devel qt6-qtsvg-devel qt6-qtserialport-devel \\
+                 qt6-qt5compat-devel qt6-qttools-devel quazip-qt6-devel \\
+                 boost-devel libgit2-devel openssl-devel ngspice-devel
+```
 
-Fritzing uses the Qt5 libraries. On Ubuntu, they can be installed like this:
+On Debian/Ubuntu-style boxes, install the Qt 6 equivalents (qt6-base-dev, qt6-svg-dev,
+qt6-serialport-dev, qt6-5compat-dev, libquazip-qt6-dev, libboost-dev, libgit2-dev, libngspice0,
+…).
 
-"sudo apt install libqt5printsupport5 libqt5xml5 libqt5sql5 libqt5serialport5 libqt5sql5-sqlite".
+The part library is a **separate repository** checked out into `parts/`:
+[https://github.com/fritzing/fritzing-parts](https://github.com/fritzing/fritzing-parts).
+
+## Build
+
+Out-of-tree is recommended:
+
+```sh
+mkdir build && cd build
+qmake6 ../phoenix.pro
+make -j"$(nproc)"
+```
+
+This produces a `Fritzing` binary in the build directory. Run it from there:
+
+```sh
+./Fritzing
+```
+
+On Linux, if the app cannot find `libngspice.so` at runtime, make sure the ngspice shared library is
+installed (it is searched for in the usual system library directories such as `/usr/lib64` and
+`/usr/lib`, in addition to Qt application library paths).
 
 ## Notes on macOS
-To start Fritzing on macOS double-click the Fritzing application
 
-Recent versions of macOS do not allow "unverified" software to be launched directly. In order to run Fritzing, you will need to either:
-
-1a. right-click the Fritzing icon and select "Open"
-2a. in the warning dialog, click "Open"
-or, to get rid of the warning permanently:
-1b. go to the System Preferences
-2b. open the Security & Privacy page
-3b. unlock it by clicking the lock in the lower left corner
-4b. set it to allow app downloads from anywhere
+Recent macOS versions block "unverified" software by default. After launching, open
+System Settings → Privacy & Security and click "Open" on the Fritzing prompt, or set the system to
+allow downloads from identified developers.

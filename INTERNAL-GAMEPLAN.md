@@ -468,3 +468,9 @@ hand-guessed) differs from legacy in: no %ASAXBY%/%OFA0B0%/%SFA%, %FSLAX26Y26%+%
 'G04 SILK1*' comment line, 'D10*' (not 'G54D10*') aperture select, 6-digit coords. Both branches
 (legacy-on-off + improved-on) are now under golden coverage. QSettings is read fresh per case (scoped
 org/app "Fritzing-Test"), so the two cases don't bleed into each other - verified.
+
+### 8.14 test_qsysinfo is intentionally ORPHANED (do not wire into auto.pro)
+tests/auto/test_qsysinfo/ exists but is NOT in auto.pro SUBDIRS, and that is correct: its golden hardcodes
+a specific machine ("ubuntu", kernel 5.11.0-38-generic, 20.04). It can only ever pass on that exact host,
+so it is a scratch/demo test, not a portable suite. Leaving it unwired is the right call. (If ever revived,
+it must be rewritten to assert behavior, not a machine-specific golden.)
