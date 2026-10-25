@@ -28,7 +28,7 @@ exists($$QUAZIP_PATH) {
 		error("quazip could not be found at $$QUAZIP_PATH")
 	}
 
-INCLUDEPATH += $$QUAZIP_INCLUDE_PATH
+INCLUDEPATH += $$QUAZIP_PATH/include
 LIBS += -L$$QUAZIP_LIB_PATH -lquazip1-qt$$QT_MAJOR_VERSION
 
 unix {
