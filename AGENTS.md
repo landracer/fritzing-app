@@ -40,6 +40,9 @@ Top-level:
   - `docs/panelizer.md` — user-facing panelizer guide.
   - `docs/design/panelizer-v2.md`, `docs/design/gerbview-port-reference.md` — design references.
   - `docs/internal/panelizer-progress.md` — newest-first working log for the panelizer/gerber effort.
+  - `docs/internal/issue-triage-log.md` — newest-first log of upstream issues we investigated and **shot
+    down** (closed as FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION), with root cause
+    + evidence. Read this before assuming a reported issue is a real bug.
 
 ## 3. Build & run (out-of-tree, always)
 
@@ -123,7 +126,8 @@ LIMITATIONS to be aware of, NOT open defects. Knowing them cold saves a future s
 
 
 1. `git fetch landracer && git checkout develop && git pull` (canonical line).
-2. Skim `docs/panelizer.md` and `docs/internal/*` for current feature state.
+2. Skim `docs/panelizer.md`, `docs/internal/panelizer-progress.md`, and `docs/internal/issue-triage-log.md`
+   for current feature state and which reported issues we already shot down (so you don't re-debug a closed one).
 3. Pick your slice → `git switch -c feature/<thing>`.
 4. Implement, add/extend tests under `tests/auto/`, keep the suite green (§5), commit small (§4).
 5. PR into `develop`.
