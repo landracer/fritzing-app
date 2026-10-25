@@ -503,3 +503,12 @@ the superseded merge-based feature/qt6-modern (d33d3145) - both rewrite shared b
    - #4251 "Add contribution guidelines" ~ our AGENTS.md direction.
    Strategy: for each upstream bug, cherry-pick or re-implement on a feature/* branch from develop, keep
    the suite green, open a PR into develop. Owner to prioritize which to squash first.
+
+### 8.17 PR #1 OPENED + DEFAULT BRANCH FLIPPED (2026-10-24) - both prior blockers CLEARED
+Owner supplied a new fine-grained PAT with admin + pull_requests scopes. Now able to do what the old
+token could not:
+- Default branch flipped master -> DEVELOP (fork canonical line is now the default).
+- PR #1 opened: feature/qt6-modern-fixed => master (https://github.com/landracer/fritzing-app/pull/1),
+  MERGEABLE, 100 commits. (develop already == the feature tip 26cd1112; the PR is the traceable record of
+  that landing into master. Merge it when ready to make master carry the modernized line too.)
+All prior 'blocked by token scope' items are now DONE. Nothing left waiting on auth.
