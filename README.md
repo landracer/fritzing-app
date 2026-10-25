@@ -23,6 +23,29 @@ creative tinkering.
   formats, the ngspice simulator bridge, project properties, and the panelizer/gerber-preview
   widgets).
 
+## For contributors & AI agents
+
+If you are picking this project up — human or AI agent — **start at [`AGENTS.md`](AGENTS.md)**. It
+is the onboarding contract: what the repo is, how it is built and tested, the conventions to follow,
+and how to open a clean slice. The rest of the living documentation lives under [`docs/`](docs/):
+
+| Doc | What it covers |
+|-----|----------------|
+| [`AGENTS.md`](AGENTS.md) | Agent/human onboarding, conventions, build/test commands, how to start a session. |
+| [`docs/panelizer.md`](docs/panelizer.md) | User-facing panelizer guide. |
+| [`docs/design/panelizer-v2.md`](docs/design/panelizer-v2.md) | Panelizer design reference. |
+| [`docs/design/gerbview-port-reference.md`](docs/design/gerbview-port-reference.md) | Gerber-preview port reference. |
+| [`docs/internal/panelizer-progress.md`](docs/internal/panelizer-progress.md) | Newest-first working log of the feature effort. |
+
+Quick start:
+
+```sh
+git checkout develop                                   # canonical line
+mkdir build && cd build && qmake6 ../phoenix.pro && make -j"$(nproc)" && ./Fritzing
+```
+
+(See `AGENTS.md` §3 for the full out-of-tree build, and §5 for running the test suite.)
+
 ## Building from source
 
 You need a **Qt 6** installation (Core, Gui, Widgets, Xml, Svg, SvgWidgets, PrintSupport,

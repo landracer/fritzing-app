@@ -483,3 +483,23 @@ linear branch at tip 412f15c6 (== local HEAD). origin (upstream) fetch stays HTT
 stays disabled so upstream can never be pushed to from here.
 Remaining (owner call): promotion of feature/qt6-modern-fixed to the canonical/develop name, and deleting
 the superseded merge-based feature/qt6-modern (d33d3145) - both rewrite shared branches, left for owner.
+
+### 8.16 ITEMS 1/2/3 DONE (2026-10-24)
+1. DOC ARCHITECTURE: created root AGENTS.md (agent onboarding contract: what the repo is, layout,
+   build/run, conventions incl. "root-cause before editing" + qmake path-keying hazard, how to start a
+   session). Created docs/README.md index. Wired both into README (new "For contributors & AI agents"
+   section + doc table).
+2. PROMOTION: feature/qt6-modern-fixed (f1f0a6fa) fast-forwarded into develop and PUSHED to fork.
+   develop on fork now == canonical tip. Deleted local merge-based feature/qt6-modern (was never on remote).
+   NOTE: could NOT open the PR nor flip default-branch (master->develop) - the fine-grained PAT lacks
+   the pull_requests/admin scopes (both GraphQL and REST return "Resource not accessible by personal
+   access token"). Branch promotion itself is DONE via SSH git; only the two web-console actions are
+   blocked by token scope. Owner can flip default branch in Settings, or re-scope the token.
+3. UPSTREAM TRIAGE (open issues/PRs on fritzing/fritzing-app, 463 open issues). Direct overlaps with
+   work we ALREADY shipped, i.e. squashable-from-our-fork:
+   - #4268 INSTALL.txt still references Qt5 (we rewrote it for Qt 6) - PR #4302/#4250 also target this.
+   - PR #4311 QStringBuilder ternary type mismatch ~ our forward-compat casts.
+   - PR #4342 stray text in quazipdetect.pri + #4331 quazip path typo ~ our quazipdetect INCLUDEPATH fix.
+   - #4251 "Add contribution guidelines" ~ our AGENTS.md direction.
+   Strategy: for each upstream bug, cherry-pick or re-implement on a feature/* branch from develop, keep
+   the suite green, open a PR into develop. Owner to prioritize which to squash first.
