@@ -9,8 +9,11 @@ point and onboarding contract.
 - **`../AGENTS.md`** — onboarding + working conventions (read first).
 - **`panelizer.md`** — user-facing guide to the panelizer feature.
 - **`design/`** — design-time references and specs (panelizer-v2, gerbview port reference).
-- **`internal/`** — newest-first internal progress logs (append a dated entry at the end of each
-  working session; keep newest at the top).
+- **`internal/`** — newest-first internal logs (append a dated entry at the end of each working session;
+  keep newest at the top). Two logs:
+  - **`internal/panelizer-progress.md`** — feature-development work log (panelizer / Gerber preview).
+  - **`internal/issue-triage-log.md`** — shot-down / closed issues: what we suspected, what we found, and
+    the disposition (FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION).
 
 ## Conventions for docs here
 

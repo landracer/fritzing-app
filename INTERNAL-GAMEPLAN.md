@@ -512,3 +512,12 @@ token could not:
   MERGEABLE, 100 commits. (develop already == the feature tip 26cd1112; the PR is the traceable record of
   that landing into master. Merge it when ready to make master carry the modernized line too.)
 All prior 'blocked by token scope' items are now DONE. Nothing left waiting on auth.
+
+### 8.18 #4338 — TRIAGED, see docs/internal/issue-triage-log.md (moved out of scratch)
+#4338 ("ground fill bridges foreign nets; DRC ignores pour") was investigated and **closed as
+NOT REPRODUCIBLE / likely user error**. Root cause + full live-repro writeup now lives in
+`docs/internal/issue-triage-log.md` (2026-10-24 entry). Summary: the "fill excluded from DRC" condition
+(`GroundPlane` carries no net; `drc.cpp` strips `GroundPlane0/1` from clearance) is real but **by design**,
+not a demonstrated bug — the owner could not make any fill bridge a foreign net on two different boards.
+No code change. Branch `fix/ground-fill-drc-4338` carries only the docs capture. Reopen only if a board
+ships that actually stores `fillType="ground"` *and* visibly bridges two nets in the GUI.
