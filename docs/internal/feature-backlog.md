@@ -9,7 +9,7 @@
 | PR | title (short) | kind | upstream state | vs develop | my read |
 |----|---------------|------|----------------|-----------|---------|
 | **#4329** | breadboard **CSV import** w/ column mapping | feature | draft, MERGEABLE | clean | clean + self-contained; top candidate if you want CSV ingest |
-| **#4323** | breadboard **autorouter** | feature | draft, CONFLICTING | needs rebase | *well-built*, but you said not on-board — default **leave** |
+| **#4323** | breadboard **autorouter** | feature | draft, CONFLICTING | needs rebase | **ACCEPTED & ported** — quality was high enough that we re-derived it onto the Qt-6 line (see §10) |
 | **#4076** | **AC/transient sim** (oscilloscope) | feature | draft, CONFLICTING | rebase + parts PR | large, coupled to a *parts* PR; overlaps our sim fork |
 | **#4014** | **CMake** build migration | infra | draft, CONFLICTING | heavy | our qmake line is green — **leave** |
 | **#4294** | embed **Blockly** visual programming | feature | CONFLICTING | 17.5k/253k diff | enormous; **leave** |
@@ -29,13 +29,25 @@
 
 ## Per-PR detail
 
-### #4323 — Breadboard auto placement + routing (justin-romano, draft, CONFLICTING)
+### #4323 — Breadboard auto placement + routing (justin-romano) — **ACCEPTED & PORTED**
 - **Scope:** 29 files, +6458/-21. New subsystem under `src/autoroute/breadboard*.cpp` (topology, placement
-  kernel, route graph, routing score) + mainwindow/menu seams + 2 new test suites.
-- **Quality:** *actually clean* — isolated new files, only touches mainwindow at seams, ships its own tests.
-  NOT a mess. The decline reason is **product direction** (you don't want a breadboard autorouter), not hygiene.
-- **If ported:** needs rebase onto our Qt-6 develop (CONFLICTING, predates our restructure); ongoing maint. surface.
-- **Recommendation:** LEAVE (your call; recorded so it isn't re-litigated).
+  kernel, route graph, routing score) + mainwindow/menu seams + 2 new test suites
+  (`test_breadboard_route_graph`, `test_breadboard_routing_score`).
+- **Was the code good?** **Yes — genuinely clean.** Isolated new files that add a subsystem without rewriting
+  existing ones; it touches `mainwindow` only at seams that already exist on develop (`createAutorouteButton`,
+  the routing status signal/slot, `setIgnoreSelectionChangeEvents`); it ships its own Boost test suites; it
+  reads tuning via `QSettings` with an in-toolbar slider widget. This is the model of how a feature PR to this
+  repo should look — additive at the boundary, self-tested, no cross-subsystem churn. It is *why* this one got
+  landed when the others were not: the hygiene made a faithful port cheap.
+- **How it was ported (so it's not re-litigated):** applied with a 3-way merge; every new file + the
+  `pri/autoroute.pri`/mainwindow/auto.pro seams applied cleanly against develop's Qt-6 line. It carried **one
+  real latent bug**: both `BreadboardRouteGraph` and `BreadboardRouteGraphCore` declared their ctor with a
+  default argument `= Options()` referencing a struct whose *default member initializers* are not complete until
+  the class closes — ill-formed C++ (compiles on some compilers, not ours). Fixed by dropping the default arg
+  and providing an out-of-line delegating ctor overload that constructs `Options()` after the type is complete.
+- **Recommendation:** LANDED on `develop` via `feature/breadboard-autorouter`. Kept for its quality and because
+  an isolated, tested breadboard router may genuinely help someone; recorded here so the "is this worth
+  re-doing?" question has an answer.
 
 ### #4329 — Breadboard wiring CSV import + column mapping (cdrogers, draft, MERGEABLE)
 - **Scope:** 28 files, +9846/-2. CSV ingest: preview, delimiter/encoding detection (UTF-8/BOM/UTF-16),
@@ -43,10 +55,24 @@
 - **Quality:** self-contained, mergeable as-is (no conflicts), ships previews. Big but coherent.
 - **Recommendation:** best feature candidate **if** you want CSV-driven breadboard wiring. Decide by want.
 
-### #4076 — AC / transient simulation + oscilloscope (failiz, draft, CONFLICTING)
-- 26 files, +954/-143. Transient analysis vs operating-point; drives new scope/wave-generator parts; animates
-  LED state over sim time. **Coupled** to a fritzing-parts PR (scope/generator parts don't exist without it).
-  Long open TODO list; pre-Qt6 base. Overlaps our `1.0.4_trans_sim_dev` sim line — reconcile first. LEAVE.
+### #4076 — AC / transient simulation + oscilloscope (failiz, draft, CONFLICTING) — DITCHED
+- **Scope:** 26 files, +954/-143. Transient/AC analysis path (not just DC operating point), drives new
+  oscilloscope / waveform-generator parts, animates LED state across sim time.
+- **Was the code good or garbage?** *Reasonable intent, but hard to take as-is.* The sim engine changes are
+  coherent, but the feature is **coupled to a companion `fritzing-parts` PR** (the scope/generator part
+  symbols do not exist in the app alone), it carries a long unresolved TODO list, and it is built on the
+  pre-Qt6 `main` base. The coupling is the dealbreaker: the app half is dead weight without the parts half.
+- **Why we ditched it (not a merge conflict — a product decision):** our line already carries its own
+  simulation fork (`1.0.4_trans_sim_dev`). Landing a *second*, divergent sim engine would give us two
+  incompatible simulation models to reconcile forever. That is strictly worse than not having AC sim.
+- **What the original author should consider** to make this landable: (1) rebase onto the Qt-6 `develop`;
+  (2) land the `fritzing-parts` scope/generator parts **first** as their own merged change so the app change
+  has something to bind to; (3) reconcile against (or supersede) the existing `trans_sim` engine rather than
+  shipping a parallel one; (4) close or drop the open TODOs. Re-open as a fresh PR against `develop` only once
+  (1)–(3) are settled.
+- **Reflection — *Why?*:** *Why a second sim engine when we have one?* If the real goal is "AC and transient
+  analysis," the cheapest win is teaching our existing simulator those analyses — not bolting on a rival.
+  Answer that and the diff shrinks to the analysis math plus a scope widget, which is landable.
 
 ### #4014 — CMake build (feliwir, draft, CONFLICTING)
 - qmake->CMake (git versioning, parts-db target). CI + CPack + qmake removal still TODO. Our qmake line is our
@@ -67,12 +93,32 @@
 ### #3928 — swap timer interval 30->300 (failiz, CONFLICTING)
 - Author says "not sure this is the right way of fixing this." Stale. LEAVE.
 
-### #3587 — part-bin / SVG load speedup (DrItanium, CONFLICTING, 2020)
-- Real perf win (avoid rebuilding QDomDocument per part) but 6 yrs old; re-derive vs current TextUtils/
-  PaletteModel before use. LEAVE unless perf is a goal.
+### #3587 — part-bin / SVG load speedup (DrItanium, CONFLICTING, 2020) — DITCHED
+- **Scope:** avoids rebuilding a `QDomDocument` per part when loading the part bin / sketches.
+- **Was the code good or garbage?** *Good idea, stale body.* The optimization (parse once / cache rather than
+  re-parse per module) is a real win, but the patch is ~6 years old and keys off code we have since rewritten.
+  It is not garbage — it is just no longer applicable line-for-line.
+- **Why we ditched it:** it was auto-graded `stale`; porting it line-by-line would drag 2020-era context and the
+  old `PaletteModel`/`FApplication` shape into our restructured tree. A clean re-derivation against today's
+  `TextUtils`/`ModuleInfoParser`/`Palette*Model` is cheaper and safer than resolving six-year-old conflicts.
+- **What the author should consider:** re-measure first. Is `loadModuleRefs` still O(n) QDomDocument parses on
+  current `develop`? If a profile still shows it hot, open a *new* small PR that caches the parsed module set
+  (or moves to the shared `QDomDocument` load path) against current code, with a micro-benchmark showing the win.
+- **Reflection — *Why?*:** *Why carry this at all if it was never profiled on the modern tree?* A perf PR with no
+  before/after measurement on current code is a hypothesis, not a fix. Bring a number and it becomes landable.
 
-### #3401 — Tent vias (Intrinsically-Sublime, CONFLICTING, 2018)
-- Tiny (+23/-2) but from 2018; verify mask/silkscreen path still matches. LEAVE.
+### #3401 — Tent vias (Intrinsically-Sublime, CONFLICTING, 2018) — DITCHED
+- **Scope:** tiny (+23/-2) — adds a "tenting" mask option for vias (cover a via with solder mask).
+- **Was the code good or garbage?** *Small and harmless, but unverified and ancient.* Nothing wrong with the
+  size; the problem is it is an 8-year-old change wired into a mask/silkscreen layer path that predates our
+  current `ViewLayer`/mask handling, with no test and no confirmation the feature is even still wanted.
+- **Why we ditched it:** `stale`. Re-deriving against current `ViewLayer`/mask code is trivial given the size;
+  porting the old hunks is not obviously still correct.
+- **What the author should consider:** confirm tenting is still a desired capability, then re-implement on current
+  `ViewLayer` mask handling in a fresh, small PR (ideally with a gerber-export golden test proving the tented via
+  renders in the mask layer).
+- **Reflection — *Why?*:** *Why ship a mask feature with no way to verify it?* A one-line golden test on the
+  exported mask gerber answers both "does it work" and "is it still wanted" — that's the missing piece here.
 
 ### #3673 — Doxygen config + script (mMerlin, MERGEABLE)
 - 2563-line Doxyfile + script generating ~940 MB HTML, linux-only. Harmless but bulky. LEAVE unless wanted.

@@ -25,9 +25,15 @@ sudo dnf install qt6-qtbase-devel qt6-qtsvg-devel qt6-qtserialport-devel \\
                  boost-devel libgit2-devel openssl-devel ngspice-devel
 ```
 
-On Debian/Ubuntu-style boxes, install the Qt 6 equivalents (qt6-base-dev, qt6-svg-dev,
-qt6-serialport-dev, qt6-5compat-dev, libquazip-qt6-dev, libboost-dev, libgit2-dev, libngspice0,
-…).
+On Debian/Ubuntu-style boxes (tested guidance for Ubuntu 24.04 / Debian 12):
+
+```sh
+sudo apt update
+sudo apt install -y \
+    build-essential qmake6 git \
+    qt6-base-dev qt6-svg-dev qt6-serialport-dev qt6-5compat-dev qt6-tools-dev \
+    libquazip-qt6-dev libboost-dev libgit2-dev libssl-dev libngspice0-dev
+```
 
 The part library is a **separate repository** checked out into `parts/`:
 [https://github.com/fritzing/fritzing-parts](https://github.com/fritzing/fritzing-parts).
@@ -51,6 +57,12 @@ This produces a `Fritzing` binary in the build directory. Run it from there:
 On Linux, if the app cannot find `libngspice.so` at runtime, make sure the ngspice shared library is
 installed (it is searched for in the usual system library directories such as `/usr/lib64` and
 `/usr/lib`, in addition to Qt application library paths).
+
+## Notes on Windows
+
+Windows builds use the same qmake project (MSVC or MinGW, plus vcpkg for the native deps). The build
+keying is platform-aware (the `pri/*.pri` scripts already branch on `win32`). Mirror each dep above through
+`vcpkg install` and let the `pri/*detect.pri` scripts locate them.
 
 ## Notes on macOS
 
