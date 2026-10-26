@@ -65,6 +65,7 @@ public:
 	static QString removeXMLEntities(QString svgContent);
 	static bool cleanSodipodi(QString &bytes);
 	static bool fixPixelDimensionsIn(QString &fileContent);
+	static bool fixPixelDimensionsIn(QDomDocument &svgDom, bool isIllustrator);
 	static bool addCopper1(const QString & filename, QDomDocument & doc, const QString & srcAtt, const QString & destAtt);
 	static void setSVGTransform(QDomElement &, QTransform &);
 	static QString svgMatrix(const QTransform &);
@@ -114,6 +115,9 @@ public:
 	static void gornTree(QDomDocument &);
 	static bool elevateTransform(QDomElement &);
 	static bool fixMuch(QString &svg, bool fixStrokeWidth);
+	static bool fixMuch(const QString &svg, QDomDocument &svgDom, bool fixStrokeWidth);
+	static bool fixMuchAndPixelDimensionsIn(QString &svg, bool fixStrokeWidth);
+	static bool fixMuchAndPixelDimensionsIn(const QString &svg, QDomDocument &svgDom, bool fixStrokeWidth);
 	static bool fixInternalUnits(QString & svg);
 	static bool fixFonts(QString & svg, const QString & destFont, bool & reallyFixed);
 	static void fixStyleAttribute(QDomElement & element);
