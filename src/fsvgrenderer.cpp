@@ -118,39 +118,41 @@ QByteArray FSvgRenderer::loadAux(const QByteArray & theContents, const LoadInfo 
 {
 	QByteArray cleanContents(theContents);
 
-	if (loadInfo.connectorIDs.count() > 0 || !loadInfo.setColor.isEmpty() || loadInfo.findNonConnectors) {
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
-		QDomDocument doc;
-		if (!doc.setContent(cleanContents, &errorStr, &errorLine, &errorColumn)) {
-			DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4").arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn));
-		}
+	// parse the SVG into a DOM once and clean it in place. this must happen for every
+	// svg (regardless of whether it has connectors or a color override), otherwise parts
+	// without connectors (and boards/logos) skip unit/viewBox normalization and fail to
+	// render (e.g. the breadboard area renders blank).
+	QString errorStr;
+	int errorLine;
+	int errorColumn;
+	QDomDocument doc;
+	if (!doc.setContent(cleanContents, &errorStr, &errorLine, &errorColumn)) {
+		DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4").arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn));
+	}
 
-		QString string(cleanContents);
-		bool resetContents = TextUtils::fixMuchAndPixelDimensionsIn(string, doc, false);
+	QString string(cleanContents);
+	bool resetContents = TextUtils::fixMuchAndPixelDimensionsIn(string, doc, false);
 
-		QDomElement root = doc.documentElement();
-		if (!loadInfo.setColor.isEmpty()) {
-			QDomElement element = TextUtils::findElementWithAttribute(root, "id", loadInfo.colorElementID);
-			if (!element.isNull()) {
-				QStringList exceptions;
-				exceptions << "black" << "#000000";
-				SvgFileSplitter::fixColorRecurse(element, loadInfo.setColor, exceptions);
-				resetContents = true;
-			}
+	QDomElement root = doc.documentElement();
+	if (!loadInfo.setColor.isEmpty()) {
+		QDomElement element = TextUtils::findElementWithAttribute(root, "id", loadInfo.colorElementID);
+		if (!element.isNull()) {
+			QStringList exceptions;
+			exceptions << "black" << "#000000";
+			SvgFileSplitter::fixColorRecurse(element, loadInfo.setColor, exceptions);
+			resetContents = true;
 		}
-		if (loadInfo.connectorIDs.count() > 0) {
-			bool init =  initConnectorInfo(doc, loadInfo);
-			resetContents = resetContents || init;
-		}
-		if (loadInfo.findNonConnectors) {
-			initNonConnectorInfo(doc, loadInfo.filename);
-		}
+	}
+	if (loadInfo.connectorIDs.count() > 0) {
+		bool init =  initConnectorInfo(doc, loadInfo);
+		resetContents = resetContents || init;
+	}
+	if (loadInfo.findNonConnectors) {
+		initNonConnectorInfo(doc, loadInfo.filename);
+	}
 
-		if (resetContents) {
-			cleanContents = TextUtils::removeXMLEntities(doc.toString()).toUtf8();
-		}
+	if (resetContents) {
+		cleanContents = TextUtils::removeXMLEntities(doc.toString()).toUtf8();
 	}
 
 	return finalLoad(cleanContents, loadInfo.filename);
