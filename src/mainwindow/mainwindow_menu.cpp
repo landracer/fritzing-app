@@ -1636,6 +1636,7 @@ void MainWindow::createTraceMenus()
 #endif
 
 	m_breadboardTraceMenu = menuBar()->addMenu(tr("&Routing"));
+	m_breadboardTraceMenu->addAction(m_newAutorouteAct);
 	m_breadboardTraceMenu->addAction(m_showUnroutedAct);
 	m_breadboardTraceMenu->addAction(m_selectAllWiresAct);
 

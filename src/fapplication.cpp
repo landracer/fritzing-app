@@ -1587,11 +1587,9 @@ void FApplication::initSplash(FSplashScreen & splash) {
 	splash.showMessage(msg1, "fritzingText", Qt::AlignLeft | Qt::AlignTop);
 
 	QString msg2 = QString("<font face='Lucida Grande, Tahoma, Sans Serif' size='2' color='#eaf4ed'>"
-	                           "Version %1.%2.%3 (%4 %5) %6"
+	                           "Version %1 (%2 %3) %4"
 	                           "</font>")
-	               .arg(Version::majorVersion())
-	               .arg(Version::minorVersion())
-	               .arg(Version::minorSubVersion())
+	               .arg(Version::versionString())
 	               .arg(Version::gitVersion())
 	               .arg(Version::date())
 	               .arg(m_buildType);
