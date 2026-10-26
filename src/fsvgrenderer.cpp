@@ -117,65 +117,41 @@ QByteArray FSvgRenderer::loadSvg(const QByteArray & contents, const LoadInfo & l
 QByteArray FSvgRenderer::loadAux(const QByteArray & theContents, const LoadInfo & loadInfo)
 {
 	QByteArray cleanContents(theContents);
-	bool cleaned = false;
 
-	QString string(cleanContents);
-	if (TextUtils::fixMuch(string, false)) {
-		cleaned = true;
-	}
-	if (TextUtils::fixPixelDimensionsIn(string)) {
-		cleaned = true;
-	}
-	if (cleaned) {
-		cleanContents = string.toUtf8();
-	}
+	if (loadInfo.connectorIDs.count() > 0 || !loadInfo.setColor.isEmpty() || loadInfo.findNonConnectors) {
+		QString errorStr;
+		int errorLine;
+		int errorColumn;
+		QDomDocument doc;
+		if (!doc.setContent(cleanContents, &errorStr, &errorLine, &errorColumn)) {
+			DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4").arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn));
+		}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	QDomDocument doc;
-	if (!doc.setContent(cleanContents, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4").arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn));
-	}
+		QString string(cleanContents);
+		bool resetContents = TextUtils::fixMuchAndPixelDimensionsIn(string, doc, false);
 
-	bool resetContents = false;
+		QDomElement root = doc.documentElement();
+		if (!loadInfo.setColor.isEmpty()) {
+			QDomElement element = TextUtils::findElementWithAttribute(root, "id", loadInfo.colorElementID);
+			if (!element.isNull()) {
+				QStringList exceptions;
+				exceptions << "black" << "#000000";
+				SvgFileSplitter::fixColorRecurse(element, loadInfo.setColor, exceptions);
+				resetContents = true;
+			}
+		}
+		if (loadInfo.connectorIDs.count() > 0) {
+			bool init =  initConnectorInfo(doc, loadInfo);
+			resetContents = resetContents || init;
+		}
+		if (loadInfo.findNonConnectors) {
+			initNonConnectorInfo(doc, loadInfo.filename);
+		}
 
-	QDomElement root = doc.documentElement();
-	if (!loadInfo.setColor.isEmpty()) {
-		QDomElement element = TextUtils::findElementWithAttribute(root, "id", loadInfo.colorElementID);
-		if (!element.isNull()) {
-			QStringList exceptions;
-			exceptions << "black" << "#000000";
-			SvgFileSplitter::fixColorRecurse(element, loadInfo.setColor, exceptions);
-			resetContents = true;
+		if (resetContents) {
+			cleanContents = TextUtils::removeXMLEntities(doc.toString()).toUtf8();
 		}
 	}
-	if (loadInfo.connectorIDs.count() > 0) {
-		bool init =  initConnectorInfo(doc, loadInfo);
-		resetContents = resetContents || init;
-	}
-	if (loadInfo.findNonConnectors) {
-		initNonConnectorInfo(doc, loadInfo.filename);
-	}
-
-	if (resetContents) {
-		cleanContents = TextUtils::removeXMLEntities(doc.toString()).toUtf8();
-	}
-
-
-	/*
-	cleanContents = doc.toByteArray();
-
-	//QFile file("all.txt");
-	//if (file.open(QIODevice::Append)) {
-		//QTextStream t(&file);
-		//t << cleanContents;
-		//file.close();
-	//}
-
-	*/
-
-	//DebugDialog::debug(cleanContents.data());
 
 	return finalLoad(cleanContents, loadInfo.filename);
 }
