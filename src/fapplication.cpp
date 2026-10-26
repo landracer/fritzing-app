@@ -1316,7 +1316,7 @@ int FApplication::startup()
 {
 	//DebugDialog::setEnabled(true);
 
-	QString splashName = ":/resources/images/splash/splash_screen_start-alpha.png";
+	QString splashName = ":/resources/images/splash/splash_screen_start-EDA.png";
 	QDateTime now = QDateTime::currentDateTime();
 	if (now.date().month() == 4 && now.date().day() == 1) {
 		QString aSplashName = ":/resources/images/splash/april1st.png";
@@ -1586,10 +1586,14 @@ void FApplication::initSplash(FSplashScreen & splash) {
 	               .arg(Version::year());
 	splash.showMessage(msg1, "fritzingText", Qt::AlignLeft | Qt::AlignTop);
 
-	// NOTE: the version label is no longer drawn as runtime text here. It is baked into
-	// the splash artwork (the "BETA" chip on the fritzing logo, splash_screen_start-alpha.png).
-	// The former msg2 / "versionText" runtime version line was removed to avoid a second,
-	// overlapping version display.
+	// The version label (lower-left of the splash) comes from the single source of truth,
+	// Version::versionString() -> FORK_VERSION_LABEL in src/version/version.cpp. Bump the
+	// version by editing that one constant; it propagates here and to the About box.
+	QString msg2 = QString("<font face='Lucida Grande, Tahoma, Sans Serif' size='2' color='#eaf4ed'>"
+	                           "Version %1"
+	                           "</font>")
+	               .arg(Version::versionString());
+	splash.showMessage(msg2, "versionText", Qt::AlignLeft | Qt::AlignTop);
 
 #ifdef Q_OS_MACOS
 	// remove the splash screen flag on OS-X as workaround for the reported bug
