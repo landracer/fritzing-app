@@ -3684,10 +3684,12 @@ void MainWindow::onServicesFetched(const QList<QString>& services) {
 }
 
 void MainWindow::initWelcomeView() {
-	m_welcomeView = new WelcomeView(this);
-	m_welcomeView->setObjectName("WelcomeView");
-	auto * sketchAreaWidget = new SketchAreaWidget(m_welcomeView, this, false, false);
-	addTab(sketchAreaWidget, ":/resources/images/icons/TabWidgetWelcomeActive_icon.png", tr("Welcome"), true);
+	// The "Welcome" landing tab was removed from this fork: it was a cluttered, mostly
+	// white "welcome screen" (recent/blog/fab/tip panels) that added no value here. With
+	// m_welcomeView left null, the existing (m_welcomeView == nullptr) branches in
+	// showBreadboardView()/showSchematicView()/showPCBView()/showProgramView() already
+	// remap the view tabs to indices 0..3, so the app opens straight on Breadboard.
+	m_welcomeView = nullptr;
 }
 
 void MainWindow::setInitialView() {

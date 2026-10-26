@@ -635,7 +635,7 @@ void MainWindow::createActions()
 	createFileMenuActions();
 	createEditMenuActions();
 	createPartMenuActions();
-	createViewMenuActions(true);
+	createViewMenuActions(false);
 	createWindowMenuActions();
 	createHelpMenuActions();
 	createTraceMenuActions();
