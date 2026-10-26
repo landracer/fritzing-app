@@ -1368,7 +1368,7 @@ void MainWindow::exportBOM() {
 				, QDateTime::currentDateTime().toString("dddd, MMMM d yyyy, hh:mm:ss")
 				, assemblyString
 				, shoppingListString
-				, QString("%1.%2.%3").arg(Version::majorVersion(), Version::minorVersion(), Version::minorSubVersion()));
+				, Version::versionString());
 
 	save_text_file(
 				bom,

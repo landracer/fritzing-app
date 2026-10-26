@@ -32,6 +32,17 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../utils/textutils.h"
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLE SOURCE OF TRUTH for the user-visible version label.
+// To ship a new version, change ONLY this one line. Everything user-visible
+// (splash banner, About box, Bill of Materials export) renders
+// Version::versionString(), which returns this. The numeric major/minor/sub
+// fields below are NOT for display; they are only used internally to parse the
+// version baked into existing .fzz/.fzp files for backward-compatibility checks
+// (see modelbase.cpp, fzpinfo.cpp, pcbsketchwidget.cpp).
+// ─────────────────────────────────────────────────────────────────────────────
+static const char *const FORK_VERSION_LABEL = "LANDRACER's-BETA-IHv01";
+
 QString Version::m_majorVersion("1");
 QString Version::m_minorVersion("0");
 QString Version::m_minorSubVersion("6");
@@ -63,10 +74,9 @@ Version::Version() {
 		}
 	}
 
-    // This fork-of-record is distributed as a beta test line. The user-visible version
-    // label is a fixed string rather than a numeric semver; keep it literal here. See
-    // the About box (aboutbox.cpp), which renders Version::versionString() directly.
-    m_versionString = QStringLiteral("LANDRACER's-BETA-IHv01");
+    // The user-visible version label comes from the single FORK_VERSION_LABEL
+    // constant above. Bumping the version = edit that one line.
+    m_versionString = QString::fromUtf8(FORK_VERSION_LABEL);
 }
 
 const QString & Version::majorVersion() {
