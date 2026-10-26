@@ -10,7 +10,7 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
 Fritzing is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty ofswap
+but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
@@ -63,7 +63,10 @@ Version::Version() {
 		}
 	}
 
-    m_versionString = QString("%1.%2.%3%4.%5.%6").arg(m_majorVersion).arg(m_minorVersion).arg(m_minorSubVersion).arg(m_modifier).arg(m_date).arg(m_gitVersion);
+    // This fork-of-record is distributed as a beta test line. The user-visible version
+    // label is a fixed string rather than a numeric semver; keep it literal here. See
+    // the About box (aboutbox.cpp), which renders Version::versionString() directly.
+    m_versionString = QStringLiteral("LANDRACER's-BETA-IHv01");
 }
 
 const QString & Version::majorVersion() {
