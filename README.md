@@ -47,6 +47,24 @@ mkdir build && cd build && qmake6 ../phoenix.pro && make -j"$(nproc)" && ./Fritz
 ```
 
 
+## ⬇️ Download a prebuilt build
+
+Prebuilt artifacts are published on the [**Releases**](https://github.com/landracer/fritzing-app/releases) page as
+the `LANDRACER's-BETA-IHv01` beta line.
+
+**Linux (x86_64)** — grab the `Fritzing-LANDRACER-BETA-IHv01-linux-x86_64.tar.gz` asset, then:
+
+```sh
+tar xzf Fritzing-LANDRACER-BETA-IHv01-linux-x86_64.tar.gz
+cd Fritzing-LANDRACER-BETA-IHv01-linux-x86_64
+./fritzing.sh
+```
+
+**macOS / Windows** — this fork only publishes a **Linux** artifact here. To run this fork on macOS or Windows,
+build from source using the [Prerequisites](#-prerequisites) and [build](#-build-out-of-tree-always) instructions
+below, or use an official upstream installer from [fritzing.org/download](https://fritzing.org/download/).
+
+
 ## 📦 Prerequisites
 
 Fritzing links against a fixed set of native libraries. You need **Qt 6** (Core, Gui, Widgets, Xml, Svg,
