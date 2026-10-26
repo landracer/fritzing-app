@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-10-25 — Feature backlog decisions: 1 ported (#4323), rest formally ditched
+**Disposition:** of the deferred *feature* PRs, **only #4323 (breadboard autorouter) was landed**; the rest are
+**ditched**, each with an author-facing write-up in `docs/internal/feature-backlog.md` explaining why. This
+turn also overhauled `README.md` / `INSTALL.txt` (per-distro install incl. Ubuntu) and `AGENTS.md`.
+
+- **#4323 breadboard autorouter — LANDED** on `feature/breadboard-autorouter`. Ported with a 3-way apply; all
+  new `src/autoroute/breadboard*.cpp` + the `pri/autoroute.pri`/mainwindow/auto.pro seams applied cleanly against
+  the Qt-6 `develop`. Its latent DMI default-argument bug (ctor `= Options()` using not-yet-complete default
+  member initializers) was fixed with an out-of-line delegating ctor overload. All 8 Boost suites + 2 QtTest
+  suites green on Qt 6.11.2.
+- **#4076 AC/transient sim, #3587 part-load perf, #3401 tent vias — DITCHED.** Auto-graded `stale` and
+  (for #4076) coupled to a parts PR + overlapping our own sim fork. Per the repo rule "messy PRs targeting
+  restructured subsystems are re-derived, not ported," these stay backlog. Each entry now carries: scope →
+  was-the-code-good-or-garbage → why-ditched → what-the-author-should-consider → a *Why?* reflection.
+- **Why #4323 got an exception to "re-derive, don't port":** its hygiene (isolated additive files, touches only
+  existing seams, self-tested) made a faithful port cheap and low-risk — the exception that proves the rule.
+
+---
+
 ## 2026-10-25 — Upstream PR backlog triage (all 36 open `fritzing/fritzing-app` PRs)
 **Disposition:** bulk triage of the open-PR backlog → **5 ported as real fixes**, **rest = LANDED / OBSOLETE / FEATURE-BACKLOG**. See matrix below; commits for the ported fixes noted per-row.
 
