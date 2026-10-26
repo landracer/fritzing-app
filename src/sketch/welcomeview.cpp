@@ -23,6 +23,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "help/tipsandtricks.h"
 #include "utils/uploadpair.h"
 #include "referencemodel/sqlitereferencemodel.h"
+#include "version/version.h"
 
 #include <QTextEdit>
 #include <QGridLayout>
@@ -411,16 +412,9 @@ WelcomeView::WelcomeView(QWidget * parent) : QFrame(parent)
 	connect(this, SIGNAL(openSketch()), this->window(), SLOT(mainLoad()));
 	connect(this, SIGNAL(recentSketch(const QString &, const QString &)), this->window(), SLOT(openRecentOrExampleFile(const QString &, const QString &)));
 
-	QString protocol = QSslSocket::supportsSsl() ? "https" : "http";
-	// TODO: blog network calls should only happen once, not for each window?
-	auto * manager = new QNetworkAccessManager(this);
-	connect(manager, SIGNAL(finished(QNetworkReply *)), this, SLOT(gotBlogSnippet(QNetworkReply *)));
-	manager->get(QNetworkRequest(QUrl(QString("%1://blog.fritzing.org/recent-posts-app/").arg(protocol))));
-
-	manager = new QNetworkAccessManager(this);
-
-	connect(manager, SIGNAL(finished(QNetworkReply *)), this, SLOT(gotBlogSnippet(QNetworkReply *)));
-	manager->get(QNetworkRequest(QUrl(QString("%1://fritzing.org/projects/snippet/").arg(protocol))));
+	// No remote "blog"/"projects" feeds and no "Fritzing Fab" shop panel: this fork
+	// does not push PCB fabrication to a third-party service, and the remote feeds were
+	// dead weight. The landing page is now fully local (recent + what's new + tip).
 
 	TipsAndTricks::initTipSets();
 	nextTip();
@@ -430,22 +424,19 @@ void WelcomeView::initLayout()
 {
 	auto * mainLayout = new QGridLayout();
 
-	//mainLayout->setSpacing (0);
-	//mainLayout->setContentsMargins (0, 0, 0, 0);
 	mainLayout->setSizeConstraint (QLayout::SetMaximumSize);
 
+	// Left column: recent sketches (local) above the daily tip (local).
 	QWidget * recent = initRecent();
 	mainLayout->addWidget(recent, 0, 0);
 
-	QWidget * widget = initBlog();
-	mainLayout->addWidget(widget, 0, 1);
+	QWidget * tipw = initTip();
+	mainLayout->addWidget(tipw, 1, 0);
 
-	widget = initShop();
-	mainLayout->addWidget(widget, 1, 1);
-
-	widget = initTip();
-	mainLayout->addWidget(widget, 1, 0);
-
+	// Right column: a local "What's New" panel that highlights the program, its version
+	// (from the single source of truth, Version::versionString()), and notable features.
+	QWidget * whatsNew = initWhatsNew();
+	mainLayout->addWidget(whatsNew, 0, 1, 2, 1);
 
 	this->setLayout(mainLayout);
 }
@@ -858,6 +849,11 @@ void WelcomeView::gotBlogSnippet(QNetworkReply * networkReply) {
 }
 
 void WelcomeView::clickBlog(const QString & url) {
+	// The remote blog/projects/fab switchable panels were removed from this fork's landing
+	// page; there is nothing to switch to. Guard against any stray invocation dereferencing
+	// now-null member frames.
+	Q_UNUSED(url);
+	return;
 	if (url.toLower() == "fab") {
 //		m_shopUberFrame->setVisible(false);
 		m_fabUberFrame->setVisible(true);
@@ -1107,6 +1103,56 @@ QWidget * WelcomeView::initTip() {
 	tipFrame->setLayout(tipLayout);
 
 	return tipFrame;
+}
+
+QWidget * WelcomeView::initWhatsNew() {
+	auto * frame = new QFrame();
+	frame->setObjectName("whatsNewFrame");
+	auto * layout = new QVBoxLayout();
+	zeroMargin(layout);
+
+	auto * titleFrame = new QFrame();
+	titleFrame->setObjectName("whatsNewTitleFrame");
+	auto * titleLayout = new QHBoxLayout();
+	zeroMargin(titleLayout);
+	auto * title = new QLabel(tr("What's New"));
+	title->setObjectName("whatsNewTitle");
+	titleLayout->addWidget(title);
+	titleLayout->addSpacerItem(new QSpacerItem(1, 1, QSizePolicy::Expanding));
+	titleFrame->setLayout(titleLayout);
+	layout->addWidget(titleFrame);
+
+	auto * scrollArea = new QScrollArea;
+	scrollArea->setObjectName("whatsNewScrollArea");
+	scrollArea->setWidgetResizable(true);
+	scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+	auto * body = new QLabel();
+	body->setObjectName("whatsNewBody");
+	body->setTextFormat(Qt::RichText);
+	body->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+	body->setWordWrap(true);
+	// Program + version (single source of truth) + a short, honest feature list.
+	body->setText(QString(
+		"<div style='color:#3a3a3a;'>"
+		"<div style='font-size:16pt; font-weight:bold; color:#00a55b;'>%1</div>"
+		"<div style='font-size:11pt; color:#666; margin-bottom:10px;'>%2</div>"
+		"<p>This is the landracer fork of Fritzing, a friendly electronics design tool for "
+		"breadboarding, schematics, and PCB layout.</p>"
+		"<ul>"
+		"<li>Breadboard autorouting (Routing &rarr; Autoroute).</li>"
+		"<li>Vias are tented (hidden) in solder-mask and paste-mask exports.</li>"
+		"<li>Snappier part loading and correct rendering of breadboards and parts.</li>"
+		"</ul>"
+		"</div>")
+		.arg(tr("Fritzing"))
+		.arg(Version::versionString()));
+
+	scrollArea->setWidget(body);
+	layout->addWidget(scrollArea);
+
+	frame->setLayout(layout);
+	return frame;
 }
 
 void WelcomeView::dragEnterEvent(QDragEnterEvent *event)

@@ -65,11 +65,8 @@ AboutBox::AboutBox(QWidget *parent)
 
 	// Version String
 	auto *versionMain = new QLabel();
-	versionMain->setText(tr("%1 <br><small>(%2 %3) [Qt %4]</small>")
-						 .arg(Version::versionString())
-						 .arg(BuildType)
-						 .arg(Version::gitVersion())
-						 .arg(QT_VERSION_STR) );
+	// Version String — single source of truth: Version::versionString() (FORK_VERSION_LABEL).
+	versionMain->setText(Version::versionString());
 	versionMain->setFont(smallFont);
 	versionMain->setAlignment(Qt::AlignHCenter);
 	versionMain->setTextInteractionFlags(Qt::TextSelectableByMouse);

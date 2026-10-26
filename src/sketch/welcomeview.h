@@ -145,6 +145,7 @@ public:
 protected:
 	void initLayout();
 	QWidget * initRecent();
+	QWidget * initWhatsNew();
 	QWidget * initBlog();
 	QWidget * initShop();
 	QWidget * initTip();
