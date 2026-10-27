@@ -1948,6 +1948,10 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 	// Show the board preview for the sketch we just opened: create one only if this
 	// sketch has no preview yet (do not clobber an existing one just from opening).
 	refreshThumbnail(false);
+	// Now that this sketch is loaded, tell the welcome view it is the "refreshable" one
+	// so "Refresh preview" becomes enabled for it (and stays disabled for the other
+	// recent items that are not loaded here).
+	updateWelcomeViewRecentList();
 	return "";
 }
 
@@ -3706,7 +3710,8 @@ void MainWindow::initWelcomeView() {
 		preview->openDirectory(dir, title);
 	});
 	connect(m_welcomeView, &WelcomeView::refreshRequested, this, [this](const QString & /*fzzPath*/) {
-		// Re-render the preview image for the currently-loaded board and re-show it.
+		// The refresh button is only enabled for the sketch loaded in this window, so
+		// re-render that board's preview (refreshThumbnail always targets m_fwFilename).
 		refreshThumbnail(true);
 	});
 	auto * sketchAreaWidget = new SketchAreaWidget(m_welcomeView, this, false, false);
@@ -3727,6 +3732,9 @@ void MainWindow::setInitialView() {
 void MainWindow::updateWelcomeViewRecentList(bool doEmit) {
 	if (m_welcomeView != nullptr) {
 		m_welcomeView->updateRecent();
+		// The welcome view only enables "Refresh preview" for the sketch actually loaded
+		// in this window's editor, so tell it which one that is (empty = nothing loaded).
+		m_welcomeView->setLoadedFile(m_fwFilename);
 		if (doEmit) {
 			Q_FOREACH (QWidget *widget, QApplication::topLevelWidgets()) {
 				auto *mainWin = qobject_cast<MainWindow *>(widget);

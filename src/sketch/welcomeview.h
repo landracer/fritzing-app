@@ -75,6 +75,10 @@ public:
 	// Render/refresh the preview panel for the given sketch. Public so MainWindow
 	// can refresh the currently-visible preview after regenerating a thumbnail.
 	void showPreviewFor(const QString & fzzPath);
+	// Tell the welcome view which sketch is actually loaded in this window's editor.
+	// Only that sketch can be re-rendered ("Refresh preview") without opening it, so the
+	// refresh button is enabled only when the selected item matches this path.
+	void setLoadedFile(const QString & fzzPath);
 
 	Q_SIGNALS:
 	void newSketch();
@@ -100,6 +104,7 @@ protected:
 	QPushButton * m_openGerberButton = nullptr;
 	QPushButton * m_refreshButton    = nullptr;   // regenerate the preview image
 	QString       m_selectedPath;                 // currently-previewed sketch
+	QString       m_loadedPath;                   // sketch actually loaded in this window's editor
 };
 
 #endif

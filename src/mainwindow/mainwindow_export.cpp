@@ -1984,11 +1984,16 @@ void MainWindow::embedSketchMeta(const QString & gerberDir) {
 }
 
 void MainWindow::refreshThumbnail(bool force) {
-	// Regenerate the landing-page board preview from the currently-loaded board and
-	// store it. The thumbnail is a generic, gerber-independent preview: it can exist
-	// for any sketch, whether or not it ever produced gerbers.
+	// Regenerate the landing-page board preview for the board loaded in THIS window
+	// (m_fwFilename) and store it. The thumbnail is a generic, gerber-independent
+	// preview: it can exist for any sketch, whether or not it ever produced gerbers.
 	//   - On open: force=false -> only create one if this sketch has none yet.
 	//   - On save / manual refresh: force=true -> always update to track the board.
+	//
+	// A board can only be rendered while it is actually loaded in this window, so this
+	// always targets m_fwFilename. The welcome view only enables "Refresh preview" for
+	// the item that matches this window's loaded file, so a refresh can never clobber a
+	// good preview with a blank render of an unrelated (not-loaded) sketch.
 	if (m_fwFilename.isEmpty()) return;
 
 	// Defer to the next event-loop turn so the just-loaded PCB scene is fully
@@ -1996,39 +2001,11 @@ void MainWindow::refreshThumbnail(bool force) {
 	// right after mainLoad() used to run before the scene settled and produced an
 	// empty image (only appearing after a restart, when the view was already realized).
 	const QString target = m_fwFilename;
-	DebugDialog::debug(QString("[THUMB] refreshThumbnail force=%1 target=%2 pcbView=%3")
-	                  .arg(force).arg(target).arg(m_pcbGraphicsView ? "yes" : "NO"));
 	QTimer::singleShot(0, this, [this, target, force]() {
 		SketchMeta meta = SketchMeta::load(target);
 		if (!force && meta.hasThumbnail()) return;   // already have a preview; don't clobber on open
 
-		// The SVG serialization only produces a correct, non-blank image when the PCB
-		// view is the *current, visible* tab (its per-view layers/geometry are realized
-		// only then). On the landing page the current tab is Welcome, so the PCB page is
-		// hidden and rendering it directly produced an all-black image (and, because the
-		// hidden view was force-touched, stole list focus so 'Open' wouldn't respond until
-		// another item was clicked). Temporarily switch to the PCB tab to render, then
-		// restore whatever tab the user was on so the welcome view never flickers or loses
-		// selection/focus.
-		QWidget * pcbPage = (m_pcbGraphicsView != nullptr)
-		                    ? qobject_cast<QWidget *>(m_pcbGraphicsView->parent()) : nullptr;
-		QTabWidget * tabs = qobject_cast<QTabWidget *>(m_tabWidget);
-		const bool wasPcbCurrent = (pcbPage != nullptr) && (currentTabWidget() == pcbPage);
-		int restoreIndex = -1;
-		if (tabs != nullptr && pcbPage != nullptr && !wasPcbCurrent) {
-			for (int i = 0; i < tabs->count(); ++i) {
-				if (tabs->widget(i) == pcbPage) {
-					restoreIndex = currentTabIndex();
-					setCurrentTabIndex(i);
-					break;
-				}
-			}
-		}
-
 		QPixmap thumb = renderBoardThumbnail();
-
-		if (restoreIndex >= 0) setCurrentTabIndex(restoreIndex);
-
 		if (thumb.isNull()) return;                    // nothing rendered: don't wipe an existing preview
 		meta.setThumbnail(thumb);
 		meta.setThumbDpr(thumb.devicePixelRatio());
@@ -2050,22 +2027,21 @@ QPixmap MainWindow::renderBoardThumbnail() {
 		if (!viewLayer->visible()) continue;
 		viewLayerIDs << viewLayer->viewLayerID();
 	}
-	DebugDialog::debug(QString("[THUMB] renderBoardThumbnail start: viewLayers=%1 visibleLayerIDs=%2 scene=%3 sceneItems=%4")
-	                  .arg(m_pcbGraphicsView->viewLayers().size())
-	                  .arg(viewLayerIDs.size())
-	                  .arg(m_pcbGraphicsView->scene() ? "yes" : "NO")
-	                  .arg(m_pcbGraphicsView->scene() ? m_pcbGraphicsView->scene()->items().size() : -1));
 
 	RenderThing renderThing;
 	renderThing.printerScale = GraphicsUtils::SVGDPI;
 	renderThing.blackOnly = false;
+	// The serialized SVG gets a viewBox whose size is (physical-inches * dpi), so this dpi
+	// directly sets the vector coordinate resolution. At StandardFritzingDPI (1000) a small
+	// board came out with only a ~399px-wide coordinate grid, and upscaling that to the panel
+	// size looked blurry. Derive dpi from the physical size so the SVG's own coordinate grid is
+	// ~2048 px on the long edge; QSvgRenderer then tessellates with that much detail.
 	renderThing.dpi = GraphicsUtils::StandardFritzingDPI;
 	renderThing.selectedItems = false;
 	renderThing.hideTerminalPoints = true;
 	renderThing.renderBlocker = false;
 
 	QString svg = m_pcbGraphicsView->renderToSVGForSVGExport(renderThing, nullptr, viewLayerIDs);
-	DebugDialog::debug(QString("[THUMB] svg length=%1").arg(svg.size()));
 	if (svg.isEmpty()) return QPixmap();
 
 	QSvgRenderer renderer(svg.toUtf8());
@@ -2074,12 +2050,9 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	QSizeF def = renderer.defaultSize();
 	if (def.isEmpty()) return QPixmap();
 
-	// Render at high resolution so the landing-page preview stays crisp, including on
-	// HiDPI/retina displays. The SVG is vector, so its raster detail is entirely decided
-	// here: the old code capped the raster at 512 (then 1600) which DOWNSCALES the ~1000
-	// px viewBox produced by StandardFritzingDPI, throwing detail away. Instead we render
-	// at a fixed high pixel size that always exceeds the panel size, preserving the aspect
-	// ratio in floating point (the old integer division truncated the short side).
+	// Rasterize the vector at a high long-edge resolution so the landing-page preview is
+	// crisp on HiDPI/retina screens. The SVG is vector, so rendering it large preserves
+	// full detail (QSvgRenderer re-tessellates, it does not upscale a bitmap).
 	const qreal targetLong = 2048.0;      // long-edge raster resolution (device-independent px)
 	const qreal aspect = (def.width() >= def.height()) ? (def.height() / def.width()) : (def.width() / def.height());
 	QSize size;
@@ -2095,11 +2068,6 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	if (pixmap == nullptr) return QPixmap();
 	QPixmap result = *pixmap;
 	delete pixmap;
-	DebugDialog::debug(QString("[THUMB] renderBoardThumbnail: sceneItems=%1 layers=%2 def=%3x%4 raster=%5x%6")
-	                  .arg(m_pcbGraphicsView->scene() ? m_pcbGraphicsView->scene()->items().size() : -1)
-	                  .arg(viewLayerIDs.size())
-	                  .arg(qRound(def.width())).arg(qRound(def.height()))
-	                  .arg(size.width()).arg(size.height()));
 	// Match the pixmap to the display's device pixel ratio so it stays crisp on HiDPI
 	// screens instead of being upscaled by Qt (which blurs it).
 	if (m_pcbGraphicsView && m_pcbGraphicsView->viewport())

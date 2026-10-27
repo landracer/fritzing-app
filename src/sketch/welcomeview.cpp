@@ -20,7 +20,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "welcomeview.h"
 #include "sketchmeta.h"
-#include "debugdialog.h"
 
 #include <QFileInfo>
 #include <QGridLayout>
@@ -146,6 +145,17 @@ void WelcomeView::onRecentSelected() {
 	showPreviewFor(path);
 }
 
+void WelcomeView::setLoadedFile(const QString & fzzPath) {
+	m_loadedPath = fzzPath;
+	// If the currently-previewed sketch is (or is not) the loaded one, refresh button
+	// state must follow; re-evaluate it now that the loaded path is known.
+	if (!m_selectedPath.isEmpty()) {
+		const bool isLoaded = QFileInfo(m_selectedPath).absoluteFilePath()
+		                      == QFileInfo(m_loadedPath).absoluteFilePath();
+		if (m_refreshButton) m_refreshButton->setEnabled(isLoaded);
+	}
+}
+
 void WelcomeView::showPreviewFor(const QString & fzzPath) {
 	m_selectedPath = fzzPath;
 
@@ -165,7 +175,15 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 			m_previewImage->setText(tr("(no preview)"));
 		}
 	}
-	if (m_refreshButton) m_refreshButton->setEnabled(true);
+	// "Refresh preview" re-renders the board live, which is only possible for the sketch
+	// actually loaded in this window's editor. For any other recent item it stays disabled
+	// (open it first, and its preview is generated on open), so a refresh can never blank a
+	// good preview by rendering an unrelated/hidden board.
+	if (m_refreshButton) {
+		const bool isLoaded = !m_loadedPath.isEmpty()
+		                      && QFileInfo(fzzPath).absoluteFilePath() == QFileInfo(m_loadedPath).absoluteFilePath();
+		m_refreshButton->setEnabled(isLoaded);
+	}
 
 	// --- gerber production status (separate concern) -----------------------
 	if (!meta.isValid()) {
