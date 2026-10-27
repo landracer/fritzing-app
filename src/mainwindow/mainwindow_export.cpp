@@ -1996,6 +1996,8 @@ void MainWindow::refreshThumbnail(bool force) {
 	// right after mainLoad() used to run before the scene settled and produced an
 	// empty image (only appearing after a restart, when the view was already realized).
 	const QString target = m_fwFilename;
+	DebugDialog::debug(QString("[THUMB] refreshThumbnail force=%1 target=%2 pcbView=%3")
+	                  .arg(force).arg(target).arg(m_pcbGraphicsView ? "yes" : "NO"));
 	QTimer::singleShot(0, this, [this, target, force]() {
 		SketchMeta meta = SketchMeta::load(target);
 		if (!force && meta.hasThumbnail()) return;   // already have a preview; don't clobber on open
@@ -2048,6 +2050,11 @@ QPixmap MainWindow::renderBoardThumbnail() {
 		if (!viewLayer->visible()) continue;
 		viewLayerIDs << viewLayer->viewLayerID();
 	}
+	DebugDialog::debug(QString("[THUMB] renderBoardThumbnail start: viewLayers=%1 visibleLayerIDs=%2 scene=%3 sceneItems=%4")
+	                  .arg(m_pcbGraphicsView->viewLayers().size())
+	                  .arg(viewLayerIDs.size())
+	                  .arg(m_pcbGraphicsView->scene() ? "yes" : "NO")
+	                  .arg(m_pcbGraphicsView->scene() ? m_pcbGraphicsView->scene()->items().size() : -1));
 
 	RenderThing renderThing;
 	renderThing.printerScale = GraphicsUtils::SVGDPI;
@@ -2058,6 +2065,7 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	renderThing.renderBlocker = false;
 
 	QString svg = m_pcbGraphicsView->renderToSVGForSVGExport(renderThing, nullptr, viewLayerIDs);
+	DebugDialog::debug(QString("[THUMB] svg length=%1").arg(svg.size()));
 	if (svg.isEmpty()) return QPixmap();
 
 	QSvgRenderer renderer(svg.toUtf8());
@@ -2087,6 +2095,11 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	if (pixmap == nullptr) return QPixmap();
 	QPixmap result = *pixmap;
 	delete pixmap;
+	DebugDialog::debug(QString("[THUMB] renderBoardThumbnail: sceneItems=%1 layers=%2 def=%3x%4 raster=%5x%6")
+	                  .arg(m_pcbGraphicsView->scene() ? m_pcbGraphicsView->scene()->items().size() : -1)
+	                  .arg(viewLayerIDs.size())
+	                  .arg(qRound(def.width())).arg(qRound(def.height()))
+	                  .arg(size.width()).arg(size.height()));
 	// Match the pixmap to the display's device pixel ratio so it stays crisp on HiDPI
 	// screens instead of being upscaled by Qt (which blurs it).
 	if (m_pcbGraphicsView && m_pcbGraphicsView->viewport())
