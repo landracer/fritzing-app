@@ -29,6 +29,12 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QPrintDialog>
 #include <QClipboard>
 #include <QApplication>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QDialogButtonBox>
+#include <QDir>
 
 #include "mainwindow.h"
 #include "debugdialog.h"
@@ -1827,6 +1833,58 @@ QString MainWindow::getBomProps(ItemBase * itemBase)
 	return pString;
 }
 
+QString MainWindow::chooseGerberExportDir() {
+	// Step 1: a choice dialog shown *before* any folder chooser. The user picks
+	// either the deterministic default folder ("<defaultSaveFolder>/<base>") or a
+	// save-as style folder chooser.
+	const QString defaultDir = SketchMeta::defaultGerberDirFor(m_fwFilename, defaultSaveFolder());
+
+	QDialog dlg(this);
+	dlg.setWindowTitle(tr("Export Gerber"));
+	auto * layout = new QVBoxLayout(&dlg);
+	auto * label = new QLabel(tr("Where should the Gerber files be exported?"), &dlg);
+	label->setWordWrap(true);
+	layout->addWidget(label);
+
+	auto * defaultBtn = new QPushButton(tr("Default folder"), &dlg);
+	auto * saveAsBtn = new QPushButton(tr("Save As... (choose folder)"), &dlg);
+	auto * cancelBtn = new QPushButton(tr("Cancel"), &dlg);
+	defaultBtn->setDefault(true);
+
+	auto * buttons = new QDialogButtonBox(&dlg);
+	buttons->addButton(defaultBtn, QDialogButtonBox::AcceptRole);
+	buttons->addButton(saveAsBtn, QDialogButtonBox::AcceptRole);
+	buttons->addButton(cancelBtn, QDialogButtonBox::RejectRole);
+	layout->addWidget(buttons);
+
+	connect(defaultBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+	connect(saveAsBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+	connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+
+	// Distinguish "use default" from "save as" vs a true cancel: we inspect which
+	// button was clicked via a property set at click time.
+	bool useDefault = false;
+	bool saveAs = false;
+	connect(defaultBtn, &QPushButton::clicked, &dlg, [&useDefault](bool) { useDefault = true; });
+	connect(saveAsBtn, &QPushButton::clicked, &dlg, [&saveAs](bool) { saveAs = true; });
+
+	dlg.exec();
+
+	if (!useDefault && !saveAs)
+		return QString();   // cancelled
+
+	if (useDefault) {
+		QDir().mkpath(defaultDir);
+		return defaultDir;
+	}
+
+	// Step 2: only for "Save As" do we pop the folder chooser.
+	return QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
+	                                         defaultDir,
+	                                         QFileDialog::ShowDirsOnly
+	                                         | QFileDialog::DontResolveSymlinks);
+}
+
 void MainWindow::exportToGerber() {
 
 	//NOTE: this assumes just one board per sketch
@@ -1846,12 +1904,11 @@ void MainWindow::exportToGerber() {
 		return;
 	}
 
-	QString exportDir = QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
-	                    defaultSaveFolder(),
-	                    QFileDialog::ShowDirsOnly
-	                    | QFileDialog::DontResolveSymlinks);
-
-	if (exportDir.isEmpty()) return;
+	// Ask the user first where to export: the default folder (deterministic
+	// "<defaultSaveFolder>/<sketchBaseName>"), or pick a folder via a save-as
+	// style chooser. This choice dialog is shown before any folder chooser.
+	QString exportDir = chooseGerberExportDir();
+	if (exportDir.isEmpty()) return;   // cancelled
 
 	FileProgressDialog * fileProgressDialog = exportProgress();
 	fileProgressDialog->setMessage(tr("Generating Gerber files..."));

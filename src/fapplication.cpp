@@ -1586,14 +1586,15 @@ void FApplication::initSplash(FSplashScreen & splash) {
 	               .arg(Version::year());
 	splash.showMessage(msg1, "fritzingText", Qt::AlignLeft | Qt::AlignTop);
 
-	// The version label (lower-left of the splash) comes from the single source of truth,
-	// Version::versionString() -> FORK_VERSION_LABEL in src/version/version.cpp. Bump the
-	// version by editing that one constant; it propagates here and to the About box.
+	// The version label (lower-right of the splash, so it doesn't overlap the copyright
+	// text on the left) comes from the single source of truth, Version::versionString()
+	// -> FORK_VERSION_LABEL in src/version/version.cpp. Bump the version by editing that
+	// one constant; it propagates here and to the About box.
 	QString msg2 = QString("<font face='Lucida Grande, Tahoma, Sans Serif' size='2' color='#eaf4ed'>"
 	                           "Version %1"
 	                           "</font>")
 	               .arg(Version::versionString());
-	splash.showMessage(msg2, "versionText", Qt::AlignLeft | Qt::AlignTop);
+	splash.showMessage(msg2, "versionText", Qt::AlignRight | Qt::AlignTop);
 
 #ifdef Q_OS_MACOS
 	// remove the splash screen flag on OS-X as workaround for the reported bug

@@ -513,6 +513,7 @@ protected:
 	void setActionsIcons(int index, QList<QAction *> &);
 	void exportToEagle();
 	void exportToGerber();
+	QString chooseGerberExportDir();
 	void embedSketchMeta(const QString & gerberDir);
 	void viewGerber();
 	void exportBOM();
