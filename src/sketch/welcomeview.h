@@ -78,11 +78,13 @@ public:
 	void openSketch();
 	void recentSketch(const QString & filename, const QString & actionText);
 	void openInGerberViewer(const QString & gerberDir, const QString & title);
+	void refreshRequested(const QString & fzzPath);
 
 protected Q_SLOTS:
 	void onRecentSelected();
 	void onOpenClicked();
 	void onOpenGerberClicked();
+	void onRefreshClicked();
 
 protected:
 	void initLayout();
@@ -94,6 +96,7 @@ protected:
 	QLabel      * m_previewStatus    = nullptr;   // gerber status badge
 	QPushButton * m_openButton       = nullptr;
 	QPushButton * m_openGerberButton = nullptr;
+	QPushButton * m_refreshButton    = nullptr;   // regenerate the preview image
 	QString       m_selectedPath;                 // currently-previewed sketch
 };
 

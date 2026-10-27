@@ -1945,6 +1945,8 @@ QString MainWindow::loadBundledSketch(const QString &fileName, bool addToRecent,
 
 	setCurrentFile(fileName, addToRecent, setAsLastOpened);
 	if (!result) return QString("Unable to load sketch: '%1' filename: %2").arg(sketchName).arg(fileName);
+	// Show the board preview for the sketch we just opened (if it has gerbers).
+	refreshThumbnail();
 	return "";
 }
 
@@ -3701,6 +3703,10 @@ void MainWindow::initWelcomeView() {
 		preview->show();
 		preview->raise();
 		preview->openDirectory(dir, title);
+	});
+	connect(m_welcomeView, &WelcomeView::refreshRequested, this, [this](const QString & /*fzzPath*/) {
+		// Re-render the preview image for the currently-loaded board and re-show it.
+		refreshThumbnail();
 	});
 	auto * sketchAreaWidget = new SketchAreaWidget(m_welcomeView, this, false, false);
 	addTab(sketchAreaWidget, ":/resources/images/icons/TabWidgetWelcomeActive_icon.png", tr("Welcome"), true);

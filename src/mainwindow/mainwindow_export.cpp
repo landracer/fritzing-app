@@ -883,6 +883,10 @@ bool MainWindow::saveAsAuxAux(const QString & fileName) {
 
 	QApplication::restoreOverrideCursor();
 
+	// Keep the landing-page preview in sync with board edits: if this sketch has
+	// gerber metadata, regenerate its thumbnail from the just-saved board.
+	refreshThumbnail();
+
 	return result;
 }
 
@@ -1973,6 +1977,19 @@ void MainWindow::embedSketchMeta(const QString & gerberDir) {
 	SketchMeta meta = SketchMeta::load(m_fwFilename);
 	meta.setGerberDir(gerberDir);
 	meta.setSourceMd5(md5);
+	meta.setThumbnail(renderBoardThumbnail());
+	SketchMeta::save(m_fwFilename, meta);
+}
+
+void MainWindow::refreshThumbnail() {
+	// Regenerate the landing-page preview image from the current board and store it,
+	// for sketches that already have gerber metadata. Called on open, save, and a
+	// manual "Refresh preview" so the picture follows board edits without re-exporting
+	// the gerbers themselves. The md5 marker is NOT touched here: gerbers stay flagged
+	// out-of-date (by the existing md5 check) until the user actually re-exports.
+	if (m_fwFilename.isEmpty()) return;
+	SketchMeta meta = SketchMeta::load(m_fwFilename);
+	if (!meta.isValid()) return;   // no gerbers for this sketch -> nothing to preview
 	meta.setThumbnail(renderBoardThumbnail());
 	SketchMeta::save(m_fwFilename, meta);
 }

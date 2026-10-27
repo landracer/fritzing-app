@@ -106,6 +106,11 @@ void WelcomeView::initLayout()
 	m_openGerberButton->setEnabled(false);
 	connect(m_openGerberButton, &QPushButton::clicked, this, &WelcomeView::onOpenGerberClicked);
 	btnRow->addWidget(m_openGerberButton);
+
+	m_refreshButton = new QPushButton(tr("Refresh preview"));
+	m_refreshButton->setEnabled(false);
+	connect(m_refreshButton, &QPushButton::clicked, this, &WelcomeView::onRefreshClicked);
+	btnRow->addWidget(m_refreshButton);
 	rightLayout->addLayout(btnRow);
 
 	rightFrame->setLayout(rightLayout);
@@ -149,6 +154,7 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 		if (m_previewImage) { m_previewImage->clear(); m_previewImage->setText(tr("(no gerber preview)")); }
 		if (m_previewStatus) m_previewStatus->setText(tr("No gerbers generated for this sketch yet."));
 		if (m_openGerberButton) m_openGerberButton->setEnabled(false);
+		if (m_refreshButton) m_refreshButton->setEnabled(false);
 	} else {
 		QPixmap thumb = meta.thumbnail();
 		if (m_previewImage) {
@@ -160,6 +166,7 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 			}
 		}
 		if (m_openGerberButton) m_openGerberButton->setEnabled(true);
+		if (m_refreshButton) m_refreshButton->setEnabled(true);
 		const bool upToDate = SketchMeta::isUpToDate(fzzPath);
 		if (m_previewStatus) {
 			if (!upToDate)
@@ -181,4 +188,11 @@ void WelcomeView::onOpenGerberClicked() {
 	SketchMeta meta = SketchMeta::load(m_selectedPath);
 	if (!meta.isValid()) return;
 	Q_EMIT openInGerberViewer(meta.gerberDir(), QFileInfo(m_selectedPath).completeBaseName());
+}
+
+void WelcomeView::onRefreshClicked() {
+	if (m_selectedPath.isEmpty()) return;
+	Q_EMIT refreshRequested(m_selectedPath);
+	// Re-render the (now-updated) stored thumbnail + status for the selected sketch.
+	showPreviewFor(m_selectedPath);
 }
