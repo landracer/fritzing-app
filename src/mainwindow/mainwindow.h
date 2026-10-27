@@ -515,6 +515,7 @@ protected:
 	void exportToGerber();
 	QString chooseGerberExportDir();
 	void embedSketchMeta(const QString & gerberDir);
+	QPixmap renderBoardThumbnail();
 	void viewGerber();
 	void exportBOM();
 	void exportBOM_CSV();

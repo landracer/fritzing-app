@@ -51,6 +51,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "sketch/schematicsketchwidget.h"
 #include "sketch/pcbsketchwidget.h"
 #include "sketch/sketchmeta.h"
+#include "fsvgrenderer.h"
+#include <QSvgRenderer>
 #include "svg/svgfilesplitter.h"
 #include "svg/gerbergenerator.h"
 #include "autoroute/panelizerstartdialog.h"
@@ -1971,8 +1973,57 @@ void MainWindow::embedSketchMeta(const QString & gerberDir) {
 	SketchMeta meta = SketchMeta::load(m_fwFilename);
 	meta.setGerberDir(gerberDir);
 	meta.setSourceMd5(md5);
-	if (m_pcbGraphicsView) meta.setThumbnail(m_pcbGraphicsView->grab());
+	meta.setThumbnail(renderBoardThumbnail());
 	SketchMeta::save(m_fwFilename, meta);
+}
+
+QPixmap MainWindow::renderBoardThumbnail() {
+	// Render the PCB board to a full-color image for the landing-page preview.
+	// We do NOT grab() the widget (that captures an empty/offscreen viewport and
+	// produced an all-black thumbnail). Instead we serialize the board's visible
+	// layers to SVG (the same path as the SVG export) and rasterize that.
+	if (!m_pcbGraphicsView) return QPixmap();
+
+	LayerList viewLayerIDs;
+	Q_FOREACH (ViewLayer * viewLayer, m_pcbGraphicsView->viewLayers()) {
+		if (viewLayer == nullptr) continue;
+		if (!viewLayer->visible()) continue;
+		viewLayerIDs << viewLayer->viewLayerID();
+	}
+
+	RenderThing renderThing;
+	renderThing.printerScale = GraphicsUtils::SVGDPI;
+	renderThing.blackOnly = false;
+	renderThing.dpi = GraphicsUtils::StandardFritzingDPI;
+	renderThing.selectedItems = false;
+	renderThing.hideTerminalPoints = true;
+	renderThing.renderBlocker = false;
+
+	QString svg = m_pcbGraphicsView->renderToSVGForSVGExport(renderThing, nullptr, viewLayerIDs);
+	if (svg.isEmpty()) return QPixmap();
+
+	QSvgRenderer renderer(svg.toUtf8());
+	if (!renderer.isValid()) return QPixmap();
+
+	QSizeF def = renderer.defaultSize();
+	if (def.isEmpty()) return QPixmap();
+
+	// Keep the board's aspect ratio, capped to a reasonable thumbnail size.
+	const int maxDim = 512;
+	QSize size;
+	if (def.width() >= def.height()) {
+		size.setWidth(maxDim);
+		size.setHeight(qMax(1, int(maxDim * def.height() / def.width())));
+	} else {
+		size.setHeight(maxDim);
+		size.setWidth(qMax(1, int(maxDim * def.width() / def.height())));
+	}
+
+	QPixmap * pixmap = FSvgRenderer::getPixmap(&renderer, size);
+	if (pixmap == nullptr) return QPixmap();
+	QPixmap result = *pixmap;
+	delete pixmap;
+	return result;
 }
 
 void MainWindow::viewGerber() {
