@@ -49,7 +49,12 @@ public:
 
     SketchMeta() = default;
 
+    // True if this sketch has gerber (production) metadata recorded. Independent
+    // of whether a board thumbnail exists: a sketch can have a preview thumbnail
+    // without ever having generated gerbers, and vice versa.
     bool isValid() const { return !m_gerberDir.isEmpty(); }
+    // True if a board preview thumbnail exists for this sketch.
+    bool hasThumbnail() const { return !m_thumbnail.isNull(); }
 
     const QString & gerberDir() const { return m_gerberDir; }
     const QString & sourceMd5() const { return m_sourceMd5; }
@@ -58,6 +63,11 @@ public:
     void setGerberDir(const QString & dir) { m_gerberDir = dir; }
     void setSourceMd5(const QString & md5)  { m_sourceMd5 = md5; }
     void setThumbnail(const QPixmap & pix)  { m_thumbnail = pix; }
+
+    // Standalone, gerber-independent location where a sketch's preview thumbnail
+    // PNG is stored (in app data, keyed by sketch path). Returns an absolute path
+    // under the thumbnails dir (created on demand by save()).
+    static QString thumbnailPathFor(const QString & sketchPath);
 
     // --- persistence ---
 

@@ -44,6 +44,9 @@ void WelcomeView::initLayout()
 	auto * mainLayout = new QGridLayout();
 	mainLayout->setContentsMargins(12, 12, 12, 12);
 	mainLayout->setSpacing(12);
+	// Give the preview (right) column more horizontal room than the recents list.
+	mainLayout->setColumnStretch(0, 1);
+	mainLayout->setColumnStretch(1, 2);
 
 	// ---- Left: recent sketches ------------------------------------------
 	auto * leftFrame = new QFrame();
@@ -66,7 +69,7 @@ void WelcomeView::initLayout()
 	leftLayout->addWidget(newBtn);
 
 	leftFrame->setLayout(leftLayout);
-	mainLayout->addWidget(leftFrame, 0, 0);
+	mainLayout->addWidget(leftFrame, 0, 0, 1, 1);
 
 	// ---- Right: interactive preview -------------------------------------
 	auto * rightFrame = new QFrame();
@@ -91,7 +94,7 @@ void WelcomeView::initLayout()
 
 	m_previewImage = new QLabel();
 	m_previewImage->setAlignment(Qt::AlignCenter);
-	m_previewImage->setMinimumSize(320, 240);
+	m_previewImage->setMinimumSize(520, 420);
 	m_previewImage->setStyleSheet("border: 1px solid #ccc; background:#fafafa;");
 	m_previewImage->setText(tr("(no preview)"));
 	rightLayout->addWidget(m_previewImage, 1);
@@ -114,7 +117,7 @@ void WelcomeView::initLayout()
 	rightLayout->addLayout(btnRow);
 
 	rightFrame->setLayout(rightLayout);
-	mainLayout->addWidget(rightFrame, 0, 1);
+	mainLayout->addWidget(rightFrame, 0, 1, 1, 2);
 
 	setLayout(mainLayout);
 }
@@ -150,30 +153,31 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 
 	if (m_previewName) m_previewName->setText(QFileInfo(fzzPath).fileName());
 
-	if (!meta.isValid()) {
-		if (m_previewImage) { m_previewImage->clear(); m_previewImage->setText(tr("(no gerber preview)")); }
-		if (m_previewStatus) m_previewStatus->setText(tr("No gerbers generated for this sketch yet."));
-		if (m_openGerberButton) m_openGerberButton->setEnabled(false);
-		if (m_refreshButton) m_refreshButton->setEnabled(false);
-	} else {
-		QPixmap thumb = meta.thumbnail();
-		if (m_previewImage) {
-			if (!thumb.isNull())
-				m_previewImage->setPixmap(thumb.scaled(m_previewImage->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-			else {
-				m_previewImage->clear();
-				m_previewImage->setText(tr("(no thumbnail)"));
-			}
+	// --- board preview (gerber-independent) --------------------------------
+	QPixmap thumb = meta.thumbnail();
+	if (m_previewImage) {
+		if (!thumb.isNull()) {
+			m_previewImage->setPixmap(thumb.scaled(m_previewImage->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+		} else {
+			m_previewImage->clear();
+			m_previewImage->setText(tr("(no preview)"));
 		}
-		if (m_openGerberButton) m_openGerberButton->setEnabled(true);
-		if (m_refreshButton) m_refreshButton->setEnabled(true);
+	}
+	if (m_refreshButton) m_refreshButton->setEnabled(true);
+
+	// --- gerber production status (separate concern) -----------------------
+	if (!meta.isValid()) {
+		if (m_previewStatus) m_previewStatus->setText(tr("No gerbers generated for this sketch."));
+		if (m_openGerberButton) m_openGerberButton->setEnabled(false);
+	} else {
 		const bool upToDate = SketchMeta::isUpToDate(fzzPath);
 		if (m_previewStatus) {
 			if (!upToDate)
-				m_previewStatus->setText(tr("<span style='color:#b00020;'><b>Out of date &mdash; do not use for production.</b></span><br>The sketch changed since these gerbers were generated. Re-export before fabricating."));
+				m_previewStatus->setText(tr("<span style='color:#b00020;'><b>Gerbers out of date &mdash; do not use for production.</b></span><br>The sketch changed since these gerbers were generated. Re-export before fabricating."));
 			else
-				m_previewStatus->setText(tr("<span style='color:#00802b;'><b>Up to date &mdash; safe for production.</b></span>"));
+				m_previewStatus->setText(tr("<span style='color:#00802b;'><b>Gerbers up to date &mdash; safe for production.</b></span>"));
 		}
+		if (m_openGerberButton) m_openGerberButton->setEnabled(true);
 	}
 	if (m_openButton) m_openButton->setEnabled(true);
 }

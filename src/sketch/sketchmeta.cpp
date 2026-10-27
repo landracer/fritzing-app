@@ -28,6 +28,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QFile>
 #include <QSaveFile>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTextStream>
 
 const QString SketchMeta::kMarkerName = QStringLiteral(".fritzing_source_md5");
@@ -36,7 +37,14 @@ const QString SketchMeta::kMarkerName = QStringLiteral(".fritzing_source_md5");
 static const QString kSketchesGroup = QStringLiteral("sketches");
 static QString md5Key()  { return QStringLiteral("gerberMd5"); }
 static QString dirKey()  { return QStringLiteral("gerberDir"); }
-static QString thumbKey(){ return QStringLiteral("gerberThumbPng"); }
+
+// Standalone thumbnail storage: a per-sketch PNG under the app data dir, keyed by a
+// hash of the absolute sketch path. Independent of the gerber folder so that a board
+// preview can exist for sketches that never produced gerbers.
+static QString thumbnailsRootDir() {
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    return QDir(base).absoluteFilePath(QStringLiteral("sketch_thumbnails"));
+}
 
 QString SketchMeta::md5OfFile(const QString & path) {
     QFile f(path);
@@ -69,6 +77,12 @@ bool SketchMeta::writeMarker(const QString & gerberDir, const QString & md5) {
     return true;
 }
 
+QString SketchMeta::thumbnailPathFor(const QString & sketchPath) {
+    // Stable, filesystem-safe key from the absolute sketch path.
+    const QByteArray digest = QCryptographicHash::hash(sketchPath.toUtf8(), QCryptographicHash::Md5);
+    return QDir(thumbnailsRootDir()).absoluteFilePath(QString::fromLatin1(digest.toHex()) + QStringLiteral(".png"));
+}
+
 SketchMeta SketchMeta::load(const QString & sketchPath) {
     SketchMeta meta;
     QSettings settings;
@@ -77,20 +91,21 @@ SketchMeta SketchMeta::load(const QString & sketchPath) {
     settings.beginGroup(sketchPath);
     meta.m_gerberDir  = settings.value(dirKey()).toString();
     meta.m_sourceMd5  = settings.value(md5Key()).toString();
-    const QString thumbFile = settings.value(thumbKey()).toString();
-    if (!thumbFile.isEmpty()) meta.m_thumbnail.load(thumbFile);
     settings.endGroup();
     settings.endGroup();
+    // Thumbnail is independent of gerber metadata: load it from its standalone
+    // location whenever the PNG exists, regardless of whether gerbers exist.
+    const QString thumbFile = thumbnailPathFor(sketchPath);
+    if (QFile::exists(thumbFile)) meta.m_thumbnail.load(thumbFile);
     return meta;
 }
 
 void SketchMeta::save(const QString & sketchPath, const SketchMeta & meta) {
-    // Persist the thumbnail as a PNG inside the gerber folder (portable-ish and
-    // avoids bloating QSettings with base64); store the path in QSettings.
-    QString thumbPath;
-    if (!meta.m_thumbnail.isNull() && !meta.m_gerberDir.isEmpty()) {
-        QDir().mkpath(meta.m_gerberDir);
-        thumbPath = QDir(meta.m_gerberDir).absoluteFilePath(QStringLiteral("fritzing_sketch_thumb.png"));
+    // Persist the thumbnail to its standalone (gerber-independent) location and
+    // record gerber metadata (dir + md5) in QSettings keyed by the sketch path.
+    const QString thumbPath = thumbnailPathFor(sketchPath);
+    if (!meta.m_thumbnail.isNull()) {
+        QDir().mkpath(QFileInfo(thumbPath).absolutePath());
         meta.m_thumbnail.save(thumbPath, "PNG");
     }
     QSettings settings;
@@ -98,7 +113,6 @@ void SketchMeta::save(const QString & sketchPath, const SketchMeta & meta) {
     settings.beginGroup(sketchPath);
     settings.setValue(dirKey(), meta.m_gerberDir);
     settings.setValue(md5Key(), meta.m_sourceMd5);
-    settings.setValue(thumbKey(), thumbPath);
     settings.endGroup();
     settings.endGroup();
 }
@@ -109,9 +123,9 @@ void SketchMeta::remove(const QString & sketchPath) {
     settings.beginGroup(sketchPath);
     settings.remove(dirKey());
     settings.remove(md5Key());
-    settings.remove(thumbKey());
     settings.endGroup();
     settings.endGroup();
+    QFile::remove(thumbnailPathFor(sketchPath));
 }
 
 bool SketchMeta::isUpToDate(const QString & sketchPath) {
