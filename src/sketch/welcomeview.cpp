@@ -141,12 +141,11 @@ void WelcomeView::onRecentSelected() {
 void WelcomeView::showPreviewFor(const QString & fzzPath) {
 	m_selectedPath = fzzPath;
 
-	bool ok = false;
-	SketchMeta meta = SketchMeta::readFromFzz(fzzPath, &ok);
+	SketchMeta meta = SketchMeta::load(fzzPath);
 
 	if (m_previewName) m_previewName->setText(QFileInfo(fzzPath).fileName());
 
-	if (!ok || !meta.hasGerbers()) {
+	if (!meta.isValid()) {
 		if (m_previewImage) { m_previewImage->clear(); m_previewImage->setText(tr("(no gerber preview)")); }
 		if (m_previewStatus) m_previewStatus->setText(tr("No gerbers generated for this sketch yet."));
 		if (m_openGerberButton) m_openGerberButton->setEnabled(false);
@@ -161,9 +160,10 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 			}
 		}
 		if (m_openGerberButton) m_openGerberButton->setEnabled(true);
+		const bool upToDate = SketchMeta::isUpToDate(fzzPath);
 		if (m_previewStatus) {
-			if (meta.isStale())
-				m_previewStatus->setText(tr("<span style='color:#b00020;'><b>Out of date &mdash; do not use for production.</b></span><br>Regenerate gerbers before fabricating."));
+			if (!upToDate)
+				m_previewStatus->setText(tr("<span style='color:#b00020;'><b>Out of date &mdash; do not use for production.</b></span><br>The sketch changed since these gerbers were generated. Re-export before fabricating."));
 			else
 				m_previewStatus->setText(tr("<span style='color:#00802b;'><b>Up to date &mdash; safe for production.</b></span>"));
 		}
@@ -178,8 +178,7 @@ void WelcomeView::onOpenClicked() {
 
 void WelcomeView::onOpenGerberClicked() {
 	if (m_selectedPath.isEmpty()) return;
-	bool ok = false;
-	SketchMeta meta = SketchMeta::readFromFzz(m_selectedPath, &ok);
-	if (!ok || !meta.isValid()) return;
+	SketchMeta meta = SketchMeta::load(m_selectedPath);
+	if (!meta.isValid()) return;
 	Q_EMIT openInGerberViewer(meta.gerberDir(), QFileInfo(m_selectedPath).completeBaseName());
 }

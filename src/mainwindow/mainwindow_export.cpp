@@ -867,11 +867,6 @@ bool MainWindow::saveAsAuxAux(const QString & fileName) {
 	bool result = m_sketchModel->save(fzName, false);
 
 	if (result) {
-		// If this sketch carries production metadata, re-check staleness now that
-		// we have a loaded board: regenerate its gerbers into a temp dir, hash them,
-		// and compare to the stored hash. A mismatch means the board changed since
-		// the gerbers were produced -> flag as out-of-date (do-not-fabricate).
-		recheckGerberStaleness();
 		saveLastTabList();
 		result = saveAsShareable(fileName, false);
 	}
@@ -1873,9 +1868,10 @@ void MainWindow::exportToGerber() {
 
 	m_statusBar->showMessage(tr("Sketch exported to Gerber"), 2000);
 
-	// Record production metadata into the .fzz so the landing page and the
-	// gerber viewer can reopen these artifacts without regenerating them, and
-	// so staleness can be detected by re-hashing the board on a later save.
+	// Record production metadata: md5 of the current source .fzz written into the
+	// gerber folder as a marker, plus the gerber dir + thumbnail into QSettings
+	// keyed by sketch path. We do NOT touch or re-save the user's .fzz (no forced
+	// save). Staleness later = recompute .fzz md5 vs the marker.
 	embedSketchMeta(exportDir);
 
 	// Note: the Gerber preview is intentionally NOT opened automatically here.
@@ -1887,65 +1883,23 @@ void MainWindow::exportToGerber() {
 }
 
 void MainWindow::embedSketchMeta(const QString & gerberDir) {
-	// Snapshot the current PCB view for the landing preview, hash the gerber
-	// artifacts we just wrote, and store {thumbnail, gerberDir, gerberHash} into
-	// the sketch bundle temp dir so it is zipped into the .fzz on the next save.
-	if (m_fzzFolder.isEmpty()) return;
-
-	int boardCount = 0;
-	ItemBase * board = m_pcbGraphicsView->findSelectedBoard(boardCount);
-	if (board == nullptr) return;
-
-	// Capture the board scene as a PNG thumbnail.
-	QPixmap thumb = m_pcbGraphicsView->grab();
-
-	SketchMeta meta;
-	meta.setGerberDir(gerberDir);
-	meta.setGerberHash(SketchMeta::hashDirectory(gerberDir));
-	meta.setThumbnail(thumb);
-	if (!meta.writeToBundle(m_fzzFolder)) {
-		DebugDialog::debug("embedSketchMeta: failed to write metadata into bundle");
+	// md5 of the source sketch file, so a later open/save can detect that the
+	// board changed since these gerbers were produced (=> do not use for prod).
+	if (m_fwFilename.isEmpty()) return;
+	const QString md5 = SketchMeta::md5OfFile(m_fwFilename);
+	if (md5.isEmpty()) {
+		DebugDialog::debug("embedSketchMeta: could not md5 source sketch");
 		return;
 	}
-	// Re-zip the bundle temp dir into the current .fzz so the metadata persists.
-	saveAsShareable(m_fwFilename, true);
-}
-
-void MainWindow::recheckGerberStaleness() {
-	// Only meaningful if this sketch already carries production metadata.
-	if (!SketchMeta::bundleHasMeta(m_fzzFolder)) return;
-
-	bool ok = false;
-	SketchMeta meta = SketchMeta::readFromBundle(m_fzzFolder, &ok);
-	if (!ok || !meta.isValid()) return;
-
-	// Regenerate the board's gerbers into a throwaway dir and hash them. Because
-	// our generator is deterministic, an unchanged board hashes identically to
-	// the stored hash (up to date); any real copper/outline/drill edit differs.
-	int boardCount = 0;
-	ItemBase * board = m_pcbGraphicsView ? m_pcbGraphicsView->findSelectedBoard(boardCount) : nullptr;
-	if (board == nullptr) return;
-
-	QDir tmp;
-	QString name = TextUtils::getRandText();
-	if (!tmp.mkdir(name)) return;
-	QString tmpDir = tmp.absoluteFilePath(name);
-
-	QFileInfo info(m_fwFilename);
-	QString prefix = info.completeBaseName();
-	GerberGenerator::exportToGerber(prefix, tmpDir, board, m_pcbGraphicsView, false);
-
-	QString currentHash = SketchMeta::hashDirectory(tmpDir);
-	FolderUtils::rmdir(tmpDir);
-
-	bool stale = currentHash.isEmpty() || (currentHash != meta.gerberHash());
-	if (stale) {
-		// Flag stale by writing metadata with a cleared hash sentinel so the
-		// landing/viewer can show the do-not-use-for-production warning.
-		SketchMeta staleMeta = meta;
-		staleMeta.setGerberHash(QStringLiteral("STALE"));
-		staleMeta.writeToBundle(m_fzzFolder);
+	if (!SketchMeta::writeMarker(gerberDir, md5)) {
+		DebugDialog::debug("embedSketchMeta: failed to write marker into gerber dir");
+		return;
 	}
+	SketchMeta meta = SketchMeta::load(m_fwFilename);
+	meta.setGerberDir(gerberDir);
+	meta.setSourceMd5(md5);
+	if (m_pcbGraphicsView) meta.setThumbnail(m_pcbGraphicsView->grab());
+	SketchMeta::save(m_fwFilename, meta);
 }
 
 void MainWindow::viewGerber() {

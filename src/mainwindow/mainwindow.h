@@ -514,7 +514,6 @@ protected:
 	void exportToEagle();
 	void exportToGerber();
 	void embedSketchMeta(const QString & gerberDir);
-	void recheckGerberStaleness();
 	void viewGerber();
 	void exportBOM();
 	void exportBOM_CSV();
