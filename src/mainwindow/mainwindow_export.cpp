@@ -1878,11 +1878,27 @@ QString MainWindow::chooseGerberExportDir() {
 		return defaultDir;
 	}
 
-	// Step 2: only for "Save As" do we pop the folder chooser.
-	return QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
-	                                         defaultDir,
-	                                         QFileDialog::ShowDirsOnly
-	                                         | QFileDialog::DontResolveSymlinks);
+	// Step 2: only for "Save As" do we pop the folder chooser. The user picks a
+	// *surface* folder (e.g. Documents/rAtTrax-BMS-RC). We do NOT flood that folder
+	// with loose gerber files; instead we place them in a dedicated subfolder named
+	// after the sketch base name, creating it if needed (reusing it if it exists),
+	// so the gerbers live in a self-contained, easy-to-identify folder alongside the
+	// .fzz, and the md5 marker sits in that same folder to drive the staleness warn.
+	QString surface = QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
+	                                       defaultDir,
+	                                       QFileDialog::ShowDirsOnly
+	                                       | QFileDialog::DontResolveSymlinks);
+	if (surface.isEmpty())
+		return QString();   // cancelled
+
+	const QString base = QFileInfo(m_fwFilename).completeBaseName();
+	// If they already picked a folder literally named <base>, use it as-is; otherwise
+	// nest the gerbers in a <base> subfolder so the surface folder stays clean.
+	QString target = surface;
+	if (QFileInfo(surface).fileName() != base)
+		target = QDir(surface).absoluteFilePath(base);
+	QDir().mkpath(target);
+	return target;
 }
 
 void MainWindow::exportToGerber() {
