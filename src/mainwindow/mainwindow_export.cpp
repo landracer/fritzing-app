@@ -35,6 +35,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QPushButton>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QTabWidget>
 
 #include "mainwindow.h"
 #include "debugdialog.h"
@@ -1998,7 +1999,34 @@ void MainWindow::refreshThumbnail(bool force) {
 	QTimer::singleShot(0, this, [this, target, force]() {
 		SketchMeta meta = SketchMeta::load(target);
 		if (!force && meta.hasThumbnail()) return;   // already have a preview; don't clobber on open
+
+		// The SVG serialization only produces a correct, non-blank image when the PCB
+		// view is the *current, visible* tab (its per-view layers/geometry are realized
+		// only then). On the landing page the current tab is Welcome, so the PCB page is
+		// hidden and rendering it directly produced an all-black image (and, because the
+		// hidden view was force-touched, stole list focus so 'Open' wouldn't respond until
+		// another item was clicked). Temporarily switch to the PCB tab to render, then
+		// restore whatever tab the user was on so the welcome view never flickers or loses
+		// selection/focus.
+		QWidget * pcbPage = (m_pcbGraphicsView != nullptr)
+		                    ? qobject_cast<QWidget *>(m_pcbGraphicsView->parent()) : nullptr;
+		QTabWidget * tabs = qobject_cast<QTabWidget *>(m_tabWidget);
+		const bool wasPcbCurrent = (pcbPage != nullptr) && (currentTabWidget() == pcbPage);
+		int restoreIndex = -1;
+		if (tabs != nullptr && pcbPage != nullptr && !wasPcbCurrent) {
+			for (int i = 0; i < tabs->count(); ++i) {
+				if (tabs->widget(i) == pcbPage) {
+					restoreIndex = currentTabIndex();
+					setCurrentTabIndex(i);
+					break;
+				}
+			}
+		}
+
 		QPixmap thumb = renderBoardThumbnail();
+
+		if (restoreIndex >= 0) setCurrentTabIndex(restoreIndex);
+
 		if (thumb.isNull()) return;                    // nothing rendered: don't wipe an existing preview
 		meta.setThumbnail(thumb);
 		meta.setThumbDpr(thumb.devicePixelRatio());
@@ -2039,16 +2067,20 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	if (def.isEmpty()) return QPixmap();
 
 	// Render at high resolution so the landing-page preview stays crisp, including on
-	// HiDPI/retina displays. The SVG is vector, so rasterizing large keeps detail
-	// (the previous 512 cap is what made the preview look blurry when scaled up).
-	const int maxDim = 1600;
+	// HiDPI/retina displays. The SVG is vector, so its raster detail is entirely decided
+	// here: the old code capped the raster at 512 (then 1600) which DOWNSCALES the ~1000
+	// px viewBox produced by StandardFritzingDPI, throwing detail away. Instead we render
+	// at a fixed high pixel size that always exceeds the panel size, preserving the aspect
+	// ratio in floating point (the old integer division truncated the short side).
+	const qreal targetLong = 2048.0;      // long-edge raster resolution (device-independent px)
+	const qreal aspect = (def.width() >= def.height()) ? (def.height() / def.width()) : (def.width() / def.height());
 	QSize size;
 	if (def.width() >= def.height()) {
-		size.setWidth(maxDim);
-		size.setHeight(qMax(1, int(maxDim * def.height() / def.width())));
+		size.setWidth(qRound(targetLong));
+		size.setHeight(qMax(1, qRound(targetLong * aspect)));
 	} else {
-		size.setHeight(maxDim);
-		size.setWidth(qMax(1, int(maxDim * def.width() / def.height())));
+		size.setHeight(qRound(targetLong));
+		size.setWidth(qMax(1, qRound(targetLong * aspect)));
 	}
 
 	QPixmap * pixmap = FSvgRenderer::getPixmap(&renderer, size);
