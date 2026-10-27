@@ -37,6 +37,7 @@ const QString SketchMeta::kMarkerName = QStringLiteral(".fritzing_source_md5");
 static const QString kSketchesGroup = QStringLiteral("sketches");
 static QString md5Key()  { return QStringLiteral("gerberMd5"); }
 static QString dirKey()  { return QStringLiteral("gerberDir"); }
+static QString dprKey()  { return QStringLiteral("thumbDpr"); }
 
 // Standalone thumbnail storage: a per-sketch PNG under the app data dir, keyed by a
 // hash of the absolute sketch path. Independent of the gerber folder so that a board
@@ -91,12 +92,17 @@ SketchMeta SketchMeta::load(const QString & sketchPath) {
     settings.beginGroup(sketchPath);
     meta.m_gerberDir  = settings.value(dirKey()).toString();
     meta.m_sourceMd5  = settings.value(md5Key()).toString();
+    meta.m_thumbDpr   = settings.value(dprKey(), 1.0).toReal();
     settings.endGroup();
     settings.endGroup();
     // Thumbnail is independent of gerber metadata: load it from its standalone
     // location whenever the PNG exists, regardless of whether gerbers exist.
     const QString thumbFile = thumbnailPathFor(sketchPath);
-    if (QFile::exists(thumbFile)) meta.m_thumbnail.load(thumbFile);
+    if (QFile::exists(thumbFile)) {
+        meta.m_thumbnail.load(thumbFile);
+        // Reapply the DPR it was rendered at so HiDPI crispness survives persistence.
+        if (!meta.m_thumbnail.isNull()) meta.m_thumbnail.setDevicePixelRatio(meta.m_thumbDpr);
+    }
     return meta;
 }
 
@@ -113,6 +119,7 @@ void SketchMeta::save(const QString & sketchPath, const SketchMeta & meta) {
     settings.beginGroup(sketchPath);
     settings.setValue(dirKey(), meta.m_gerberDir);
     settings.setValue(md5Key(), meta.m_sourceMd5);
+    settings.setValue(dprKey(), meta.thumbDpr());
     settings.endGroup();
     settings.endGroup();
 }
@@ -123,6 +130,7 @@ void SketchMeta::remove(const QString & sketchPath) {
     settings.beginGroup(sketchPath);
     settings.remove(dirKey());
     settings.remove(md5Key());
+    settings.remove(dprKey());
     settings.endGroup();
     settings.endGroup();
     QFile::remove(thumbnailPathFor(sketchPath));

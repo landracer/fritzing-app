@@ -64,6 +64,11 @@ public:
     void setSourceMd5(const QString & md5)  { m_sourceMd5 = md5; }
     void setThumbnail(const QPixmap & pix)  { m_thumbnail = pix; }
 
+    // Device pixel ratio the thumbnail was rendered for, so crispness survives the
+    // PNG save/load round-trip on HiDPI displays (a plain QPixmap round-trips at dpr 1).
+    qreal thumbDpr() const { return m_thumbDpr; }
+    void setThumbDpr(qreal dpr) { m_thumbDpr = dpr; }
+
     // Standalone, gerber-independent location where a sketch's preview thumbnail
     // PNG is stored (in app data, keyed by sketch path). Returns an absolute path
     // under the thumbnails dir (created on demand by save()).
@@ -96,6 +101,7 @@ protected:
     QString m_gerberDir;
     QString m_sourceMd5;
     QPixmap m_thumbnail;
+    qreal   m_thumbDpr = 1.0;
 };
 
 #endif // SKETCHMETA_H

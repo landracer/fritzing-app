@@ -2001,6 +2001,7 @@ void MainWindow::refreshThumbnail(bool force) {
 		QPixmap thumb = renderBoardThumbnail();
 		if (thumb.isNull()) return;                    // nothing rendered: don't wipe an existing preview
 		meta.setThumbnail(thumb);
+		meta.setThumbDpr(thumb.devicePixelRatio());
 		SketchMeta::save(target, meta);
 		if (m_welcomeView) m_welcomeView->showPreviewFor(target);  // reflect the new image immediately
 	});
@@ -2037,8 +2038,10 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	QSizeF def = renderer.defaultSize();
 	if (def.isEmpty()) return QPixmap();
 
-	// Keep the board's aspect ratio, capped to a reasonable thumbnail size.
-	const int maxDim = 512;
+	// Render at high resolution so the landing-page preview stays crisp, including on
+	// HiDPI/retina displays. The SVG is vector, so rasterizing large keeps detail
+	// (the previous 512 cap is what made the preview look blurry when scaled up).
+	const int maxDim = 1600;
 	QSize size;
 	if (def.width() >= def.height()) {
 		size.setWidth(maxDim);
@@ -2052,6 +2055,10 @@ QPixmap MainWindow::renderBoardThumbnail() {
 	if (pixmap == nullptr) return QPixmap();
 	QPixmap result = *pixmap;
 	delete pixmap;
+	// Match the pixmap to the display's device pixel ratio so it stays crisp on HiDPI
+	// screens instead of being upscaled by Qt (which blurs it).
+	if (m_pcbGraphicsView && m_pcbGraphicsView->viewport())
+		result.setDevicePixelRatio(m_pcbGraphicsView->viewport()->devicePixelRatioF());
 	return result;
 }
 

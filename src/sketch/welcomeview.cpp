@@ -157,6 +157,8 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 	QPixmap thumb = meta.thumbnail();
 	if (m_previewImage) {
 		if (!thumb.isNull()) {
+			// thumb carries its render DPR (set at capture time); QPixmap::scaled works in
+			// logical coordinates and preserves that DPR, so it stays crisp on HiDPI here.
 			m_previewImage->setPixmap(thumb.scaled(m_previewImage->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
 		} else {
 			m_previewImage->clear();
