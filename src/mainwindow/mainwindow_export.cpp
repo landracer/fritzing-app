@@ -51,6 +51,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "sketch/schematicsketchwidget.h"
 #include "sketch/pcbsketchwidget.h"
 #include "sketch/sketchmeta.h"
+#include "sketch/welcomeview.h"
 #include "fsvgrenderer.h"
 #include <QSvgRenderer>
 #include "svg/svgfilesplitter.h"
@@ -1982,16 +1983,27 @@ void MainWindow::embedSketchMeta(const QString & gerberDir) {
 }
 
 void MainWindow::refreshThumbnail(bool force) {
-	// Regenerate the landing-page board preview from the current board and store it.
-	// The thumbnail is a generic, gerber-independent preview: it can exist for any
-	// sketch, whether or not it ever produced gerbers.
+	// Regenerate the landing-page board preview from the currently-loaded board and
+	// store it. The thumbnail is a generic, gerber-independent preview: it can exist
+	// for any sketch, whether or not it ever produced gerbers.
 	//   - On open: force=false -> only create one if this sketch has none yet.
 	//   - On save / manual refresh: force=true -> always update to track the board.
 	if (m_fwFilename.isEmpty()) return;
-	SketchMeta meta = SketchMeta::load(m_fwFilename);
-	if (!force && meta.hasThumbnail()) return;   // already have a preview; don't clobber on open
-	meta.setThumbnail(renderBoardThumbnail());
-	SketchMeta::save(m_fwFilename, meta);
+
+	// Defer to the next event-loop turn so the just-loaded PCB scene is fully
+	// constructed and laid out before we serialize it to SVG. Rendering synchronously
+	// right after mainLoad() used to run before the scene settled and produced an
+	// empty image (only appearing after a restart, when the view was already realized).
+	const QString target = m_fwFilename;
+	QTimer::singleShot(0, this, [this, target, force]() {
+		SketchMeta meta = SketchMeta::load(target);
+		if (!force && meta.hasThumbnail()) return;   // already have a preview; don't clobber on open
+		QPixmap thumb = renderBoardThumbnail();
+		if (thumb.isNull()) return;                    // nothing rendered: don't wipe an existing preview
+		meta.setThumbnail(thumb);
+		SketchMeta::save(target, meta);
+		if (m_welcomeView) m_welcomeView->showPreviewFor(target);  // reflect the new image immediately
+	});
 }
 
 QPixmap MainWindow::renderBoardThumbnail() {

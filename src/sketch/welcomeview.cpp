@@ -196,7 +196,7 @@ void WelcomeView::onOpenGerberClicked() {
 
 void WelcomeView::onRefreshClicked() {
 	if (m_selectedPath.isEmpty()) return;
+	// Ask MainWindow to regenerate the board preview for the currently-loaded board.
+	// It re-shows the preview (via showPreviewFor) once the deferred render completes.
 	Q_EMIT refreshRequested(m_selectedPath);
-	// Re-render the (now-updated) stored thumbnail + status for the selected sketch.
-	showPreviewFor(m_selectedPath);
 }

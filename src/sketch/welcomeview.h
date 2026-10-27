@@ -72,6 +72,9 @@ public:
 	explicit WelcomeView(QWidget * parent = nullptr);
 
 	void updateRecent();
+	// Render/refresh the preview panel for the given sketch. Public so MainWindow
+	// can refresh the currently-visible preview after regenerating a thumbnail.
+	void showPreviewFor(const QString & fzzPath);
 
 	Q_SIGNALS:
 	void newSketch();
@@ -88,7 +91,6 @@ protected Q_SLOTS:
 
 protected:
 	void initLayout();
-	void showPreviewFor(const QString & fzzPath);
 
 	QListWidget * m_recentListWidget = nullptr;
 	QLabel      * m_previewImage     = nullptr;   // thumbnail on the right
