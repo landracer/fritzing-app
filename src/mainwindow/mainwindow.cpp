@@ -55,6 +55,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../sketch/pcbsketchwidget.h"
 #include "../sketch/welcomeview.h"
 #include "../sketch/subpartswapmanager.h"
+#include "../gerberpreview/gerberpreviewdialog.h"
 #include "../utils/folderutils.h"
 #include "../utils/fmessagebox.h"
 #include "../utils/lockmanager.h"
@@ -3684,12 +3685,25 @@ void MainWindow::onServicesFetched(const QList<QString>& services) {
 }
 
 void MainWindow::initWelcomeView() {
-	// The "Welcome" landing tab was removed from this fork: it was a cluttered, mostly
-	// white "welcome screen" (recent/blog/fab/tip panels) that added no value here. With
-	// m_welcomeView left null, the existing (m_welcomeView == nullptr) branches in
-	// showBreadboardView()/showSchematicView()/showPCBView()/showProgramView() already
-	// remap the view tabs to indices 0..3, so the app opens straight on Breadboard.
-	m_welcomeView = nullptr;
+	// Re-enable the "Welcome" landing tab: it now hosts the interactive landing page
+	// (recents list on the left, gerber/sketch preview + status on the right). Creating
+	// m_welcomeView here re-adds the tab and restores the (m_welcomeView != nullptr)
+	// index remapping in showBreadboardView()/showSchematicView()/showPCBView()/
+	// showProgramView(), so view tabs shift back to 1..4 with Welcome at index 0.
+	m_welcomeView = new WelcomeView(this);
+	m_welcomeView->setObjectName("WelcomeView");
+	connect(m_welcomeView, &WelcomeView::newSketch, this, [this]() { createNewSketch(); });
+	connect(m_welcomeView, &WelcomeView::openSketch, this, [this]() { mainLoad(); });
+	connect(m_welcomeView, &WelcomeView::recentSketch, this, [this](const QString & f, const QString & a) { openRecentOrExampleFile(f, a); });
+	connect(m_welcomeView, &WelcomeView::openInGerberViewer, this, [this](const QString & dir, const QString & title) {
+		auto * preview = new GerberPreviewDialog(this);
+		preview->setAttribute(Qt::WA_DeleteOnClose);
+		preview->show();
+		preview->raise();
+		preview->openDirectory(dir, title);
+	});
+	auto * sketchAreaWidget = new SketchAreaWidget(m_welcomeView, this, false, false);
+	addTab(sketchAreaWidget, ":/resources/images/icons/TabWidgetWelcomeActive_icon.png", tr("Welcome"), true);
 }
 
 void MainWindow::setInitialView() {
