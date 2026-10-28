@@ -895,6 +895,12 @@ void ResizableBoard::setInitialSize() {
 
 QString ResizableBoard::retrieveSvg(ViewLayer::ViewLayerID viewLayerID, QHash<QString, QString> & svgHash, bool blackOnly, double dpi, double & factor)
 {
+	// A board with no model part yet (e.g. transiently while a sketch is (re)loading, which is
+	// exactly when the landing-page thumbnail is rendered) has no stored size to serialize.
+	// Fall back to the base board svg rather than dereferencing the null model part and crashing.
+	if (m_modelPart == nullptr) {
+		return Board::retrieveSvg(viewLayerID, svgHash, blackOnly, dpi, factor);
+	}
 	double w = m_modelPart->localProp("width").toDouble();
 	if (w != 0) {
 		double h = m_modelPart->localProp("height").toDouble();
@@ -908,6 +914,7 @@ QString ResizableBoard::retrieveSvg(ViewLayer::ViewLayerID viewLayerID, QHash<QS
 }
 
 QSizeF ResizableBoard::getSizeMM() {
+	if (m_modelPart == nullptr) return QSizeF();
 	double w = m_modelPart->localProp("width").toDouble();
 	double h = m_modelPart->localProp("height").toDouble();
 	return QSizeF(w, h);
