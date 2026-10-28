@@ -110,9 +110,10 @@ committed and the offscreen smoke test passes (runs 20s, no crash).
       undoable). "Open a file" is not an edit; to get a blank canvas from a file you
       use **File → New** (a new window), not undo. Undo reverts *your* edits to the
       open sketch via the standard `QUndoStack` (unchanged by this fix). Confirmed
-      live: edit → save prompt appears (and undoing that edit is the app's normal,
-      pre-existing undo behavior).
-- [ ] Second file opens in a **new** window (open→open path; not explicitly re-checked).
+      live by user: edit → save prompt appears, **edit → Ctrl+Z reverts the edit**.
+- [x] Second file opened **on top of an already-open .fzz** → both files open (each in
+      its own window); the open→open path does not merge or clobber. (Confirmed live
+      by user.)
 - [x] Automated suites (AGENTS.md §5): **all green.** Built in the `bt/` test tree
       (`qmake6 -o Makefile ../tests/auto/auto.pro boost_root=/usr` — note the
       required `boost_root=/usr`, which is why a bare configure misfires). Run them:
