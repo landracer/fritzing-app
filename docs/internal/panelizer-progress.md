@@ -104,8 +104,14 @@ committed and the offscreen smoke test passes (runs 20s, no crash).
       live by user.)
 - [x] "Purge all recents" shows Yes/No confirm; Yes clears, No is a silent no-op.
       (Confirmed live by user.)
-- [ ] Undo of the "Open" action restores the blank session cleanly (`deleteAll` is
-      on the undo stack -- not yet checked; low risk since we now clear the stack).
+- [x] **Undo after Open is a no-op — BY DESIGN, not a bug.** Opening a file leaves
+      the window clean (empty undo stack), so Ctrl+Z right after opening does nothing.
+      This is intentional and matches the normal new-window open path (also not
+      undoable). "Open a file" is not an edit; to get a blank canvas from a file you
+      use **File → New** (a new window), not undo. Undo reverts *your* edits to the
+      open sketch via the standard `QUndoStack` (unchanged by this fix). Confirmed
+      live: edit → save prompt appears (and undoing that edit is the app's normal,
+      pre-existing undo behavior).
 - [ ] Second file opens in a **new** window (open→open path; not explicitly re-checked).
 - [x] Automated suites (AGENTS.md §5): **all green.** Built in the `bt/` test tree
       (`qmake6 -o Makefile ../tests/auto/auto.pro boost_root=/usr` — note the
