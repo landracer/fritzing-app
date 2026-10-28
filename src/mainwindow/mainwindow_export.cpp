@@ -29,6 +29,13 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QPrintDialog>
 #include <QClipboard>
 #include <QApplication>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QTabWidget>
 
 #include "mainwindow.h"
 #include "debugdialog.h"
@@ -44,6 +51,10 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "program/programwindow.h"
 #include "sketch/schematicsketchwidget.h"
 #include "sketch/pcbsketchwidget.h"
+#include "sketch/sketchmeta.h"
+#include "sketch/welcomeview.h"
+#include "fsvgrenderer.h"
+#include <QSvgRenderer>
 #include "svg/svgfilesplitter.h"
 #include "svg/gerbergenerator.h"
 #include "autoroute/panelizerstartdialog.h"
@@ -874,6 +885,10 @@ bool MainWindow::saveAsAuxAux(const QString & fileName) {
 
 	QApplication::restoreOverrideCursor();
 
+	// Keep the landing-page preview in sync with board edits: always regenerate the
+	// board preview from the just-saved board so the picture tracks the sketch.
+	refreshThumbnail(true);
+
 	return result;
 }
 
@@ -1368,7 +1383,7 @@ void MainWindow::exportBOM() {
 				, QDateTime::currentDateTime().toString("dddd, MMMM d yyyy, hh:mm:ss")
 				, assemblyString
 				, shoppingListString
-				, QString("%1.%2.%3").arg(Version::majorVersion(), Version::minorVersion(), Version::minorSubVersion()));
+				, Version::versionString());
 
 	save_text_file(
 				bom,
@@ -1826,6 +1841,74 @@ QString MainWindow::getBomProps(ItemBase * itemBase)
 	return pString;
 }
 
+QString MainWindow::chooseGerberExportDir() {
+	// Step 1: a choice dialog shown *before* any folder chooser. The user picks
+	// either the deterministic default folder ("<defaultSaveFolder>/<base>") or a
+	// save-as style folder chooser.
+	const QString defaultDir = SketchMeta::defaultGerberDirFor(m_fwFilename, defaultSaveFolder());
+
+	QDialog dlg(this);
+	dlg.setWindowTitle(tr("Export Gerber"));
+	auto * layout = new QVBoxLayout(&dlg);
+	auto * label = new QLabel(tr("Where should the Gerber files be exported?"), &dlg);
+	label->setWordWrap(true);
+	layout->addWidget(label);
+
+	auto * defaultBtn = new QPushButton(tr("Default folder"), &dlg);
+	auto * saveAsBtn = new QPushButton(tr("Save As... (choose folder)"), &dlg);
+	auto * cancelBtn = new QPushButton(tr("Cancel"), &dlg);
+	defaultBtn->setDefault(true);
+
+	auto * buttons = new QDialogButtonBox(&dlg);
+	buttons->addButton(defaultBtn, QDialogButtonBox::AcceptRole);
+	buttons->addButton(saveAsBtn, QDialogButtonBox::AcceptRole);
+	buttons->addButton(cancelBtn, QDialogButtonBox::RejectRole);
+	layout->addWidget(buttons);
+
+	connect(defaultBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+	connect(saveAsBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+	connect(cancelBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+
+	// Distinguish "use default" from "save as" vs a true cancel: we inspect which
+	// button was clicked via a property set at click time.
+	bool useDefault = false;
+	bool saveAs = false;
+	connect(defaultBtn, &QPushButton::clicked, &dlg, [&useDefault](bool) { useDefault = true; });
+	connect(saveAsBtn, &QPushButton::clicked, &dlg, [&saveAs](bool) { saveAs = true; });
+
+	dlg.exec();
+
+	if (!useDefault && !saveAs)
+		return QString();   // cancelled
+
+	if (useDefault) {
+		QDir().mkpath(defaultDir);
+		return defaultDir;
+	}
+
+	// Step 2: only for "Save As" do we pop the folder chooser. The user picks a
+	// *surface* folder (e.g. Documents/rAtTrax-BMS-RC). We do NOT flood that folder
+	// with loose gerber files; instead we place them in a dedicated subfolder named
+	// after the sketch base name, creating it if needed (reusing it if it exists),
+	// so the gerbers live in a self-contained, easy-to-identify folder alongside the
+	// .fzz, and the md5 marker sits in that same folder to drive the staleness warn.
+	QString surface = QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
+	                                       defaultDir,
+	                                       QFileDialog::ShowDirsOnly
+	                                       | QFileDialog::DontResolveSymlinks);
+	if (surface.isEmpty())
+		return QString();   // cancelled
+
+	const QString base = QFileInfo(m_fwFilename).completeBaseName();
+	// If they already picked a folder literally named <base>, use it as-is; otherwise
+	// nest the gerbers in a <base> subfolder so the surface folder stays clean.
+	QString target = surface;
+	if (QFileInfo(surface).fileName() != base)
+		target = QDir(surface).absoluteFilePath(base);
+	QDir().mkpath(target);
+	return target;
+}
+
 void MainWindow::exportToGerber() {
 
 	//NOTE: this assumes just one board per sketch
@@ -1845,12 +1928,11 @@ void MainWindow::exportToGerber() {
 		return;
 	}
 
-	QString exportDir = QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
-	                    defaultSaveFolder(),
-	                    QFileDialog::ShowDirsOnly
-	                    | QFileDialog::DontResolveSymlinks);
-
-	if (exportDir.isEmpty()) return;
+	// Ask the user first where to export: the default folder (deterministic
+	// "<defaultSaveFolder>/<sketchBaseName>"), or pick a folder via a save-as
+	// style chooser. This choice dialog is shown before any folder chooser.
+	QString exportDir = chooseGerberExportDir();
+	if (exportDir.isEmpty()) return;   // cancelled
 
 	FileProgressDialog * fileProgressDialog = exportProgress();
 	fileProgressDialog->setMessage(tr("Generating Gerber files..."));
@@ -1867,12 +1949,130 @@ void MainWindow::exportToGerber() {
 
 	m_statusBar->showMessage(tr("Sketch exported to Gerber"), 2000);
 
+	// Record production metadata: md5 of the current source .fzz written into the
+	// gerber folder as a marker, plus the gerber dir + thumbnail into QSettings
+	// keyed by sketch path. We do NOT touch or re-save the user's .fzz (no forced
+	// save). Staleness later = recompute .fzz md5 vs the marker.
+	embedSketchMeta(exportDir);
+
 	// Note: the Gerber preview is intentionally NOT opened automatically here.
 	// Users reach it deliberately via File > Export > for Production > Gerber
 	// Preview (when the beta feature is enabled), so export never spawns an
 	// unexpected window.
 
 	delete fileProgressDialog;
+}
+
+void MainWindow::embedSketchMeta(const QString & gerberDir) {
+	// md5 of the source sketch file, so a later open/save can detect that the
+	// board changed since these gerbers were produced (=> do not use for prod).
+	if (m_fwFilename.isEmpty()) return;
+	const QString md5 = SketchMeta::md5OfFile(m_fwFilename);
+	if (md5.isEmpty()) {
+		DebugDialog::debug("embedSketchMeta: could not md5 source sketch");
+		return;
+	}
+	if (!SketchMeta::writeMarker(gerberDir, md5)) {
+		DebugDialog::debug("embedSketchMeta: failed to write marker into gerber dir");
+		return;
+	}
+	SketchMeta meta = SketchMeta::load(m_fwFilename);
+	meta.setGerberDir(gerberDir);
+	meta.setSourceMd5(md5);
+	meta.setThumbnail(renderBoardThumbnail());
+	SketchMeta::save(m_fwFilename, meta);
+}
+
+void MainWindow::refreshThumbnail(bool force) {
+	// Regenerate the landing-page board preview for the board loaded in THIS window
+	// (m_fwFilename) and store it. The thumbnail is a generic, gerber-independent
+	// preview: it can exist for any sketch, whether or not it ever produced gerbers.
+	//   - On open: force=false -> only create one if this sketch has none yet.
+	//   - On save / manual refresh: force=true -> always update to track the board.
+	//
+	// A board can only be rendered while it is actually loaded in this window, so this
+	// always targets m_fwFilename. The welcome view only enables "Refresh preview" for
+	// the item that matches this window's loaded file, so a refresh can never clobber a
+	// good preview with a blank render of an unrelated (not-loaded) sketch.
+	if (m_fwFilename.isEmpty()) return;
+
+	// Defer to the next event-loop turn so the just-loaded PCB scene is fully
+	// constructed and laid out before we serialize it to SVG. Rendering synchronously
+	// right after mainLoad() used to run before the scene settled and produced an
+	// empty image (only appearing after a restart, when the view was already realized).
+	const QString target = m_fwFilename;
+	QTimer::singleShot(0, this, [this, target, force]() {
+		SketchMeta meta = SketchMeta::load(target);
+		if (!force && meta.hasThumbnail()) return;   // already have a preview; don't clobber on open
+
+		QPixmap thumb = renderBoardThumbnail();
+		if (thumb.isNull()) return;                    // nothing rendered: don't wipe an existing preview
+		meta.setThumbnail(thumb);
+		meta.setThumbDpr(thumb.devicePixelRatio());
+		SketchMeta::save(target, meta);
+		if (m_welcomeView) m_welcomeView->showPreviewFor(target);  // reflect the new image immediately
+	});
+}
+
+QPixmap MainWindow::renderBoardThumbnail() {
+	// Render the PCB board to a full-color image for the landing-page preview.
+	// We do NOT grab() the widget (that captures an empty/offscreen viewport and
+	// produced an all-black thumbnail). Instead we serialize the board's visible
+	// layers to SVG (the same path as the SVG export) and rasterize that.
+	if (!m_pcbGraphicsView) return QPixmap();
+
+	LayerList viewLayerIDs;
+	Q_FOREACH (ViewLayer * viewLayer, m_pcbGraphicsView->viewLayers()) {
+		if (viewLayer == nullptr) continue;
+		if (!viewLayer->visible()) continue;
+		viewLayerIDs << viewLayer->viewLayerID();
+	}
+
+	RenderThing renderThing;
+	renderThing.printerScale = GraphicsUtils::SVGDPI;
+	renderThing.blackOnly = false;
+	// The serialized SVG gets a viewBox whose size is (physical-inches * dpi), so this dpi
+	// directly sets the vector coordinate resolution. At StandardFritzingDPI (1000) a small
+	// board came out with only a ~399px-wide coordinate grid, and upscaling that to the panel
+	// size looked blurry. Derive dpi from the physical size so the SVG's own coordinate grid is
+	// ~2048 px on the long edge; QSvgRenderer then tessellates with that much detail.
+	renderThing.dpi = GraphicsUtils::StandardFritzingDPI;
+	renderThing.selectedItems = false;
+	renderThing.hideTerminalPoints = true;
+	renderThing.renderBlocker = false;
+
+	QString svg = m_pcbGraphicsView->renderToSVGForSVGExport(renderThing, nullptr, viewLayerIDs);
+	if (svg.isEmpty()) return QPixmap();
+
+	QSvgRenderer renderer(svg.toUtf8());
+	if (!renderer.isValid()) return QPixmap();
+
+	QSizeF def = renderer.defaultSize();
+	if (def.isEmpty()) return QPixmap();
+
+	// Rasterize the vector at a high long-edge resolution so the landing-page preview is
+	// crisp on HiDPI/retina screens. The SVG is vector, so rendering it large preserves
+	// full detail (QSvgRenderer re-tessellates, it does not upscale a bitmap).
+	const qreal targetLong = 2048.0;      // long-edge raster resolution (device-independent px)
+	const qreal aspect = (def.width() >= def.height()) ? (def.height() / def.width()) : (def.width() / def.height());
+	QSize size;
+	if (def.width() >= def.height()) {
+		size.setWidth(qRound(targetLong));
+		size.setHeight(qMax(1, qRound(targetLong * aspect)));
+	} else {
+		size.setHeight(qRound(targetLong));
+		size.setWidth(qMax(1, qRound(targetLong * aspect)));
+	}
+
+	QPixmap * pixmap = FSvgRenderer::getPixmap(&renderer, size);
+	if (pixmap == nullptr) return QPixmap();
+	QPixmap result = *pixmap;
+	delete pixmap;
+	// Match the pixmap to the display's device pixel ratio so it stays crisp on HiDPI
+	// screens instead of being upscaled by Qt (which blurs it).
+	if (m_pcbGraphicsView && m_pcbGraphicsView->viewport())
+		result.setDevicePixelRatio(m_pcbGraphicsView->viewport()->devicePixelRatioF());
+	return result;
 }
 
 void MainWindow::viewGerber() {

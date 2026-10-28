@@ -2176,6 +2176,19 @@ void PCBSketchWidget::hideHoles(QList<ItemBase *> & holes)
 	}
 }
 
+void PCBSketchWidget::hideVias(QList<ItemBase *> & vias)
+{
+	Q_FOREACH (QGraphicsItem * item, this->items()) {
+		auto * itemBase = dynamic_cast<ItemBase *>(item);
+		// a via's layer-kin chief reports ModelPart::Via, not ModelPart::Hole, so it must be
+		// hidden separately from hideHoles() to keep it out of the solder/paste mask layers
+		if ((itemBase != nullptr) && itemBase->isVisible() && itemBase->layerKinChief()->modelPart()->itemType() == ModelPart::Via) {
+			vias.append(itemBase);
+			itemBase->setVisible(false);
+		}
+	}
+}
+
 void PCBSketchWidget::restoreItemVisibility(QList<ItemBase *> & items)
 {
 	Q_FOREACH (ItemBase * item, items) {

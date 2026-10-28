@@ -1316,7 +1316,7 @@ int FApplication::startup()
 {
 	//DebugDialog::setEnabled(true);
 
-	QString splashName = ":/resources/images/splash/splash_screen_start.png";
+	QString splashName = ":/resources/images/splash/splash_screen_start-EDA.png";
 	QDateTime now = QDateTime::currentDateTime();
 	if (now.date().month() == 4 && now.date().day() == 1) {
 		QString aSplashName = ":/resources/images/splash/april1st.png";
@@ -1586,15 +1586,14 @@ void FApplication::initSplash(FSplashScreen & splash) {
 	               .arg(Version::year());
 	splash.showMessage(msg1, "fritzingText", Qt::AlignLeft | Qt::AlignTop);
 
+	// The version label (lower-right of the splash, so it doesn't overlap the copyright
+	// text on the left) comes from the single source of truth, Version::versionString()
+	// -> FORK_VERSION_LABEL in src/version/version.cpp. Bump the version by editing that
+	// one constant; it propagates here and to the About box.
 	QString msg2 = QString("<font face='Lucida Grande, Tahoma, Sans Serif' size='2' color='#eaf4ed'>"
-	                           "Version %1.%2.%3 (%4 %5) %6"
+	                           "Version %1"
 	                           "</font>")
-	               .arg(Version::majorVersion())
-	               .arg(Version::minorVersion())
-	               .arg(Version::minorSubVersion())
-	               .arg(Version::gitVersion())
-	               .arg(Version::date())
-	               .arg(m_buildType);
+	               .arg(Version::versionString());
 	splash.showMessage(msg2, "versionText", Qt::AlignRight | Qt::AlignTop);
 
 #ifdef Q_OS_MACOS

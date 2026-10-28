@@ -243,58 +243,47 @@ ModelPart * PaletteModel::loadPart(const QString & path, bool update) {
 	//DebugDialog::debug("module ID " + moduleID);
 
 	// FIXME: properties is nested right now
-	if (moduleID.compare(ModuleIDNames::WireModuleIDName) == 0) {
-		type = ModelPart::Wire;
+	static const QHash<QString, ModelPart::ItemType> pureEqualityChecks = {
+		{ ModuleIDNames::WireModuleIDName, ModelPart::Wire },
+		{ ModuleIDNames::JumperModuleIDName, ModelPart::Jumper },
+		{ ModuleIDNames::GroundPlaneModuleIDName, ModelPart::CopperFill },
+		{ ModuleIDNames::NoteModuleIDName, ModelPart::Note },
+		{ ModuleIDNames::GroundModuleIDName, ModelPart::Symbol },
+		{ ModuleIDNames::PowerLabelModuleIDName, ModelPart::Symbol },
+		{ ModuleIDNames::RulerModuleIDName, ModelPart::Ruler },
+		{ ModuleIDNames::ViaModuleIDName, ModelPart::Via },
+		{ ModuleIDNames::HoleModuleIDName, ModelPart::Hole },
+	};
+	auto isLogo = [](const QString &moduleID) noexcept {
+		return moduleID.endsWith(ModuleIDNames::LogoImageModuleIDName) ||
+		       moduleID.endsWith(ModuleIDNames::LogoTextModuleIDName);
+	};
+	auto isBreadboard = [&propertiesText](const QString &moduleID) noexcept {
+		return moduleID.endsWith(ModuleIDNames::PerfboardModuleIDName) ||
+			moduleID.endsWith(ModuleIDNames::StripboardModuleIDName) ||
+			moduleID.endsWith(ModuleIDNames::Stripboard2ModuleIDName) ||
+			propertiesText.contains("breadboard", Qt::CaseInsensitive);
+	};
+	auto isPart = [](const QString &moduleId) noexcept {
+		return moduleId.endsWith(ModuleIDNames::TwoPowerModuleIDName);
+	};
+	auto isSymbol = [](const QString &moduleId) noexcept {
+		return moduleId.endsWith(ModuleIDNames::PowerModuleIDName) ||
+		       moduleId.endsWith(ModuleIDNames::NetLabelModuleIDName);
+	};
+	if (pureEqualityChecks.contains(moduleID)) {
+		type = pureEqualityChecks.value(moduleID);
 	}
-	else if (moduleID.compare(ModuleIDNames::JumperModuleIDName) == 0) {
-		type = ModelPart::Jumper;
-	}
-	else if (moduleID.endsWith(ModuleIDNames::LogoImageModuleIDName)) {
+	else if (isLogo(moduleID)) {
 		type = ModelPart::Logo;
 	}
-	else if (moduleID.endsWith(ModuleIDNames::LogoTextModuleIDName)) {
-		type = ModelPart::Logo;
-	}
-	else if (moduleID.compare(ModuleIDNames::GroundPlaneModuleIDName) == 0) {
-		type = ModelPart::CopperFill;
-	}
-	else if (moduleID.compare(ModuleIDNames::NoteModuleIDName) == 0) {
-		type = ModelPart::Note;
-	}
-	else if (moduleID.endsWith(ModuleIDNames::TwoPowerModuleIDName)) {
+	else if (isPart(moduleID)) {
 		type = ModelPart::Part;
 	}
-	else if (moduleID.endsWith(ModuleIDNames::PowerModuleIDName)) {
+	else if (isSymbol(moduleID)) {
 		type = ModelPart::Symbol;
 	}
-	else if (moduleID.compare(ModuleIDNames::GroundModuleIDName) == 0) {
-		type = ModelPart::Symbol;
-	}
-	else if (moduleID.endsWith(ModuleIDNames::NetLabelModuleIDName)) {
-		type = ModelPart::Symbol;
-	}
-	else if (moduleID.compare(ModuleIDNames::PowerLabelModuleIDName) == 0) {
-		type = ModelPart::Symbol;
-	}
-	else if (moduleID.compare(ModuleIDNames::RulerModuleIDName) == 0) {
-		type = ModelPart::Ruler;
-	}
-	else if (moduleID.compare(ModuleIDNames::ViaModuleIDName) == 0) {
-		type = ModelPart::Via;
-	}
-	else if (moduleID.compare(ModuleIDNames::HoleModuleIDName) == 0) {
-		type = ModelPart::Hole;
-	}
-	else if (moduleID.endsWith(ModuleIDNames::PerfboardModuleIDName)) {
-		type = ModelPart::Breadboard;
-	}
-	else if (moduleID.endsWith(ModuleIDNames::StripboardModuleIDName)) {
-		type = ModelPart::Breadboard;
-	}
-	else if (moduleID.endsWith(ModuleIDNames::Stripboard2ModuleIDName)) {
-		type = ModelPart::Breadboard;
-	}
-	else if (propertiesText.contains("breadboard", Qt::CaseInsensitive)) {
+	else if (isBreadboard(moduleID)) {
 		type = ModelPart::Breadboard;
 	}
 	else if (propertiesText.contains("plain vanilla pcb", Qt::CaseInsensitive)) {

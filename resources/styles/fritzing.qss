@@ -665,6 +665,40 @@ WelcomeView QFrame QLabel {
 	max-width: 820px;
 }
 
+#whatsNewFrame {
+	margin: 10px 15px 13px 15px;
+	padding-bottom: 5px;
+	background: #fff;
+	border-bottom: 8px solid #d9d9d9;
+	font: Droid Sans;
+	font-family: Droid Sans;
+	min-width: 260px;
+	max-width: 820px;
+}
+#whatsNewTitleFrame {
+	border-bottom: 1px solid #c4c4c4;
+	margin: 0px 5px 0px 5px;
+	min-height: 34px;
+	max-height: 34px;
+	background: #fff;
+	font-family: Droid Sans;
+}
+#whatsNewTitle {
+	font-size: 14px;
+	font-weight: bold;
+	color: #323232;
+	margin-left: 6px;
+}
+#whatsNewBody {
+	background: transparent;
+	font-family: Droid Sans;
+	margin: 8px 6px 8px 6px;
+}
+#whatsNewScrollArea {
+	border: none;
+	background: transparent;
+}
+
 
 /* -------------- WS-switchable Header style -------------/*
 /*#####this is used in blog/projects and shop/fab frame*/

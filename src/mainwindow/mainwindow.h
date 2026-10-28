@@ -170,6 +170,7 @@ public:
 
 	void getPartsEditorNewAnd(ItemBase * fromItem);
 	void addDefaultParts();
+	void clearCurrentSketchContent();
 	void init(ReferenceModel *referenceModel, bool lockFiles);
 	void showFileProgressDialog(const QString & path);
 	void setFileProgressPath(const QString & path);
@@ -471,6 +472,10 @@ protected Q_SLOTS:
 	void setViewFromBelow();
 	void setViewFromAbove();
 	void updateWelcomeViewRecentList(bool doEmit = true);
+	// Housekeeping for the Welcome page's recent list. Both edit the "recentFileList" QSettings
+	// key only - they never touch (open, close, or delete) any sketch file or editor window.
+	void removeRecentFile(const QString & filename);
+	void purgeRecentFiles();
 	virtual void initZoom();
 	void onShareOnlineFinished();
 	void disableUndoAction();
@@ -513,6 +518,10 @@ protected:
 	void setActionsIcons(int index, QList<QAction *> &);
 	void exportToEagle();
 	void exportToGerber();
+	QString chooseGerberExportDir();
+	void embedSketchMeta(const QString & gerberDir);
+	void refreshThumbnail(bool force);
+	QPixmap renderBoardThumbnail();
 	void viewGerber();
 	void exportBOM();
 	void exportBOM_CSV();
@@ -543,7 +552,6 @@ protected:
 	QString copyToSvgFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder);
 	ModelPart* copyToPartsFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder);
 
-	void closeIfEmptySketch(MainWindow* mw);
 	bool whatToDoWithAlienFiles();
 	void backupExistingFileIfExists(const QString &destFilePath);
 	void recoverBackupedFiles();
@@ -564,6 +572,7 @@ protected:
 	SketchToolButton *createShareButton(SketchAreaWidget *parent);
 	SketchToolButton *createFlipButton(SketchAreaWidget *parent);
 	SketchToolButton *createAutorouteButton(SketchAreaWidget *parent);
+	QWidget *createBreadboardRouterTuning(SketchAreaWidget *parent);
 	SketchToolButton *createOrderFabButton(SketchAreaWidget *parent);
 	void updateOrderFabMenu(SketchToolButton* orderFabButton);
 	QWidget *createActiveLayerButton(SketchAreaWidget *parent);

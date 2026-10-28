@@ -6,7 +6,169 @@
 
 ---
 
+## 2026-10-28 — Session 9 (Welcome landing page: live board preview + open-into-reused-window)
+
+This whole arc (commits `fc30078c`..`9cc5ef19`) is the landing-page / preview
+feature that was NOT in the log until now. It is the current tip of `develop`
+(branch `integration-test-6-7` at the time of writing). Everything below is
+committed and the offscreen smoke test passes (runs 20s, no crash).
+
+### What shipped
+
+1. **Board thumbnail decoupled from gerber metadata + live re-render.**
+   - The Welcome page right column shows a real board preview (rendered to SVG
+     -> `QPixmap`), not a widget `grab()`. `5dd48162` switched the thumbnail from
+     `grab()` (all-black) to SVG render; `0d5e4870` made the board thumbnail
+     independent of gerber status so *every* sketch previews on open.
+   - `0f321d30` deferred the thumbnail render to the event loop so it works on
+     the *first* open (the scene isn't fully realized synchronously yet).
+   - `691bda22`/`9f454a80` render the preview at the board's render DPR so it
+     stays crisp on HiDPI, and fixed blank/black preview on Refresh.
+   - "Refresh preview" re-renders the board live and therefore is enabled **only**
+     for the sketch actually loaded in *that* window's editor (`45494a95`,
+     auto-selected in `3a42ad54`). `m_loadedPath`/`setLoadedFile()` is the guard:
+     a refresh can never blank an unrelated/hidden board.
+   - Gerber production status (up-to-date vs stale) is a *separate* badge and
+     button (`Open in Gerber Viewer`), independent of the board preview.
+
+2. **Open-into-reused-window (no second blank window).**
+   - `6ff09f52`: the first file opened loads into the *current* (blank/untitled)
+     window; a second file opens in a *new* window. Removed the old
+     `closeIfEmptySketch` blank-session dance. Both entry points --
+     `MainWindow::mainLoadAux` and `MainWindow::openRecentOrExampleFile` -- gate on
+     `FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())`.
+
+<!-- session9-part2 -->
+
+3. **SIGSEGV during deferred thumbnail render (two guards).** Root cause: on a
+   *reused* window the default placeholder board can be mid-reload with a null
+   `m_modelPart` when the deferred `refreshThumbnail` fires; the SVG/size getters
+   then dereferenced it via `localProp`/`flippedSMD`.
+   - `f13c86f8`: guard `ResizableBoard::retrieveSvg` and `ResizableBoard::getSizeMM`
+     against null `m_modelPart` (fall back to `Board::retrieveSvg`, return
+     `QSizeF()`).
+   - `cb89f80f`: guard the shared chokepoint `ItemBase::getFlipDoc` against a null
+     model part (both `ResizableBoard::retrieveSvg` and the `Board::retrieveSvg`
+     fallback reach it).
+
+4. **"Double board" when opening into a reused window.** `ModelBase::loadFromFile`
+   *appends* to the model/scene, so the loaded sketch was added alongside the
+   startup placeholder board (two overlapping boards).
+   - `637f78ba`: `SketchWidget::deleteAll()` collects every `ItemBase`
+     layer-kin-chief (expanding superparts/subparts) and removes them through the
+     app's cross-view undo-capable `deleteAux` machinery.
+     `MainWindow::clearCurrentSketchContent()` calls `deleteAll()` on all three
+     views (breadboard/schematic/pcb) and is invoked *before* `loadWhich` in both
+     reuse branches. Because `deleteAll` pushes onto the undo stack, the "Open" is
+     undoable (restores the blank state).
+
+5. **Recents housekeeping (`9cc5ef19`).**
+   - `WelcomeView` gained two buttons in the preview button row:
+     - **Remove from recents** (enabled only for a real selection) ->
+       `removeFromRecent(path)` signal.
+     - **Purge all recents** (silent, no confirm dialog) -> `purgeRecents()` signal.
+   - `MainWindow::removeRecentFile(filename)` removes every entry in the
+     `recentFileList` `QSettings` key matching the **absolute** path;
+     `MainWindow::purgeRecentFiles()` calls `settings.remove("recentFileList")`.
+     Both then call `updateWelcomeViewRecentList(false)` + `updateRecentFileActions()`
+     on *every* top-level `MainWindow`, so the welcome list and the File->Open
+     Recent menu stay in sync across windows.
+   - `WelcomeView::updateRecent()` re-reads `recentFileList`, rebuilds the list,
+     and drops the preview (`clearPreview()`) when the currently-previewed sketch
+     is no longer listed -- *unless* it is the file loaded in that window's editor
+     (`m_loadedPath`), whose live preview must stay. `clearPreview()` resets the
+     name/image/status and disables Open/Gerber/Refresh/Remove.
+   - **Contract:** these are *purely* recents/settings edits. They never delete a
+     `.fzz`, never touch an open editor window, and never write board content.
+
+### Learnings worth carrying forward
+
+- **`recentFileList` (QSettings) is the single source of truth** for both the
+  welcome list (`WelcomeView::updateRecent`) and the Open Recent menu
+  (`MainWindow::updateRecentFileActions`). Change the key -> call both refreshers
+  across all windows (they iterate `QApplication::topLevelWidgets()` and
+  `qobject_cast<MainWindow*>`).
+- `updateRecent()` **skips non-existent files** on read, so a recents entry whose
+  `.fzz` was moved/deleted silently disappears from the UI (housekeeping is partly
+  self-healing).
+- `SketchWidget::deleteAll()` is undoable by design (routes through `deleteAux` +
+  `QUndoCommand`) -- do not "optimize" it into a raw `scene()->clear()`.
+- The null-`m_modelPart` guards exist because a *reused* window's placeholder board
+  can be transiently half-initialized during a deferred render. If you add another
+  `retrieveSvg`/size getter that reads `m_modelPart`, guard it the same way.
+
+### Verified interactively
+
+- [x] Open a file into a blank window → exactly **one** board; close without editing
+      → **no** save prompt; edit the PCB → save prompt correctly appears. (Confirmed
+      live by user.)
+- [x] "Purge all recents" shows Yes/No confirm; Yes clears, No is a silent no-op.
+      (Confirmed live by user.)
+- [x] **Undo after Open is a no-op — BY DESIGN, not a bug.** Opening a file leaves
+      the window clean (empty undo stack), so Ctrl+Z right after opening does nothing.
+      This is intentional and matches the normal new-window open path (also not
+      undoable). "Open a file" is not an edit; to get a blank canvas from a file you
+      use **File → New** (a new window), not undo. Undo reverts *your* edits to the
+      open sketch via the standard `QUndoStack` (unchanged by this fix). Confirmed
+      live by user: edit → save prompt appears, **edit → Ctrl+Z reverts the edit**.
+- [x] Second file opened **on top of an already-open .fzz** → both files open (each in
+      its own window); the open→open path does not merge or clobber. (Confirmed live
+      by user.)
+- [x] Automated suites (AGENTS.md §5): **all green.** Built in the `bt/` test tree
+      (`qmake6 -o Makefile ../tests/auto/auto.pro boost_root=/usr` — note the
+      required `boost_root=/usr`, which is why a bare configure misfires). Run them:
+      QtTest (`test_panelizer`, `test_gerberpreview`) take `-platform offscreen`;
+      the Boost.Test suites do NOT (that flag makes Boost.Test print its usage) —
+      run those with `QT_QPA_PLATFORM=offscreen ./test_x/test_x` instead. Boost.Test
+      prints `*** No errors detected`; QtTest prints `Totals: N passed, 0 failed`.
+      Result: test_panelizer 6/0, test_gerberpreview 8/0, and test_svg (5 cases),
+      test_textutils, test_gerber, test_svg2gerber, test_ngspice_simulator,
+      test_project_properties, test_breadboard_routing_score,
+      test_breadboard_route_graph all exit 0 / no errors.
+
+---
+
+## 2026-10-28 — Session 10 (post-feature fixes from your testing)
+
+Three fixes off the back of your interactive testing:
+
+1. **Boost 1.54 claim was WRONG (corrected).** Installed Boost is **1.91.0**
+   (`BOOST_VERSION 109100`) — the "1.54" string is just the hard-coded text in
+   `pri/boostdetect.pri`'s failure branch, not a real 1.54 install. The earlier "I
+   can't run the suites" note was also wrong: they build and pass fine once the test
+   tree is configured correctly with `boost_root=/usr` (that's why a bare
+   `qmake6 auto.pro` misfires). Everything is green — see the "Automated suites"
+   bullet above. No source change was needed for this; it was my build-invocation
+   error, not an environment gap.
+
+2. **Close-without-editing no longer prompts to save (fixed).** Root cause:
+   `clearCurrentSketchContent()` → `deleteAll()` pushes an undoable "Delete" command
+   onto `m_undoStack`, so `anyModified()`/`isWindowModified()` returned true even
+   though you never edited the file — a plain open+close flagged it dirty. Fix: both
+   reuse branches (`mainLoadAux`, `openRecentOrExampleFile`) now call
+   `m_undoStack->clear()` right after `loadWhich` so a freshly-loaded (reused) window
+   starts clean, exactly like a normal new-window load (whose load path pushes no
+   undo commands).
+
+3. **"Purge all recents" now confirms first (fixed).** `MainWindow::purgeRecentFiles()`
+   now pops a `FMessageBox::warning` — "Are you sure you want to remove all recent
+   files?" (Yes/No, default No) — and aborts unless you click Yes. Previously it
+   purged silently.
+
+**Validation (live, confirmed by user):** opens/closes without a save prompt;
+modifying the PCB *does* flag save; Purge shows the Yes/No confirm (Yes clears, No
+does nothing). Main app rebuilds clean; offscreen smoke clean. Full automated suite
+re-run on the post-fix tree, **all 10 green**: test_panelizer 6/0,
+test_gerberpreview 8/0, and test_svg / test_textutils / test_gerber / test_svg2gerber /
+test_ngspice_simulator / test_project_properties / test_breadboard_routing_score /
+test_breadboard_route_graph all exit 0 / "No errors detected".
+
+**STATUS: feature arc + all follow-up fixes verified end-to-end; ready to push.**
+
+---
+
 ## 2026-05-31 — Session 8e (notification rollover + Qt 6 roadmap)
+
 
 **Done:**
 

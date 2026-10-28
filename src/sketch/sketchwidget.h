@@ -135,6 +135,7 @@ public:
 	void flattenCurve(ItemBase * lastHoverEnterItem, ConnectorItem * lastHoverEnterConnectorItem, QPointF lastLocation);
 
 	void deleteSelected(Wire *, bool minus);
+	void deleteAll();
 	PaletteItem *getSelectedPart();
 
 	void addViewLayer(ViewLayer *);

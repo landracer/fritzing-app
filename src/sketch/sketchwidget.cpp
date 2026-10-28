@@ -1121,6 +1121,37 @@ void SketchWidget::deleteSelected(Wire * wire, bool minus) {
 	m_undoStack->waitPush(parentCommand, PropChangeDelay);
 }
 
+void SketchWidget::deleteAll() {
+	// Remove every item currently in this view (and, via CrossView, across all views). Used when a
+	// file is opened into an already-realized (blank) window so the default placeholder board is
+	// replaced by the loaded sketch instead of being added alongside it.
+	checkMoved(false);
+
+	QSet<ItemBase *> deletedItems;
+	const QList<QGraphicsItem *> items = scene()->items();
+	Q_FOREACH (QGraphicsItem * item, items) {
+		auto * itemBase = dynamic_cast<ItemBase *>(item);
+		if (!itemBase) continue;
+		ItemBase * chief = itemBase->layerKinChief();
+		if (!chief) continue;
+		if (chief->superpart()) {
+			deletedItems.insert(chief->superpart());
+			Q_FOREACH (ItemBase * sub, chief->superpart()->subparts()) deletedItems.insert(sub);
+		} else if (chief->subparts().count() > 0) {
+			deletedItems.insert(chief);
+			Q_FOREACH (ItemBase * sub, chief->subparts()) deletedItems.insert(sub);
+		} else {
+			deletedItems.insert(chief);
+		}
+	}
+
+	if (deletedItems.count() <= 0) return;
+
+	scene()->clearSelection();
+	auto * parentCommand = new QUndoCommand(tr("Delete"));
+	deleteAux(deletedItems, parentCommand, true);
+}
+
 void SketchWidget::cutDeleteAux(QString undoStackMessage, bool minus, Wire * wire) {
 
 	//DebugDialog::debug("before delete");

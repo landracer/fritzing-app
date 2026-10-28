@@ -10,7 +10,7 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
 Fritzing is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty ofswap
+but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
@@ -31,6 +31,17 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../debugdialog.h"
 #include "../utils/textutils.h"
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLE SOURCE OF TRUTH for the user-visible version label.
+// To ship a new version, change ONLY this one line. Everything user-visible
+// (splash banner, About box, Bill of Materials export) renders
+// Version::versionString(), which returns this. The numeric major/minor/sub
+// fields below are NOT for display; they are only used internally to parse the
+// version baked into existing .fzz/.fzp files for backward-compatibility checks
+// (see modelbase.cpp, fzpinfo.cpp, pcbsketchwidget.cpp).
+// ─────────────────────────────────────────────────────────────────────────────
+static const char *const FORK_VERSION_LABEL = "LANDRACER's-BETA-IHv01";
 
 QString Version::m_majorVersion("1");
 QString Version::m_minorVersion("0");
@@ -63,7 +74,9 @@ Version::Version() {
 		}
 	}
 
-    m_versionString = QString("%1.%2.%3%4.%5.%6").arg(m_majorVersion).arg(m_minorVersion).arg(m_minorSubVersion).arg(m_modifier).arg(m_date).arg(m_gitVersion);
+    // The user-visible version label comes from the single FORK_VERSION_LABEL
+    // constant above. Bumping the version = edit that one line.
+    m_versionString = QString::fromUtf8(FORK_VERSION_LABEL);
 }
 
 const QString & Version::majorVersion() {

@@ -19,6 +19,11 @@ State-of-record at the time of writing:
 - **Feature line:** `feature/qt6-modern-fixed` was promoted (fast-forward) into **`develop`** —
   the canonical line. It carries the Qt-6 float, the **panelizer** wizard + engine, the opt-in
   **Gerber preview**, and a fully green test suite.
+- **Welcome landing page (newest):** the app now opens on a Welcome tab (`src/sketch/welcomeview.*`)
+  — recents list on the left, a live SVG-rendered **board preview** + gerber-production status on the
+  right, and recents housekeeping (Remove / Purge-all). Opening a file loads into the *current* blank
+  window (second file → new window). Full arc + learnings: `docs/internal/panelizer-progress.md`,
+  Session 9.
 - **Tests:** all 8 suites build and pass on Qt 6.11.2 (see §5).
 
 ## 2. How the project is laid out
@@ -30,7 +35,7 @@ Top-level:
   sketch, connectors, …) plus dependency-detection files (`quazipdetect.pri`, `boostdetect.pri`,
   `svgppdetect.pri`, `libgit2detect.pri`, `openssl3.pri`, `spicedetect.pri`, `clipper1detect.pri`).
 - `src/` — application logic. Subsystem dirs mirror `pri/*.pri`:
-  `src/autoroute` (panelizer), `src/gerberpreview`, `src/svg`, `src/simulation`, `src/items`,
+  `src/autoroute` (PCB autorouter + the ported breadboard autorouter: `breadboard*.cpp`), `src/gerberpreview`, `src/svg`, `src/simulation`, `src/items`,
   `src/model`, `src/mainwindow`, `src/sketch`, `src/dialogs`, `src/referencemodel`,
   `src/partseditor`, `src/eagle`, `src/ipc`, `src/program`, `src/utils`, …
 - `parts/` — the part library (metadata `.fzp` + `.svg`). **An embedded git repository** (not a
@@ -43,6 +48,8 @@ Top-level:
   - `docs/internal/issue-triage-log.md` — newest-first log of upstream issues we investigated and **shot
     down** (closed as FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION), with root cause
     + evidence. Read this before assuming a reported issue is a real bug.
+  - `docs/internal/feature-backlog.md` — decision-grade triage of deferred upstream feature PRs (what we
+    landed vs ditched, and why).
 
 ## 3. Build & run (out-of-tree, always)
 
@@ -53,9 +60,9 @@ make -j"$(nproc)"
 ./Fritzing
 ```
 
-Runtime libs that must be present: Qt 6 (base/svg/serialport/5compat/tools), QuaZip-Qt6, Boost,
-libgit2, OpenSSL 3, **ngspice shared lib** (searched in standard dirs like `/usr/lib64`), svgpp.
-See `INSTALL.txt` for the distro package list.
+Runtime libs that must be present: Qt 6 (base/svg/serialport/5compat/tools), QuaZip-Qt6, Boost, libgit2,
+OpenSSL 3, **ngspice shared lib** (searched in standard dirs like `/usr/lib64`, `/usr/lib`), svgpp. See
+`README.md` (per-distro: Ubuntu/Debian, Fedora/RHEL, macOS, Windows) and `INSTALL.txt` for the package list.
 
 ## 4. Conventions on this fork (follow these)
 
@@ -78,15 +85,19 @@ See `INSTALL.txt` for the distro package list.
 
 ```sh
 mkdir build-tests && cd build-tests
-qmake6 ../tests/auto/auto.pro
+qmake6 -o Makefile ../tests/auto/auto.pro boost_root=/usr
 make -j"$(nproc)"
+# Boost suites:
 ./test_svg/test_svg
 ./test_textutils/test_textutils
-./test_gerber/test_gerber              # both legacy + improved gerber goldens
+./test_gerber/test_gerber
 ./test_svg2gerber/test_svg2gerber
 ./test_ngspice_simulator/test_ngspice_simulator
 ./test_project_properties/test_project_properties
-./test_panelizer/test_panelizer        -platform offscreen
+./test_breadboard_routing_score/test_breadboard_routing_score
+./test_breadboard_route_graph/test_breadboard_route_graph
+# QtTest suites (headless):
+./test_panelizer/test_panelizer         -platform offscreen
 ./test_gerberpreview/test_gerberpreview -platform offscreen
 ```
 

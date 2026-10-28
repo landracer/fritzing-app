@@ -46,25 +46,18 @@ static const QList<ViewImage *> EmptyViewImages;
 ////////////////////////////////////////
 
 ModelPart::ModelPart(ItemType type)
-	: QObject()
+	: QObject(),
+	m_type(type),
+	m_index(m_nextIndex++)
 {
-	commonInit(type);
-	m_modelPartShared = nullptr;
-	m_index = m_nextIndex++;
 }
 
 ModelPart::ModelPart(QDomDocument & domDocument, const QString & path, ItemType type)
-	: QObject()
+	: QObject(),
+	m_type(type),
+	m_modelPartShared(new ModelPartShared(domDocument, path))
 {
-	commonInit(type);
-	m_modelPartShared = new ModelPartShared(domDocument, path);
 	m_modelPartShared->addOwner(this);
-}
-
-void ModelPart::commonInit(ItemType type) {
-	m_type = type;
-	m_locationFlags = QFlags<LocationFlag>();
-	m_indexSynched = false;
 }
 
 ModelPart::~ModelPart() {

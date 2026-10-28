@@ -117,19 +117,11 @@ QByteArray FSvgRenderer::loadSvg(const QByteArray & contents, const LoadInfo & l
 QByteArray FSvgRenderer::loadAux(const QByteArray & theContents, const LoadInfo & loadInfo)
 {
 	QByteArray cleanContents(theContents);
-	bool cleaned = false;
 
-	QString string(cleanContents);
-	if (TextUtils::fixMuch(string, false)) {
-		cleaned = true;
-	}
-	if (TextUtils::fixPixelDimensionsIn(string)) {
-		cleaned = true;
-	}
-	if (cleaned) {
-		cleanContents = string.toUtf8();
-	}
-
+	// parse the SVG into a DOM once and clean it in place. this must happen for every
+	// svg (regardless of whether it has connectors or a color override), otherwise parts
+	// without connectors (and boards/logos) skip unit/viewBox normalization and fail to
+	// render (e.g. the breadboard area renders blank).
 	QString errorStr;
 	int errorLine;
 	int errorColumn;
@@ -138,7 +130,8 @@ QByteArray FSvgRenderer::loadAux(const QByteArray & theContents, const LoadInfo 
 		DebugDialog::debug(QString("renderer loadAux failed %1 %2 %3 %4").arg(loadInfo.filename).arg(errorStr).arg(errorLine).arg(errorColumn));
 	}
 
-	bool resetContents = false;
+	QString string(cleanContents);
+	bool resetContents = TextUtils::fixMuchAndPixelDimensionsIn(string, doc, false);
 
 	QDomElement root = doc.documentElement();
 	if (!loadInfo.setColor.isEmpty()) {
@@ -161,21 +154,6 @@ QByteArray FSvgRenderer::loadAux(const QByteArray & theContents, const LoadInfo 
 	if (resetContents) {
 		cleanContents = TextUtils::removeXMLEntities(doc.toString()).toUtf8();
 	}
-
-
-	/*
-	cleanContents = doc.toByteArray();
-
-	//QFile file("all.txt");
-	//if (file.open(QIODevice::Append)) {
-		//QTextStream t(&file);
-		//t << cleanContents;
-		//file.close();
-	//}
-
-	*/
-
-	//DebugDialog::debug(cleanContents.data());
 
 	return finalLoad(cleanContents, loadInfo.filename);
 }

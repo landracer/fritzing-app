@@ -609,9 +609,6 @@ bool TextUtils::cleanSodipodi(QString &content)
 }
 
 bool TextUtils::fixPixelDimensionsIn(QString &fileContent) {
-	bool isIllustrator = isIllustratorFile(fileContent);
-	if (!isIllustrator) return false;
-
 	QDomDocument svgDom;
 
 	QString errorMsg;
@@ -621,17 +618,21 @@ bool TextUtils::fixPixelDimensionsIn(QString &fileContent) {
 		return false;
 	}
 
-	bool fileHasChanged = false;
-
-	if(isIllustrator) {
-		QDomElement elem = svgDom.firstChildElement("svg");
-		fileHasChanged = pxToInches(elem,"width",isIllustrator);
-		fileHasChanged |= pxToInches(elem,"height",isIllustrator);
-	}
+	bool fileHasChanged = fixPixelDimensionsIn(svgDom, isIllustratorDoc(svgDom));
 
 	if (fileHasChanged) {
 		fileContent = removeXMLEntities(svgDom.toString());
 	}
+
+	return fileHasChanged;
+}
+
+bool TextUtils::fixPixelDimensionsIn(QDomDocument &svgDom, bool isIllustrator) {
+	if (!isIllustrator) return false;
+
+	QDomElement elem = svgDom.firstChildElement("svg");
+	bool fileHasChanged = pxToInches(elem, "width", isIllustrator);
+	fileHasChanged |= pxToInches(elem, "height", isIllustrator);
 
 	return fileHasChanged;
 }
@@ -1095,8 +1096,45 @@ bool TextUtils::fixMuch(QString &svg, bool fixStrokeWidthFlag)
 		return result;
 	}
 
+	result |= fixMuch(svg, svgDom, fixStrokeWidthFlag);
+
+	if (result) {
+		svg = removeXMLEntities(svgDom.toString());
+	}
+
+	return result;
+}
+
+bool TextUtils::fixMuchAndPixelDimensionsIn(QString &svg, bool fixStrokeWidth) {
+	bool result = cleanSodipodi(svg);
+	result |= fixInternalUnits(svg);
+	QDomDocument svgDom;
+	QString errorMsg;
+	int errorLine;
+	int errorCol;
+	if(!svgDom.setContent(svg, true, &errorMsg, &errorLine, &errorCol)) {
+		return result;
+	}
+
+	result |= fixMuchAndPixelDimensionsIn(svg, svgDom, fixStrokeWidth);
+
+	if (result) {
+		svg = removeXMLEntities(svgDom.toString());
+	}
+
+	return result;
+}
+
+bool TextUtils::fixMuchAndPixelDimensionsIn(const QString &svg, QDomDocument &svgDom, bool fixStrokeWidth) {
+	bool result = fixMuch(svg, svgDom, fixStrokeWidth);
+	result |= fixPixelDimensionsIn(svgDom, isIllustratorDoc(svgDom));
+	return result;
+}
+
+bool TextUtils::fixMuch(const QString &svg, QDomDocument &svgDom, bool fixStrokeWidthFlag)
+{
 	QDomElement root = svgDom.documentElement();
-	result |= fixViewBox(root);
+	bool result = fixViewBox(root);
 
 	QStringList strings;
 	strings << "pattern" << "marker" << "clipPath";
@@ -1119,10 +1157,6 @@ bool TextUtils::fixMuch(QString &svg, bool fixStrokeWidthFlag)
 	}
 
 	result |= elevateTransform(root);
-
-	if (result) {
-		svg = removeXMLEntities(svgDom.toString());
-	}
 
 	return result;
 }
