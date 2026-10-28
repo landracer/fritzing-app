@@ -1874,6 +1874,9 @@ QRectF ItemBase::partLabelSceneBoundingRect() {
 
 bool ItemBase::getFlipDoc(ModelPart * modelPart, const QString & filename, ViewLayer::ViewLayerID viewLayerID, ViewLayer::ViewLayerPlacement viewLayerPlacement, QDomDocument & flipDoc, Qt::Orientations orientation)
 {
+	// No model part (e.g. a board mid-(re)load when the landing-page thumbnail is rendered) means
+	// there is no flip/copper state to apply; return null flipDoc so callers fall back to raw load.
+	if (modelPart == nullptr) return false;
 	if (!modelPart->flippedSMD()) {
 		// add copper1 layer to THT if it is missing
 		fixCopper1(modelPart, filename, viewLayerID, viewLayerPlacement, flipDoc);
