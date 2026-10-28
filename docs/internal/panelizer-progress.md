@@ -104,8 +104,48 @@ committed and the offscreen smoke test passes (runs 20s, no crash).
       Refresh re-renders, second file opens in a **new** window.
 - [ ] Undo of the "Open" action restores the blank session cleanly (`deleteAll` is
       on the undo stack -- confirm no stale connectors/wires linger).
-- [ ] The 8 automated suites (AGENTS.md §5) were not re-run this arc; run before
-      pushing to GitHub.
+- [x] Automated suites (AGENTS.md §5): the two **QtTest** suites pass headlessly —
+      `test_panelizer` (6/0), `test_gerberpreview` (8/0). The **Boost.Test** suites
+      (`test_svg`, `test_textutils`, `test_gerber`, `test_svg2gerber`,
+      `test_ngspice_simulator`, `test_project_properties`, `test_breadboard_*`)
+      **cannot link here** because the compiled `libboost_unit_test_framework` is
+      NOT installed (only `boost_headers-devel` + a few compiled libs are;
+      `rpm -qa | grep unit_test` is empty). Symptom: `undefined reference to
+      boost::unit_test::...` and `undefined reference to main` at link. NOT a code
+      regression — fix by installing Boost's unit_test framework lib, then rebuild.
+
+---
+
+## 2026-10-28 — Session 10 (post-feature fixes from your testing)
+
+Three fixes off the back of your interactive testing:
+
+1. **Boost 1.54 claim was WRONG (corrected).** Installed Boost is **1.91.0**
+   (`BOOST_VERSION 109100`). The `Project MESSAGE: Boost 1.54 has a bug...` line is
+   just the hard-coded string in `pri/boostdetect.pri`'s failure branch — not a real
+   1.54 install. Real reason the *test* tree didn't build: (a) the test `Makefile`
+   was configured without `boost_root=/usr`, and (b) even after fixing that, the
+   Boost.Test suites fail to LINK because `libboost_unit_test_framework` isn't
+   installed. The main app (`build/Fritzing`) builds fine against 1.91 via the
+   `config_boost`/system-headers path. To run the Boost.Test suites, install Boost's
+   unit_test framework and reconfigure `build-tests` with `boost_root=/usr`.
+
+2. **Close-without-editing no longer prompts to save (fixed).** Root cause:
+   `clearCurrentSketchContent()` → `deleteAll()` pushes an undoable "Delete" command
+   onto `m_undoStack`, so `anyModified()`/`isWindowModified()` returned true even
+   though you never edited the file — a plain open+close flagged it dirty. Fix: both
+   reuse branches (`mainLoadAux`, `openRecentOrExampleFile`) now call
+   `m_undoStack->clear()` right after `loadWhich` so a freshly-loaded (reused) window
+   starts clean, exactly like a normal new-window load (whose load path pushes no
+   undo commands).
+
+3. **"Purge all recents" now confirms first (fixed).** `MainWindow::purgeRecentFiles()`
+   now pops a `FMessageBox::warning` — "Are you sure you want to remove all recent
+   files?" (Yes/No, default No) — and aborts unless you click Yes. Previously it
+   purged silently.
+
+**Validation:** main app rebuilds clean (`APP_BUILD_EXIT=0`), offscreen smoke test
+clean; `test_panelizer` 6/0 and `test_gerberpreview` 8/0 green.
 
 ---
 

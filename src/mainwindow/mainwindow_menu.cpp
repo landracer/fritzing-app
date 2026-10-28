@@ -250,6 +250,10 @@ void MainWindow::mainLoadAux(const QString & fileName)
 	if (FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())) {
 		clearCurrentSketchContent();   // drop the blank session's placeholder board before loading
 		loadWhich(fileName, true, true, true, "");
+		// The reused window's placeholder-board removal pushed a (undoable) Delete command,
+		// which would otherwise mark the freshly-loaded sketch as modified and prompt to save
+		// on a no-op close. The load itself isn't undoable, so reset the stack to clean here.
+		m_undoStack->clear();
 		clearFileProgressDialog();
 		show();
 		activateWindow();
@@ -2717,6 +2721,9 @@ void MainWindow::openRecentOrExampleFile(const QString & filename, const QString
 		setReadOnly(readOnly);
 		clearCurrentSketchContent();   // drop the blank session's placeholder board before loading
 		loadWhich(filename, !readOnly, !readOnly, !readOnly, "");
+		// clearCurrentSketchContent's Delete command marks the doc modified; the load isn't
+		// undoable, so reset the stack so a no-op open/close doesn't prompt to save.
+		m_undoStack->clear();
 		clearFileProgressDialog();
 		return;
 	}

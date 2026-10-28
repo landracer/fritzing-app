@@ -3781,8 +3781,14 @@ void MainWindow::removeRecentFile(const QString & filename) {
 }
 
 void MainWindow::purgeRecentFiles() {
+	// Destructive (clears the whole recent list), so confirm first.
+	QMessageBox::StandardButton reply = FMessageBox::warning(
+	    this, tr("Fritzing"),
+	    tr("Are you sure you want to remove all recent files?"),
+	    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+	if (reply != QMessageBox::Yes) return;
+
 	QSettings settings;
-	// Silently clear the whole recent list (no confirm dialog), per housekeeping semantics.
 	settings.remove("recentFileList");
 	Q_FOREACH (QWidget *widget, QApplication::topLevelWidgets()) {
 		auto *mainWin = qobject_cast<MainWindow *>(widget);
