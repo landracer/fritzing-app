@@ -147,13 +147,24 @@ void WelcomeView::onRecentSelected() {
 
 void WelcomeView::setLoadedFile(const QString & fzzPath) {
 	m_loadedPath = fzzPath;
-	// If the currently-previewed sketch is (or is not) the loaded one, refresh button
-	// state must follow; re-evaluate it now that the loaded path is known.
-	if (!m_selectedPath.isEmpty()) {
-		const bool isLoaded = QFileInfo(m_selectedPath).absoluteFilePath()
-		                      == QFileInfo(m_loadedPath).absoluteFilePath();
-		if (m_refreshButton) m_refreshButton->setEnabled(isLoaded);
+	if (fzzPath.isEmpty()) return;
+
+	// A board can only be re-rendered ("Refresh preview") in the window that actually has
+	// it loaded. So when this window loads a sketch, automatically select its item in the
+	// recent list and show its preview, which also enables the refresh button for it. This
+	// is what makes refresh work without the user having to (or being able to) click it.
+	if (m_recentListWidget) {
+		const QString want = QFileInfo(fzzPath).absoluteFilePath();
+		for (int i = 0; i < m_recentListWidget->count(); ++i) {
+			QListWidgetItem * it = m_recentListWidget->item(i);
+			if (it && QFileInfo(it->data(Qt::UserRole).toString()).absoluteFilePath() == want) {
+				m_recentListWidget->setCurrentItem(it);   // triggers itemSelectionChanged -> showPreviewFor
+				return;
+			}
+		}
 	}
+	// Not on the (visible) recent list: still show it and enable refresh directly.
+	showPreviewFor(fzzPath);
 }
 
 void WelcomeView::showPreviewFor(const QString & fzzPath) {
