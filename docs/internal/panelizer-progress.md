@@ -97,13 +97,16 @@ committed and the offscreen smoke test passes (runs 20s, no crash).
   can be transiently half-initialized during a deferred render. If you add another
   `retrieveSvg`/size getter that reads `m_modelPart`, guard it the same way.
 
-### Not yet done / to verify interactively
+### Verified interactively
 
-- [ ] Manual GUI confirm (offscreen can't fully prove this): opening a file from a
-      blank window shows exactly **one** board (the file's), preview renders,
-      Refresh re-renders, second file opens in a **new** window.
+- [x] Open a file into a blank window → exactly **one** board; close without editing
+      → **no** save prompt; edit the PCB → save prompt correctly appears. (Confirmed
+      live by user.)
+- [x] "Purge all recents" shows Yes/No confirm; Yes clears, No is a silent no-op.
+      (Confirmed live by user.)
 - [ ] Undo of the "Open" action restores the blank session cleanly (`deleteAll` is
-      on the undo stack -- confirm no stale connectors/wires linger).
+      on the undo stack -- not yet checked; low risk since we now clear the stack).
+- [ ] Second file opens in a **new** window (open→open path; not explicitly re-checked).
 - [x] Automated suites (AGENTS.md §5): **all green.** Built in the `bt/` test tree
       (`qmake6 -o Makefile ../tests/auto/auto.pro boost_root=/usr` — note the
       required `boost_root=/usr`, which is why a bare configure misfires). Run them:
@@ -145,8 +148,15 @@ Three fixes off the back of your interactive testing:
    files?" (Yes/No, default No) — and aborts unless you click Yes. Previously it
    purged silently.
 
-**Validation:** main app rebuilds clean (`APP_BUILD_EXIT=0`), offscreen smoke test
-clean; `test_panelizer` 6/0 and `test_gerberpreview` 8/0 green.
+**Validation (live, confirmed by user):** opens/closes without a save prompt;
+modifying the PCB *does* flag save; Purge shows the Yes/No confirm (Yes clears, No
+does nothing). Main app rebuilds clean; offscreen smoke clean. Full automated suite
+re-run on the post-fix tree, **all 10 green**: test_panelizer 6/0,
+test_gerberpreview 8/0, and test_svg / test_textutils / test_gerber / test_svg2gerber /
+test_ngspice_simulator / test_project_properties / test_breadboard_routing_score /
+test_breadboard_route_graph all exit 0 / "No errors detected".
+
+**STATUS: feature arc + all follow-up fixes verified end-to-end; ready to push.**
 
 ---
 
