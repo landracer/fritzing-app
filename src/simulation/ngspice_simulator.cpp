@@ -118,6 +118,7 @@ void NgSpiceSimulator::init()
 				m_library.setFileName(library.canonicalFilePath());
 				m_library.load();
 				if (m_library.isLoaded()) {
+					DebugDialog::debug("Ngspice loaded from " + library.canonicalFilePath());
 					ngspiceDir = library.absolutePath();
 					break;
 				}
