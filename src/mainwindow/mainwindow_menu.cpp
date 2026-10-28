@@ -248,6 +248,7 @@ void MainWindow::mainLoadAux(const QString & fileName)
 	// Once this window already holds a real sketch, open the new file in a new window instead of
 	// merging it into the current board (there is no clean single-window board swap).
 	if (FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())) {
+		clearCurrentSketchContent();   // drop the blank session's placeholder board before loading
 		loadWhich(fileName, true, true, true, "");
 		clearFileProgressDialog();
 		show();
@@ -2714,6 +2715,7 @@ void MainWindow::openRecentOrExampleFile(const QString & filename, const QString
 	// (there is no clean single-window board swap, so we don't overwrite a loaded board).
 	if (FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())) {
 		setReadOnly(readOnly);
+		clearCurrentSketchContent();   // drop the blank session's placeholder board before loading
 		loadWhich(filename, !readOnly, !readOnly, !readOnly, "");
 		clearFileProgressDialog();
 		return;

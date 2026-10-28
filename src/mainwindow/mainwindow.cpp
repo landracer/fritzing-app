@@ -2908,6 +2908,15 @@ void MainWindow::addDefaultParts() {
 	m_schematicGraphicsView->addDefaultParts();
 }
 
+void MainWindow::clearCurrentSketchContent() {
+	// When reusing an already-realized (blank) window to open a file, the window's scenes still hold
+	// the startup placeholder board (added via addDefaultParts()). Clear it first so the loaded
+	// sketch replaces it rather than being added alongside it (which produced two overlapping boards).
+	if (m_breadboardGraphicsView) m_breadboardGraphicsView->deleteAll();
+	if (m_schematicGraphicsView) m_schematicGraphicsView->deleteAll();
+	if (m_pcbGraphicsView) m_pcbGraphicsView->deleteAll();
+}
+
 MainWindow * MainWindow::newMainWindow(ReferenceModel *referenceModel, const QString & displayPath, bool showProgress, bool lockFiles, int initialTab) {
 	auto * mw = new MainWindow(referenceModel, nullptr);
 	if (showProgress) {
