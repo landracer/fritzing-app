@@ -6,7 +6,111 @@
 
 ---
 
+## 2026-10-28 — Session 9 (Welcome landing page: live board preview + open-into-reused-window)
+
+This whole arc (commits `fc30078c`..`9cc5ef19`) is the landing-page / preview
+feature that was NOT in the log until now. It is the current tip of `develop`
+(branch `integration-test-6-7` at the time of writing). Everything below is
+committed and the offscreen smoke test passes (runs 20s, no crash).
+
+### What shipped
+
+1. **Board thumbnail decoupled from gerber metadata + live re-render.**
+   - The Welcome page right column shows a real board preview (rendered to SVG
+     -> `QPixmap`), not a widget `grab()`. `5dd48162` switched the thumbnail from
+     `grab()` (all-black) to SVG render; `0d5e4870` made the board thumbnail
+     independent of gerber status so *every* sketch previews on open.
+   - `0f321d30` deferred the thumbnail render to the event loop so it works on
+     the *first* open (the scene isn't fully realized synchronously yet).
+   - `691bda22`/`9f454a80` render the preview at the board's render DPR so it
+     stays crisp on HiDPI, and fixed blank/black preview on Refresh.
+   - "Refresh preview" re-renders the board live and therefore is enabled **only**
+     for the sketch actually loaded in *that* window's editor (`45494a95`,
+     auto-selected in `3a42ad54`). `m_loadedPath`/`setLoadedFile()` is the guard:
+     a refresh can never blank an unrelated/hidden board.
+   - Gerber production status (up-to-date vs stale) is a *separate* badge and
+     button (`Open in Gerber Viewer`), independent of the board preview.
+
+2. **Open-into-reused-window (no second blank window).**
+   - `6ff09f52`: the first file opened loads into the *current* (blank/untitled)
+     window; a second file opens in a *new* window. Removed the old
+     `closeIfEmptySketch` blank-session dance. Both entry points --
+     `MainWindow::mainLoadAux` and `MainWindow::openRecentOrExampleFile` -- gate on
+     `FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())`.
+
+<!-- session9-part2 -->
+
+3. **SIGSEGV during deferred thumbnail render (two guards).** Root cause: on a
+   *reused* window the default placeholder board can be mid-reload with a null
+   `m_modelPart` when the deferred `refreshThumbnail` fires; the SVG/size getters
+   then dereferenced it via `localProp`/`flippedSMD`.
+   - `f13c86f8`: guard `ResizableBoard::retrieveSvg` and `ResizableBoard::getSizeMM`
+     against null `m_modelPart` (fall back to `Board::retrieveSvg`, return
+     `QSizeF()`).
+   - `cb89f80f`: guard the shared chokepoint `ItemBase::getFlipDoc` against a null
+     model part (both `ResizableBoard::retrieveSvg` and the `Board::retrieveSvg`
+     fallback reach it).
+
+4. **"Double board" when opening into a reused window.** `ModelBase::loadFromFile`
+   *appends* to the model/scene, so the loaded sketch was added alongside the
+   startup placeholder board (two overlapping boards).
+   - `637f78ba`: `SketchWidget::deleteAll()` collects every `ItemBase`
+     layer-kin-chief (expanding superparts/subparts) and removes them through the
+     app's cross-view undo-capable `deleteAux` machinery.
+     `MainWindow::clearCurrentSketchContent()` calls `deleteAll()` on all three
+     views (breadboard/schematic/pcb) and is invoked *before* `loadWhich` in both
+     reuse branches. Because `deleteAll` pushes onto the undo stack, the "Open" is
+     undoable (restores the blank state).
+
+5. **Recents housekeeping (`9cc5ef19`).**
+   - `WelcomeView` gained two buttons in the preview button row:
+     - **Remove from recents** (enabled only for a real selection) ->
+       `removeFromRecent(path)` signal.
+     - **Purge all recents** (silent, no confirm dialog) -> `purgeRecents()` signal.
+   - `MainWindow::removeRecentFile(filename)` removes every entry in the
+     `recentFileList` `QSettings` key matching the **absolute** path;
+     `MainWindow::purgeRecentFiles()` calls `settings.remove("recentFileList")`.
+     Both then call `updateWelcomeViewRecentList(false)` + `updateRecentFileActions()`
+     on *every* top-level `MainWindow`, so the welcome list and the File->Open
+     Recent menu stay in sync across windows.
+   - `WelcomeView::updateRecent()` re-reads `recentFileList`, rebuilds the list,
+     and drops the preview (`clearPreview()`) when the currently-previewed sketch
+     is no longer listed -- *unless* it is the file loaded in that window's editor
+     (`m_loadedPath`), whose live preview must stay. `clearPreview()` resets the
+     name/image/status and disables Open/Gerber/Refresh/Remove.
+   - **Contract:** these are *purely* recents/settings edits. They never delete a
+     `.fzz`, never touch an open editor window, and never write board content.
+
+### Learnings worth carrying forward
+
+- **`recentFileList` (QSettings) is the single source of truth** for both the
+  welcome list (`WelcomeView::updateRecent`) and the Open Recent menu
+  (`MainWindow::updateRecentFileActions`). Change the key -> call both refreshers
+  across all windows (they iterate `QApplication::topLevelWidgets()` and
+  `qobject_cast<MainWindow*>`).
+- `updateRecent()` **skips non-existent files** on read, so a recents entry whose
+  `.fzz` was moved/deleted silently disappears from the UI (housekeeping is partly
+  self-healing).
+- `SketchWidget::deleteAll()` is undoable by design (routes through `deleteAux` +
+  `QUndoCommand`) -- do not "optimize" it into a raw `scene()->clear()`.
+- The null-`m_modelPart` guards exist because a *reused* window's placeholder board
+  can be transiently half-initialized during a deferred render. If you add another
+  `retrieveSvg`/size getter that reads `m_modelPart`, guard it the same way.
+
+### Not yet done / to verify interactively
+
+- [ ] Manual GUI confirm (offscreen can't fully prove this): opening a file from a
+      blank window shows exactly **one** board (the file's), preview renders,
+      Refresh re-renders, second file opens in a **new** window.
+- [ ] Undo of the "Open" action restores the blank session cleanly (`deleteAll` is
+      on the undo stack -- confirm no stale connectors/wires linger).
+- [ ] The 8 automated suites (AGENTS.md §5) were not re-run this arc; run before
+      pushing to GitHub.
+
+---
+
 ## 2026-05-31 — Session 8e (notification rollover + Qt 6 roadmap)
+
 
 **Done:**
 

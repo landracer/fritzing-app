@@ -19,6 +19,11 @@ State-of-record at the time of writing:
 - **Feature line:** `feature/qt6-modern-fixed` was promoted (fast-forward) into **`develop`** —
   the canonical line. It carries the Qt-6 float, the **panelizer** wizard + engine, the opt-in
   **Gerber preview**, and a fully green test suite.
+- **Welcome landing page (newest):** the app now opens on a Welcome tab (`src/sketch/welcomeview.*`)
+  — recents list on the left, a live SVG-rendered **board preview** + gerber-production status on the
+  right, and recents housekeeping (Remove / Purge-all). Opening a file loads into the *current* blank
+  window (second file → new window). Full arc + learnings: `docs/internal/panelizer-progress.md`,
+  Session 9.
 - **Tests:** all 8 suites build and pass on Qt 6.11.2 (see §5).
 
 ## 2. How the project is laid out
