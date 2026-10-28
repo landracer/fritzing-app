@@ -104,15 +104,17 @@ committed and the offscreen smoke test passes (runs 20s, no crash).
       Refresh re-renders, second file opens in a **new** window.
 - [ ] Undo of the "Open" action restores the blank session cleanly (`deleteAll` is
       on the undo stack -- confirm no stale connectors/wires linger).
-- [x] Automated suites (AGENTS.md §5): the two **QtTest** suites pass headlessly —
-      `test_panelizer` (6/0), `test_gerberpreview` (8/0). The **Boost.Test** suites
-      (`test_svg`, `test_textutils`, `test_gerber`, `test_svg2gerber`,
-      `test_ngspice_simulator`, `test_project_properties`, `test_breadboard_*`)
-      **cannot link here** because the compiled `libboost_unit_test_framework` is
-      NOT installed (only `boost_headers-devel` + a few compiled libs are;
-      `rpm -qa | grep unit_test` is empty). Symptom: `undefined reference to
-      boost::unit_test::...` and `undefined reference to main` at link. NOT a code
-      regression — fix by installing Boost's unit_test framework lib, then rebuild.
+- [x] Automated suites (AGENTS.md §5): **all green.** Built in the `bt/` test tree
+      (`qmake6 -o Makefile ../tests/auto/auto.pro boost_root=/usr` — note the
+      required `boost_root=/usr`, which is why a bare configure misfires). Run them:
+      QtTest (`test_panelizer`, `test_gerberpreview`) take `-platform offscreen`;
+      the Boost.Test suites do NOT (that flag makes Boost.Test print its usage) —
+      run those with `QT_QPA_PLATFORM=offscreen ./test_x/test_x` instead. Boost.Test
+      prints `*** No errors detected`; QtTest prints `Totals: N passed, 0 failed`.
+      Result: test_panelizer 6/0, test_gerberpreview 8/0, and test_svg (5 cases),
+      test_textutils, test_gerber, test_svg2gerber, test_ngspice_simulator,
+      test_project_properties, test_breadboard_routing_score,
+      test_breadboard_route_graph all exit 0 / no errors.
 
 ---
 
@@ -121,14 +123,13 @@ committed and the offscreen smoke test passes (runs 20s, no crash).
 Three fixes off the back of your interactive testing:
 
 1. **Boost 1.54 claim was WRONG (corrected).** Installed Boost is **1.91.0**
-   (`BOOST_VERSION 109100`). The `Project MESSAGE: Boost 1.54 has a bug...` line is
-   just the hard-coded string in `pri/boostdetect.pri`'s failure branch — not a real
-   1.54 install. Real reason the *test* tree didn't build: (a) the test `Makefile`
-   was configured without `boost_root=/usr`, and (b) even after fixing that, the
-   Boost.Test suites fail to LINK because `libboost_unit_test_framework` isn't
-   installed. The main app (`build/Fritzing`) builds fine against 1.91 via the
-   `config_boost`/system-headers path. To run the Boost.Test suites, install Boost's
-   unit_test framework and reconfigure `build-tests` with `boost_root=/usr`.
+   (`BOOST_VERSION 109100`) — the "1.54" string is just the hard-coded text in
+   `pri/boostdetect.pri`'s failure branch, not a real 1.54 install. The earlier "I
+   can't run the suites" note was also wrong: they build and pass fine once the test
+   tree is configured correctly with `boost_root=/usr` (that's why a bare
+   `qmake6 auto.pro` misfires). Everything is green — see the "Automated suites"
+   bullet above. No source change was needed for this; it was my build-invocation
+   error, not an environment gap.
 
 2. **Close-without-editing no longer prompts to save (fixed).** Root cause:
    `clearCurrentSketchContent()` → `deleteAll()` pushes an undoable "Delete" command
