@@ -79,6 +79,8 @@ public:
 	// Only that sketch can be re-rendered ("Refresh preview") without opening it, so the
 	// refresh button is enabled only when the selected item matches this path.
 	void setLoadedFile(const QString & fzzPath);
+	// Reset the preview panel to its empty state (used after a sketch is removed from recents).
+	void clearPreview();
 
 	Q_SIGNALS:
 	void newSketch();
@@ -86,12 +88,18 @@ public:
 	void recentSketch(const QString & filename, const QString & actionText);
 	void openInGerberViewer(const QString & gerberDir, const QString & title);
 	void refreshRequested(const QString & fzzPath);
+	// Housekeeping: drop one sketch from the recent list (and its preview), or clear the whole list.
+	// Purely a recents/settings cleanup; never touches the saved .fzz file itself.
+	void removeFromRecent(const QString & fzzPath);
+	void purgeRecents();
 
 protected Q_SLOTS:
 	void onRecentSelected();
 	void onOpenClicked();
 	void onOpenGerberClicked();
 	void onRefreshClicked();
+	void onRemoveFromRecentClicked();
+	void onPurgeRecentsClicked();
 
 protected:
 	void initLayout();
@@ -103,6 +111,8 @@ protected:
 	QPushButton * m_openButton       = nullptr;
 	QPushButton * m_openGerberButton = nullptr;
 	QPushButton * m_refreshButton    = nullptr;   // regenerate the preview image
+	QPushButton * m_removeButton     = nullptr;   // remove the selected sketch from recents
+	QPushButton * m_purgeButton      = nullptr;   // clear the whole recent list
 	QString       m_selectedPath;                 // currently-previewed sketch
 	QString       m_loadedPath;                   // sketch actually loaded in this window's editor
 };

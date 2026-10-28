@@ -113,6 +113,20 @@ void WelcomeView::initLayout()
 	m_refreshButton->setEnabled(false);
 	connect(m_refreshButton, &QPushButton::clicked, this, &WelcomeView::onRefreshClicked);
 	btnRow->addWidget(m_refreshButton);
+
+	// Housekeeping: drop the selected sketch from the recent list (and its preview). Purely a
+	// recents/settings cleanup - the saved .fzz file itself is never touched.
+	m_removeButton = new QPushButton(tr("Remove from recents"));
+	m_removeButton->setEnabled(false);
+	m_removeButton->setStatusTip(tr("Remove the selected sketch from the recent list (does not delete the file)"));
+	connect(m_removeButton, &QPushButton::clicked, this, &WelcomeView::onRemoveFromRecentClicked);
+	btnRow->addWidget(m_removeButton);
+
+	// Clear the entire recent list in one click (silently; no confirm dialog).
+	m_purgeButton = new QPushButton(tr("Purge all recents"));
+	m_purgeButton->setStatusTip(tr("Clear the entire recent-sketches list (does not delete any files)"));
+	connect(m_purgeButton, &QPushButton::clicked, this, &WelcomeView::onPurgeRecentsClicked);
+	btnRow->addWidget(m_purgeButton);
 	rightLayout->addLayout(btnRow);
 
 	rightFrame->setLayout(rightLayout);
@@ -134,6 +148,23 @@ void WelcomeView::updateRecent() {
 	}
 	if (m_recentListWidget->count() == 0) {
 		new QListWidgetItem(tr("No recent sketches"), m_recentListWidget);
+	}
+	// If the sketch shown in the preview is no longer in the list (it was removed, or the list was
+	// purged), drop its stale preview - unless it's the sketch loaded in this window's editor, whose
+	// content is still live and should stay previewable.
+	if (!m_selectedPath.isEmpty()) {
+		const QString want = QFileInfo(m_selectedPath).absoluteFilePath();
+		const bool isLoaded = !m_loadedPath.isEmpty()
+		                   && want == QFileInfo(m_loadedPath).absoluteFilePath();
+		bool stillListed = false;
+		for (int i = 0; i < m_recentListWidget->count(); ++i) {
+			QListWidgetItem * it = m_recentListWidget->item(i);
+			if (it && QFileInfo(it->data(Qt::UserRole).toString()).absoluteFilePath() == want) {
+				stillListed = true;
+				break;
+			}
+		}
+		if (!isLoaded && !stillListed) clearPreview();
 	}
 }
 
@@ -211,6 +242,22 @@ void WelcomeView::showPreviewFor(const QString & fzzPath) {
 		if (m_openGerberButton) m_openGerberButton->setEnabled(true);
 	}
 	if (m_openButton) m_openButton->setEnabled(true);
+	// A real sketch is selected, so it can now be removed from the recent list.
+	if (m_removeButton) m_removeButton->setEnabled(true);
+}
+
+void WelcomeView::clearPreview() {
+	m_selectedPath.clear();
+	if (m_previewImage) {
+		m_previewImage->clear();
+		m_previewImage->setText(tr("(no preview)"));
+	}
+	if (m_previewName) m_previewName->setText(tr("Select a sketch to preview"));
+	if (m_previewStatus) m_previewStatus->clear();
+	if (m_openButton) m_openButton->setEnabled(false);
+	if (m_openGerberButton) m_openGerberButton->setEnabled(false);
+	if (m_refreshButton) m_refreshButton->setEnabled(false);
+	if (m_removeButton) m_removeButton->setEnabled(false);
 }
 
 void WelcomeView::onOpenClicked() {
@@ -230,4 +277,13 @@ void WelcomeView::onRefreshClicked() {
 	// Ask MainWindow to regenerate the board preview for the currently-loaded board.
 	// It re-shows the preview (via showPreviewFor) once the deferred render completes.
 	Q_EMIT refreshRequested(m_selectedPath);
+}
+
+void WelcomeView::onRemoveFromRecentClicked() {
+	if (m_selectedPath.isEmpty()) return;
+	Q_EMIT removeFromRecent(m_selectedPath);
+}
+
+void WelcomeView::onPurgeRecentsClicked() {
+	Q_EMIT purgeRecents();
 }

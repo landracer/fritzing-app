@@ -170,6 +170,7 @@ public:
 
 	void getPartsEditorNewAnd(ItemBase * fromItem);
 	void addDefaultParts();
+	void clearCurrentSketchContent();
 	void init(ReferenceModel *referenceModel, bool lockFiles);
 	void showFileProgressDialog(const QString & path);
 	void setFileProgressPath(const QString & path);
@@ -471,6 +472,10 @@ protected Q_SLOTS:
 	void setViewFromBelow();
 	void setViewFromAbove();
 	void updateWelcomeViewRecentList(bool doEmit = true);
+	// Housekeeping for the Welcome page's recent list. Both edit the "recentFileList" QSettings
+	// key only - they never touch (open, close, or delete) any sketch file or editor window.
+	void removeRecentFile(const QString & filename);
+	void purgeRecentFiles();
 	virtual void initZoom();
 	void onShareOnlineFinished();
 	void disableUndoAction();

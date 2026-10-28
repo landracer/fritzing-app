@@ -3723,6 +3723,8 @@ void MainWindow::initWelcomeView() {
 		// re-render that board's preview (refreshThumbnail always targets m_fwFilename).
 		refreshThumbnail(true);
 	});
+	connect(m_welcomeView, &WelcomeView::removeFromRecent, this, [this](const QString & f) { removeRecentFile(f); });
+	connect(m_welcomeView, &WelcomeView::purgeRecents, this, [this]() { purgeRecentFiles(); });
 	auto * sketchAreaWidget = new SketchAreaWidget(m_welcomeView, this, false, false);
 	addTab(sketchAreaWidget, ":/resources/images/icons/TabWidgetWelcomeActive_icon.png", tr("Welcome"), true);
 }
@@ -3751,6 +3753,42 @@ void MainWindow::updateWelcomeViewRecentList(bool doEmit) {
 					mainWin->updateWelcomeViewRecentList(false);
 				}
 			}
+		}
+	}
+}
+
+void MainWindow::removeRecentFile(const QString & filename) {
+	if (filename.isEmpty()) return;
+	QSettings settings;
+	QStringList files = settings.value("recentFileList").toStringList();
+	// Remove every entry that points to the same file, matching on absolute path so a differing
+	// relative/absolute spelling still matches. The .fzz on disk is left untouched.
+	const QString want = QFileInfo(filename).absoluteFilePath();
+	for (int i = files.size() - 1; i >= 0; --i) {
+		if (QFileInfo(files[i]).absoluteFilePath() == want) {
+			files.removeAt(i);
+		}
+	}
+	settings.setValue("recentFileList", files);
+	// Refresh every window's welcome list and recent-files menu to reflect the removal.
+	Q_FOREACH (QWidget *widget, QApplication::topLevelWidgets()) {
+		auto *mainWin = qobject_cast<MainWindow *>(widget);
+		if (mainWin != nullptr) {
+			mainWin->updateWelcomeViewRecentList(false);
+			mainWin->updateRecentFileActions();
+		}
+	}
+}
+
+void MainWindow::purgeRecentFiles() {
+	QSettings settings;
+	// Silently clear the whole recent list (no confirm dialog), per housekeeping semantics.
+	settings.remove("recentFileList");
+	Q_FOREACH (QWidget *widget, QApplication::topLevelWidgets()) {
+		auto *mainWin = qobject_cast<MainWindow *>(widget);
+		if (mainWin != nullptr) {
+			mainWin->updateWelcomeViewRecentList(false);
+			mainWin->updateRecentFileActions();
 		}
 	}
 }
