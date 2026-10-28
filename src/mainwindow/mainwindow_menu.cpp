@@ -128,24 +128,6 @@ GridSizeThing * GridSizeDialog::gridSizeThing() {
 
 /////////////////////////////////////////////////////////
 
-void MainWindow::closeIfEmptySketch(MainWindow* mw) {
-	int cascFactorX;
-	int cascFactorY;
-	// close empty sketch window if user opens from a file
-	if (FolderUtils::isEmptyFileName(mw->m_fwFilename, untitledFileName()) && mw->undoStackIsEmpty()) {
-		QTimer::singleShot(0, mw, SLOT(close()) );
-		cascFactorX = 0;
-		cascFactorY = 0;
-	} else {
-		cascFactorX = CascadeFactorX;
-		cascFactorY = CascadeFactorY;
-	}
-	mw->move(x()+cascFactorX,y()+cascFactorY);
-	mw->show();
-	mw->activateWindow();
-	mw->raise();
-}
-
 void MainWindow::mainLoad() {
 	QString path;
 	// if it's the first time load is called use Documents folder
@@ -262,10 +244,24 @@ void MainWindow::mainLoadAux(const QString & fileName)
 
 	file.close();
 
+	// Only reuse THIS window when it is still the blank/untitled session (the first file opened).
+	// Once this window already holds a real sketch, open the new file in a new window instead of
+	// merging it into the current board (there is no clean single-window board swap).
+	if (FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())) {
+		loadWhich(fileName, true, true, true, "");
+		clearFileProgressDialog();
+		show();
+		activateWindow();
+		raise();
+		return;
+	}
+
 	MainWindow* mw = newMainWindow(m_referenceModel, fileName, true, true, -1);
 	mw->loadWhich(fileName, true, true, true, "");
 	mw->clearFileProgressDialog();
-	closeIfEmptySketch(mw);
+	mw->show();
+	mw->activateWindow();
+	mw->raise();
 }
 
 void MainWindow::revert() {
@@ -2700,21 +2696,36 @@ void MainWindow::openRecentOrExampleFile() {
 }
 
 void MainWindow::openRecentOrExampleFile(const QString & filename, const QString & actionText) {
-	if (alreadyOpen(filename)) {
-		return;
-	}
-
 	if (!QFileInfo(filename).exists()) {
 		QMessageBox::warning(nullptr, tr("Fritzing"), tr("File '%1' not found").arg(filename));
 		return;
 	}
 
-	MainWindow* mw = newMainWindow(m_referenceModel, filename, true, true, -1);
+	// Don't open a second copy of a file that's already open somewhere.
+	if (alreadyOpen(filename)) {
+		return;
+	}
+
 	bool readOnly = m_openExampleActions.contains(actionText);
+
+	// Only reuse THIS window for the very first file (when it is still the blank/untitled
+	// session). That closes the "opening a file leaves a second blank window behind" problem.
+	// Once this window already holds a real sketch, a newly opened file goes to a new window
+	// (there is no clean single-window board swap, so we don't overwrite a loaded board).
+	if (FolderUtils::isEmptyFileName(m_fwFilename, untitledFileName())) {
+		setReadOnly(readOnly);
+		loadWhich(filename, !readOnly, !readOnly, !readOnly, "");
+		clearFileProgressDialog();
+		return;
+	}
+
+	MainWindow* mw = newMainWindow(m_referenceModel, filename, true, true, -1);
 	mw->setReadOnly(readOnly);
-	mw->loadWhich(filename, !readOnly,!readOnly,!readOnly, "");
+	mw->loadWhich(filename, !readOnly, !readOnly, !readOnly, "");
 	mw->clearFileProgressDialog();
-	closeIfEmptySketch(mw);
+	mw->show();
+	mw->activateWindow();
+	mw->raise();
 }
 
 void MainWindow::removeActionsStartingAt(QMenu * menu, int start) {

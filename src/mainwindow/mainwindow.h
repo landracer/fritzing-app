@@ -547,7 +547,6 @@ protected:
 	QString copyToSvgFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder);
 	ModelPart* copyToPartsFolder(const QFileInfo& file, bool addToAlien, const QString & prefixFolder, const QString &destFolder);
 
-	void closeIfEmptySketch(MainWindow* mw);
 	bool whatToDoWithAlienFiles();
 	void backupExistingFileIfExists(const QString &destFilePath);
 	void recoverBackupedFiles();
