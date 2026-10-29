@@ -24,7 +24,9 @@ HEADERS += \
     src/partsbinpalette/searchlineedit.h \
     src/partsbinpalette/binmanager/binmanager.h \
     src/partsbinpalette/binmanager/stacktabbar.h \
-    src/partsbinpalette/binmanager/stacktabwidget.h
+    src/partsbinpalette/binmanager/stacktabwidget.h \
+    src/partsbinpalette/FProbeBin.h \
+    src/partsbinpalette/FProbeSearch.h
 
 SOURCES +=  \
     src/partsbinpalette/partsbinpalettewidget.cpp \
@@ -38,4 +40,6 @@ SOURCES +=  \
     src/partsbinpalette/searchlineedit.cpp \
     src/partsbinpalette/binmanager/binmanager.cpp \
     src/partsbinpalette/binmanager/stacktabbar.cpp \
-    src/partsbinpalette/binmanager/stacktabwidget.cpp
+    src/partsbinpalette/binmanager/stacktabwidget.cpp \
+    src/partsbinpalette/FProbeBin.cpp \
+    src/partsbinpalette/FProbeSearch.cpp

@@ -24,6 +24,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSqlError>
 #include <QMessageBox>
 #include <QVector>
+#include <QSet>
 #include <QSqlResult>
 #include <QSqlDriver>
 #include <QDebug>
@@ -143,7 +144,7 @@ bool SqliteReferenceModel::loadAll(const QString & databaseName, bool fullLoad, 
 				message += FailurePartMessages.at(i);
 				message += ("\n");
 			}
-			message += "\n" + tr("and %1 other parts").arg(FailurePartMessages.count() - 4);
+			message += tr("\nand %1 other parts").arg(FailurePartMessages.count() - 4);
 		}
 		FMessageBox::warning(QApplication::activeWindow(), QObject::tr("Oops!"), message, QMessageBox::Ok);
 	}
@@ -160,7 +161,7 @@ bool SqliteReferenceModel::loadAll(const QString & databaseName, bool fullLoad, 
 				message += FailurePropertyMessages.at(i);
 				message += ("\n");
 			}
-			message += "\n" + tr("and %1 other properties").arg(FailurePropertyMessages.count() - 4);
+			message += tr("\nand %1 other properties").arg(FailurePropertyMessages.count() - 4);
 		}
 		FMessageBox::warning(QApplication::activeWindow(), QObject::tr("Oops!"), message, QMessageBox::Ok);
 	}
@@ -210,7 +211,8 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 	}
 
 	m_sha = "";
-	QSqlQuery  query = db.exec("SELECT sha FROM lastcommit where id=0");
+	QSqlQuery query(db);
+	query.exec("SELECT sha FROM lastcommit where id=0");
 	debugError(query.isActive(), query);
 	if (query.isActive()) {
 		if (query.next()) {
@@ -218,7 +220,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT COUNT(*) FROM parts");
+	query.exec("SELECT COUNT(*) FROM parts");
 	debugError(query.isActive(), query);
 	if (!query.isActive() || !query.next()) return false;
 
@@ -233,7 +235,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 	QVector<ModelPart *> parts(count + 1, NULL);
 	QVector<qulonglong > oldToNew(count + 1, 0);
 
-	query = db.exec("SELECT path, moduleID, id, family, version, replacedby, fritzingversion, author, title, label, date, description, spice, spicemodel, taxonomy, itemtype FROM parts");
+	query.exec("SELECT path, moduleID, id, family, version, replacedby, fritzingversion, author, title, label, date, description, spice, spicemodel, taxonomy, itemtype FROM parts");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) return false;
 
@@ -324,7 +326,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		oldToNew[dbid] = newid;
 	}
 
-	query = db.exec("SELECT viewid, image, layers, sticky, flipvertical, fliphorizontal, part_id FROM viewimages");
+	query.exec("SELECT viewid, image, layers, sticky, flipvertical, fliphorizontal, part_id FROM viewimages");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) return false;
 
@@ -345,7 +347,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT tag, part_id FROM tags");
+	query.exec("SELECT tag, part_id FROM tags");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) return false;
 
@@ -359,7 +361,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT name, value, part_id, show_in_label FROM properties");
+	query.exec("SELECT name, value, part_id, show_in_label FROM properties");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) return false;
 
@@ -385,7 +387,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT COUNT(*) FROM connectors");
+	query.exec("SELECT COUNT(*) FROM connectors");
 	debugError(query.isActive(), query);
 	if (!query.isActive() || !query.next()) return false;
 
@@ -394,7 +396,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 
 	QVector<Connector *> connectors(connectorCount + 1, NULL);
 
-	query = db.exec("SELECT id, connectorid, type, name, description, replacedby, part_id FROM connectors");
+	query.exec("SELECT id, connectorid, type, name, description, replacedby, part_id FROM connectors");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) {
 		killConnectors(connectors);
@@ -426,7 +428,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT view, layer, svgid, hybrid, terminalid, legid, connector_id FROM connectorlayers");
+	query.exec("SELECT view, layer, svgid, hybrid, terminalid, legid, connector_id FROM connectorlayers");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) {
 		killConnectors(connectors);
@@ -448,7 +450,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT COUNT(*) FROM buses");
+	query.exec("SELECT COUNT(*) FROM buses");
 	debugError(query.isActive(), query);
 	if (!query.isActive() || !query.next()) return false;
 
@@ -458,7 +460,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 	QVector<BusShared *> buses(busCount + 1, NULL);
 	QHash<BusShared *, qulonglong> busids;
 
-	query = db.exec("SELECT id, name, part_id FROM buses");
+	query.exec("SELECT id, name, part_id FROM buses");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) {
 		killConnectors(connectors);
@@ -482,7 +484,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT connectorid, bus_id FROM busmembers");
+	query.exec("SELECT connectorid, bus_id FROM busmembers");
 	debugError(query.isActive(), query);
 	if (!query.isActive()) {
 		killConnectors(connectors);
@@ -506,7 +508,7 @@ bool SqliteReferenceModel::loadFromDB(QSqlDatabase & keep_db, QSqlDatabase & db)
 		}
 	}
 
-	query = db.exec("SELECT subpart_id, part_id FROM schematic_subparts");
+	query.exec("SELECT subpart_id, part_id FROM schematic_subparts");
 	debugError(query.isActive(), query);
 	if (query.isActive()) {
 		while (query.next()) {
@@ -596,7 +598,7 @@ bool SqliteReferenceModel::createDatabase(const QString & databaseName, bool ful
 			DebugDialog::debug("SqliteReferenceModel::createParts failed.");
 		}
 
-		QSqlQuery query;
+		QSqlQuery query(m_database);
 		result = query.exec("CREATE TABLE lastcommit (\n"
 		                    "id INTEGER PRIMARY KEY NOT NULL,\n"
 		                    "sha TEXT NOT NULL"
@@ -1231,7 +1233,7 @@ QStringList SqliteReferenceModel::propValues(const QString &family, const QStrin
 	QSqlQuery query;
 	query.prepare(QString(
 	                  "SELECT %1 prop.value FROM properties prop JOIN parts PART ON part.id = prop.part_id \n"
-	                  "WHERE part.family = :family AND prop.name = :propName ORDER BY prop.value \n"
+	                  "WHERE part.family = :family AND prop.name = :propName AND (part.replacedby IS NULL OR part.replacedby = '') ORDER BY prop.value \n"
 	              ).arg(distinct ? " DISTINCT ":"")
 	             );
 	query.bindValue(":family",family.toLower().trimmed());
@@ -1247,6 +1249,33 @@ QStringList SqliteReferenceModel::propValues(const QString &family, const QStrin
 		m_swappingEnabled = false;
 	}
 
+	return retval;
+}
+
+// The de-duplicated set of every tag used across the parts library, sorted alphabetically.
+// Drives the autocomplete pool in the Parts Editor's tag field.
+//
+// NB: read from the in-memory ModelParts, not a "SELECT ... FROM tags". When the library is
+// loaded from the prebuilt parts.db (loadFromDB), parts/properties are copied into m_database
+// but tags are only attached to the ModelPart objects (setTag) -- the in-memory tags table is
+// never populated -- so querying it would return nothing. Tags are stored lower-cased.
+QStringList SqliteReferenceModel::allTags() {
+	QStringList retval;
+	QSet<QString> seen;     // case-insensitive de-dup
+
+	for (ModelPart * modelPart : m_partHash) {
+		if (modelPart == nullptr) continue;
+		Q_FOREACH (const QString & tag, modelPart->tags()) {
+			const QString trimmed = tag.trimmed();
+			if (trimmed.isEmpty()) continue;
+			const QString key = trimmed.toLower();
+			if (seen.contains(key)) continue;
+			seen.insert(key);
+			retval << trimmed;
+		}
+	}
+
+	retval.sort(Qt::CaseInsensitive);
 	return retval;
 }
 
@@ -1289,7 +1318,7 @@ QMultiHash<QString, QString> SqliteReferenceModel::allPropValues(const QString &
 	QSqlQuery query;
 	query.prepare(QString(
 	                  "SELECT value, moduleID FROM properties prop JOIN parts part ON part.id = prop.part_id \n"
-	                  "WHERE part.family = :family AND prop.name = :propName\n"
+	                  "WHERE part.family = :family AND prop.name = :propName AND (part.replacedby IS NULL OR part.replacedby = '')\n"
 	              )
 	             );
 	query.bindValue(":family",family.toLower().trimmed());
@@ -1374,13 +1403,14 @@ void SqliteReferenceModel::killParts()
 }
 
 bool SqliteReferenceModel::createProperties(QSqlDatabase & db) {
-	QSqlQuery query = db.exec("CREATE TABLE properties (\n"
-	                          "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ,\n"
-	                          "name TEXT NOT NULL,\n"
-	                          "value TEXT NOT NULL,\n"
-	                          "show_in_label INTEGER NOT NULL,\n"
-	                          "part_id INTEGER NOT NULL"
-	                          ")");
+	QSqlQuery query(db);
+	query.exec("CREATE TABLE properties (\n"
+	           "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL ,\n"
+	           "name TEXT NOT NULL,\n"
+	           "value TEXT NOT NULL,\n"
+	           "show_in_label INTEGER NOT NULL,\n"
+	           "part_id INTEGER NOT NULL"
+	           ")");
 	debugError(query.isActive(), query);
 	return query.isActive();
 }
@@ -1418,7 +1448,8 @@ bool SqliteReferenceModel::createParts(QSqlDatabase & db, bool fullLoad)
 							 ")")
 	                 .arg(extra);
 
-	QSqlQuery query = db.exec(string);
+	QSqlQuery query(db);
+	query.exec(string);
 	debugError(query.isActive(), query);
 	return query.isActive();
 }
@@ -1445,7 +1476,7 @@ bool SqliteReferenceModel::insertSubpart(ModelPartShared * mps, qulonglong id)
 void SqliteReferenceModel::createIndexes() {
 	// supposedly faster to add these after the data is inserted
 
-	QSqlQuery query;
+	QSqlQuery query(m_database);
 	bool result = query.exec("CREATE INDEX idx_viewimage_part_id ON viewimages (part_id ASC)");
 	debugError(result, query);
 	result = query.exec("CREATE INDEX idx_connector_part_id ON connectors (part_id ASC)");
@@ -1466,16 +1497,17 @@ void SqliteReferenceModel::createMoreIndexes(QSqlDatabase & db)
 {
 	// supposedly faster to add these after the data is inserted
 
-	QSqlQuery query = db.exec("CREATE INDEX idx_property_name ON properties (name ASC)");
+	QSqlQuery query(db);
+	query.exec("CREATE INDEX idx_property_name ON properties (name ASC)");
 	debugError(query.isActive(), query);
 
-	query = db.exec("CREATE INDEX idx_part_id ON parts (id ASC)");
+	query.exec("CREATE INDEX idx_part_id ON parts (id ASC)");
 	debugError(query.isActive(), query);
 
-	query = db.exec("CREATE INDEX idx_part_moduleID ON parts (moduleID ASC)");
+	query.exec("CREATE INDEX idx_part_moduleID ON parts (moduleID ASC)");
 	debugError(query.isActive(), query);
 
-	query = db.exec("CREATE INDEX idx_part_family ON parts (family ASC)");
+	query.exec("CREATE INDEX idx_part_family ON parts (family ASC)");
 	debugError(query.isActive(), query);
 }
 

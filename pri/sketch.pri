@@ -21,11 +21,13 @@ HEADERS += \
     src/sketch/schematicsketchwidget.h \
     src/sketch/sketchwidget.h \
     src/sketch/outlierhandler.h \
+    src/sketch/migrationhandler.h \
     src/sketch/welcomeview.h \
     src/sketch/sketchmeta.h \
     src/sketch/zoomablegraphicsview.h \
     src/sketch/subpartswapmanager.h \
 	src/sketch/swapthing.h \
+    src/sketch/FProbeScrollPosition.h \
 
 
 SOURCES += \
@@ -37,8 +39,10 @@ SOURCES += \
     src/sketch/schematicsketchwidget.cpp \
     src/sketch/sketchwidget.cpp \
     src/sketch/outlierhandler.cpp \
+    src/sketch/migrationhandler.cpp \
     src/sketch/welcomeview.cpp \
     src/sketch/sketchmeta.cpp \
     src/sketch/zoomablegraphicsview.cpp \
     src/sketch/subpartswapmanager.cpp \
 	src/sketch/swapthing.cpp \
+    src/sketch/FProbeScrollPosition.cpp \

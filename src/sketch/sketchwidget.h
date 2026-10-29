@@ -48,6 +48,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 class SubpartSwapManager;
 class OutlierHandler;
+class MigrationHandler;
 
 struct ItemCount {
 	int selCount;
@@ -85,6 +86,7 @@ public:
 
 	void pushCommand(QUndoCommand *, QObject * signalTarget);
 	class WaitPushUndoStack * undoStack();
+	MigrationHandler * migrationHandler();
 	virtual ItemBase * addItem(ModelPart *, ViewLayer::ViewLayerPlacement, BaseCommand::CrossViewType, const ViewGeometry &, long id, long modelIndex, AddDeleteItemCommand * originatingCommand);
 	ItemBase * addItemForCommand(const QString & moduleID, ViewLayer::ViewLayerPlacement, BaseCommand::CrossViewType, const ViewGeometry &, long id, long modelIndex, AddDeleteItemCommand * originatingCommand);
 	void deleteItemForCommand(long id, bool deleteModelPart, bool doEmit, bool later);
@@ -154,6 +156,8 @@ public:
 	QColor standardBackground();
 	void setItemMenu(QMenu*);
 	void setWireMenu(QMenu*);
+	void setPartLabelMenu(class PartLabelContextMenu*);
+	class PartLabelContextMenu * partLabelContextMenu() override;
 	virtual void changeConnection(long fromID,
 	                              const QString & fromConnectorID,
 	                              long toID, const QString & toConnectorID,
@@ -221,7 +225,7 @@ public:
 	QString renderToSVGForSVGExport(RenderThing &, QGraphicsItem * board, const LayerList &);
 
 	bool spaceBarIsPressed() noexcept;
-	bool shouldAlignToGrid() const;
+	bool shouldAlignToGrid() const override;
 	virtual long setUpSwap(SwapThing &, bool master);
 	void setUpSwapMiddle(SwapThing &, QString newModuleID, ItemBase * itemBase, long newID, bool master);
 	void setUpSwapFinal(SwapThing &, QString newModuleID, ItemBase * itemBase, long newID, bool master);
@@ -242,8 +246,10 @@ public:
 	long createWire(ConnectorItem * from, ConnectorItem * to, ViewGeometry::WireFlags, bool dontUpdate, BaseCommand::CrossViewType, QUndoCommand * parentCommand);
 	virtual void newWire(Wire *);
 	QList<ItemBase *> selectAllObsolete();
+	QList<ItemBase *> collectObsolete();
 	int selectAllMoveLock();
 	void setMoveLockForCommand(long id, bool lock);
+	void changeMoveLock(ItemBase * itemBase, bool moveLock);
 	bool partLabelsVisible();
 	void restorePartLabelForCommand(long itemID, QDomElement & element);
 	void loadLogoImage(ItemBase *, const QString & oldSvg, const QSizeF oldAspectRatio, const QString & oldFilename, const QString & newFilename, bool addName);
@@ -459,7 +465,7 @@ protected:
 	                                   bool updateInfoView, long modelIndex, bool addSubparts, QUndoCommand *parent);
 	int selectAllItems(QSet<ItemBase *> & itemBases, const QString & msg);
 	bool moveByArrow(double dx, double dy, QKeyEvent * , bool isRepeat = false);
-	double gridSizeInches();
+	double gridSizeInches() override;
 	virtual bool canAlignToTopLeft(ItemBase *);
 	virtual bool canAlignToCenter(ItemBase *);
 	virtual void findAlignmentAnchor(ItemBase * originatingItem, QHash<long, ItemBase *> & savedItems, QHash<Wire *, ConnectorItem *> & savedWires);
@@ -481,6 +487,7 @@ protected:
 	bool resizingBoardRelease();
 	void resizeBoard();
 	void resizeWithHandle(ItemBase * itemBase, double mmW, double mmH);
+	void flashLockedSelectedItems();
 	virtual bool acceptsTrace(const ViewGeometry &);
 	virtual ItemBase * placePartDroppedInOtherView(ModelPart *, ViewLayer::ViewLayerPlacement, const ViewGeometry & viewGeometry, long id, SketchWidget * dropOrigin);
 	void showPartLabelsAux(bool show, QList<ItemBase *> & itemBases);
@@ -557,6 +564,7 @@ Q_SIGNALS:
 	void setPropSignal(long itemID, const QString & prop, const QString & value, bool doRedraw, bool doEmit);
 	void setInstanceTitleSignal(long id, const QString & oldTitle, const QString & newTitle, bool isUndoable, bool doEmit);
 	void statusMessageSignal(QString, int timeout);
+	void statusHintSignal(QString);
 	void showLabelFirstTimeSignal(long itemID, bool show, bool doEmit);
 	void dropPasteSignal(SketchWidget *);
 	void changeBoardLayersSignal(int, bool doEmit);
@@ -607,6 +615,7 @@ protected Q_SLOTS:
 	void restartPasteCount();
 	void dragIsDoneSlot(class ItemDrag *);
 	void statusMessage(QString message, int timeout = 0);
+	void statusHint(QString message);
 	void cleanUpWiresSlot(CleanUpWiresCommand *);
 	void updateInfoViewSlot();
 	void spaceBarIsPressedSlot(bool);
@@ -645,6 +654,12 @@ public Q_SLOTS:
 	void setResistance(QString resistance, QString pinSpacing);
 	void setProp(long itemID, const QString & prop, const QString & value, bool redraw, bool doEmit);
 	virtual void setProp(ItemBase *, const QString & propName, const QString & translatedPropName, const QString & oldValue, const QString & newValue, bool redraw);
+	void setPropForSelection(const QString & prop, const QString & value);
+	int collectSelectedNetLabels(QList<class SymbolPaletteItem *> & netLabels);
+	int collectSelectedWires(QList<class Wire *> & wires);
+	int collectSelectedHoles(QList<class Hole *> & holes);
+	void setHoleSizeForSelection(const QString & diameter, const QString & ringThickness);
+	QStringList commonPropValues(const QString & prop);
 	void setHoleSize(ItemBase *, const QString & propName, const QString & translatedPropName, const QString & oldValue, const QString & newValue, QRectF & oldRect, QRectF & newRect, bool redraw);
 	virtual void showLabelFirstTimeForCommand(long itemID, bool show, bool doEmit);
 	void resizeBoard(double w, double h, bool doEmit);
@@ -668,6 +683,10 @@ protected:
 	QPointer<class ReferenceModel> m_referenceModel;
 	QPointer<SketchModel> m_sketchModel;
 	OutlierHandler* m_outlierHandler;
+	MigrationHandler* m_migrationHandler;
+	// Offset applied to a swapped-in part's position so its alignment connector lands on the old
+	// part's connector (set by checkFitAux for replacedby swaps; (0,0) otherwise).
+	QPointF m_swapAlignOffset;
 	ViewLayer::ViewID m_viewID;
 	class WaitPushUndoStack * m_undoStack = nullptr;
 	class SelectItemCommand * m_holdingSelectItemCommand = nullptr;
@@ -706,6 +725,7 @@ protected:
 	// Part Menu
 	QMenu *m_itemMenu = nullptr;
 	QMenu *m_wireMenu = nullptr;
+	class PartLabelContextMenu *m_partLabelMenu = nullptr;
 
 	bool m_infoViewOnHover;
 
@@ -728,6 +748,7 @@ protected:
 	bool m_dragCurve = false;
 	QPoint m_dragBendpointPos;
 	StatusConnectStatus m_statusConnectState = StatusConnectNotTried;
+	StatusConnectStatus m_hintConnectState = StatusConnectNotTried;
 	QList<QGraphicsItem *> m_inFocus;
 	QString m_viewName;
 	bool m_movingByArrow = false;
@@ -747,6 +768,17 @@ protected:
 	int m_autoScrollThreshold = 0;
 	bool m_clearSceneRect = false;
 	QPointer<ItemBase> m_moveReferenceItem;
+	// The item a Ctrl+left-click landed on and its selection state at press time, so the
+	// release handler can force the toggle outcome (!m_modifierClickWasSelected) no matter
+	// whether Qt's own toggle fired: Qt only toggles when the press and release scene
+	// positions are exactly equal, so a few pixels of drift during the click silently drops
+	// the toggle.
+	QPointer<ItemBase> m_modifierClickItem;
+	bool m_modifierClickWasSelected = false;
+	// The locked layerKinChief a left-press landed on (with no unlocked item beneath to take
+	// the press); its lock symbol is flashed on long-press or once a real drag starts.
+	QPointer<ItemBase> m_lockFlashCandidate;
+	QTimer m_lockLongPressTimer;
 	QPointer<QSvgRenderer> m_movingSVGRenderer;
 	QPointF m_movingSVGOffset;
 	QPointer<QGraphicsSvgItem> m_movingItem;

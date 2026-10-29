@@ -18,23 +18,34 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 ********************************************************************/
 
+#include <QApplication>
 #include <QBuffer>
+#include <QCache>
+#include <QKeyEvent>
 #include <QHBoxLayout>
 #include <QSettings>
 #include <QPalette>
 #include <QFontMetricsF>
 #include <QScrollBar>
+#include <QPainter>
+#include <QSvgRenderer>
+#include <QSignalBlocker>
 #include <qmath.h>
 
 #include "htmlinfoview.h"
 #include "scalediconframe.h"
 #include "../sketch/infographicsview.h"
+#include "../model/modelpart.h"
+#include "../items/symbolpaletteitem.h"
+#include "../items/hole.h"
+#include "../utils/familypropertycombobox.h"
 #include "../debugdialog.h"
 #include "../connectors/connector.h"
 #include "../utils/flineedit.h"
 #include "../utils/clickablelabel.h"
 #include "../utils/textutils.h"
 #include "utils/misc.h"
+#include "items/partfactory.h"
 
 
 
@@ -88,6 +99,7 @@ HtmlInfoView::HtmlInfoView(QWidget * parent) : QScrollArea(parent)
 	m_lastTitleItemBase = nullptr;
 	m_lastSpiceModelPart = nullptr;
 	m_lastTagsModelPart = nullptr;
+	m_lastRevisionsModelPart = nullptr;
 	m_lastConnectorItem = nullptr;
 	m_lastIconItemBase = nullptr;
 	m_lastPropsModelPart = nullptr;
@@ -103,6 +115,7 @@ HtmlInfoView::HtmlInfoView(QWidget * parent) : QScrollArea(parent)
 	m_connDescr = nullptr;
 	m_spiceTextLabel = nullptr;
 	m_tagsTextLabel = nullptr;
+	m_revisionsTextLabel = nullptr;
 	m_lastSwappingEnabled = false;
 	m_lastItemBase = nullptr;
 	m_setContentTimer.setSingleShot(true);
@@ -149,6 +162,8 @@ void HtmlInfoView::init(bool tinyMode) {
 
 	setInstanceTitleColors(m_titleEdit, QColor(0xaf, 0xaf, 0xb4), QColor(0x00, 0x00, 0x00)); //b3b3b3, 575757
 	m_titleEdit->setAutoFillBackground(true);
+	// don't let the title editor swallow undo/redo it can't use (see eventFilter)
+	m_titleEdit->installEventFilter(this);
 
 	vlo->addWidget(m_titleEdit);
 	if (tinyMode) m_titleEdit->setVisible(false);
@@ -254,6 +269,19 @@ void HtmlInfoView::init(bool tinyMode) {
 	versionLayout->addStretch(1);
 	versionFrame->setLayout(versionLayout);
 	vlo->addWidget(versionFrame);
+
+	// Revisions section (the part's <history> entries), styled like the Tags/SPICE sections.
+	m_revisionsLabel = new QLabel(tr("Revisions"), NULL);
+	m_revisionsLabel->setObjectName("expandableViewLabel");
+	m_revisionsLabel->setVisible(false);
+	vlo->addWidget(m_revisionsLabel);
+
+	m_revisionsTextLabel = new TagLabel(this);
+	m_revisionsTextLabel->setWordWrap(true);
+	m_revisionsTextLabel->setObjectName("tagsValue");
+	m_revisionsTextLabel->setOpenExternalLinks(false);
+	m_revisionsTextLabel->setVisible(false);
+	vlo->addWidget(m_revisionsTextLabel);
 
 	m_connLabel = new QLabel(tr("Connections"), nullptr);
 	m_connLabel->setObjectName("expandableViewLabel");
@@ -412,12 +440,116 @@ void HtmlInfoView::appendStuff(ItemBase* item, bool swappingEnabled) {
 	}
 }
 
+// ---- group-mode title summaries ----
+
+static QString groupNetLabelNames(const QList<SymbolPaletteItem *> & labels) {
+	// e.g. "2×VCC, GND" — collapse repeats into a multiplier, first-appearance order.
+	QStringList order;
+	QHash<QString, int> counts;
+	Q_FOREACH (SymbolPaletteItem * netLabel, labels) {
+		QString title = netLabel->getInspectorTitle();
+		if (!counts.contains(title)) order << title;
+		counts[title] += 1;
+	}
+	QStringList parts;
+	Q_FOREACH (const QString & title, order) {
+		int n = counts.value(title);
+		parts << (n > 1 ? QString("%1×%2").arg(n).arg(title) : title);
+	}
+	return parts.join(", ");
+}
+
+static QString groupHoleDiameters(const QList<Hole *> & holes) {
+	QString minStr, maxStr;
+	double minIn = 0, maxIn = 0;
+	bool first = true;
+	Q_FOREACH (Hole * hole, holes) {
+		QStringList dt = hole->holeSize().split(",");
+		if (dt.isEmpty()) continue;
+		bool ok;
+		double in = TextUtils::convertToInches(dt.at(0), &ok, false);
+		if (!ok) continue;
+		if (first || in < minIn) { minIn = in; minStr = dt.at(0); }
+		if (first || in > maxIn) { maxIn = in; maxStr = dt.at(0); }
+		first = false;
+	}
+	if (first) return QString();
+	return (minStr == maxStr) ? minStr : QString("%1 – %2").arg(minStr).arg(maxStr);
+}
+
+static QString groupWireWidths(const QList<Wire *> & wires) {
+	double minMils = 0, maxMils = 0;
+	bool first = true;
+	Q_FOREACH (Wire * wire, wires) {
+		double m = wire->mils();
+		if (first || m < minMils) minMils = m;
+		if (first || m > maxMils) maxMils = m;
+		first = false;
+	}
+	if (first) return QString();
+	if (qAbs(minMils - maxMils) < 0.01) {
+		return QObject::tr("%1 mil").arg(QString::number(qRound(minMils)));
+	}
+	return QObject::tr("%1 – %2 mil").arg(QString::number(qRound(minMils))).arg(QString::number(qRound(maxMils)));
+}
+
+static QString groupPartTitles(const QList<ItemBase *> & items) {
+	// The list of selected parts by their instance title, e.g. "R1, R2, R3, C1".
+	QStringList titles;
+	Q_FOREACH (ItemBase * ib, items) {
+		QString t = ib->instanceTitle();
+		if (t.isEmpty()) t = ib->title();
+		titles << t;
+	}
+	return titles.join(", ");
+}
+
+static QString groupPartTypeCounts(const QList<ItemBase *> & items) {
+	// Count by part family, e.g. "3×Resistor, 2×Capacitor" (first-appearance order).
+	QStringList order;
+	QHash<QString, int> counts;
+	Q_FOREACH (ItemBase * ib, items) {
+		QString fam = (ib->modelPart() != nullptr) ? ib->modelPart()->family() : QString();
+		if (fam.isEmpty()) fam = ib->title();
+		if (!counts.contains(fam)) order << fam;
+		counts[fam] += 1;
+	}
+	QStringList parts;
+	Q_FOREACH (const QString & fam, order) {
+		int n = counts.value(fam);
+		parts << (n > 1 ? QString("%1×%2").arg(n).arg(fam) : fam);
+	}
+	return parts.join(", ");
+}
+
+void HtmlInfoView::showGroupTitle(const QString & summary, const QString & countText) {
+	// Same-size, non-editable title (avoids the layout shift of hiding it). setUpTitle
+	// re-enables it when a single item is shown again.
+	m_titleEdit->setText(summary);
+	m_titleEdit->setEnabled(false);
+	m_titleEdit->setCursorPosition(0);
+	partTitle(countText, QString(), QString(), false);
+}
+
 void HtmlInfoView::appendWireStuff(Wire* wire, bool swappingEnabled) {
 	if (wire == nullptr) return;
 
 	ModelPart *modelPart = wire->modelPart();
 	if (modelPart == nullptr) return;
 	if (modelPart->modelPartShared() == nullptr) return;
+
+	// When several wires are selected, the inspector is in group mode: the shared width/
+	// color controls apply to all selected wires (already handled by changeWireColor/
+	// changeWireWidthMils), so here we just signpost it with an "N wires" title.
+	QList<Wire *> selectedWires;
+	bool wireGroup = false;
+	{
+		InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(wire);
+		if ((igv != nullptr) && igv->collectSelectedWires(selectedWires) > 1
+		        && selectedWires.contains(wire)) {
+			wireGroup = true;
+		}
+	}
 
 	QString autoroutable = wire->getAutoroutable() ? tr("(autoroutable)") : "";
 	QString nameString = tr("Wire");
@@ -432,7 +564,6 @@ void HtmlInfoView::appendWireStuff(Wire* wire, bool swappingEnabled) {
 	else {
 		nameString = modelPart->description();
 	}
-	partTitle(nameString, modelPart->version(), modelPart->url(), modelPart->isObsolete());
 	m_lockFrame->setVisible(false);
 	m_lockLabel->setVisible(false);
 	m_locationFrame->setVisible(false);
@@ -442,6 +573,15 @@ void HtmlInfoView::appendWireStuff(Wire* wire, bool swappingEnabled) {
 
 	setUpTitle(wire);
 	setUpIcons(wire, swappingEnabled);
+	m_titleEdit->setVisible(!m_tinyMode);
+
+	if (wireGroup) {
+		// Read-only title = min/max trace width; heading = selection count.
+		showGroupTitle(groupWireWidths(selectedWires), tr("%n wires", "", selectedWires.count()));
+	}
+	else {
+		partTitle(nameString, modelPart->version(), modelPart->url(), modelPart->isObsolete());
+	}
 
 	displayProps(modelPart, wire, swappingEnabled);
 
@@ -450,6 +590,7 @@ void HtmlInfoView::appendWireStuff(Wire* wire, bool swappingEnabled) {
 	m_placementLabel->setVisible(hasLayer);
 
 	addTags(modelPart);
+	addRevisions(modelPart);
 }
 
 void HtmlInfoView::appendItemStuff(ItemBase* base, bool swappingEnabled) {
@@ -463,17 +604,83 @@ void HtmlInfoView::appendItemStuff(ItemBase * itemBase, ModelPart * modelPart, b
 	if (modelPart == nullptr) return;
 	if (modelPart->modelPartShared() == nullptr) return;
 
+	// When several net labels are selected, the inspector is in group mode: the title field
+	// shows the (read-only) list of names and the heading shows the selection count.
+	QList<SymbolPaletteItem *> selectedNetLabels;
+	bool netLabelGroup = false;
+	{
+		auto * symbol = dynamic_cast<SymbolPaletteItem *>(itemBase);
+		if ((symbol != nullptr) && symbol->isOnlyNetLabel()) {
+			InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(itemBase);
+			if ((igv != nullptr) && igv->collectSelectedNetLabels(selectedNetLabels) > 1
+			        && selectedNetLabels.contains(symbol)) {
+				netLabelGroup = true;
+			}
+		}
+	}
+
+	// Likewise, several selected holes/vias form a group; the shared diameter/ring controls
+	// apply to all (handled in PaletteItem), so here we just show an "N holes" title.
+	QList<Hole *> selectedHoles;
+	bool holeGroup = false;
+	{
+		auto * hole = dynamic_cast<Hole *>(itemBase);
+		if (hole != nullptr) {
+			InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(itemBase);
+			if ((igv != nullptr) && igv->collectSelectedHoles(selectedHoles) > 1
+			        && selectedHoles.contains(hole)) {
+				holeGroup = true;
+			}
+		}
+	}
+
+	// Any other multi-selection of parts is a generic group: list the part titles in the
+	// (read-only) title field and a per-family count below the icons.
+	QList<ItemBase *> genericGroupItems;
+	bool genericGroup = false;
+	if (!netLabelGroup && !holeGroup) {
+		InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(itemBase);
+		if ((igv != nullptr) && (igv->scene() != nullptr)) {
+			Q_FOREACH (QGraphicsItem * gItem, igv->scene()->selectedItems()) {
+				auto * ib = dynamic_cast<ItemBase *>(gItem);
+				if (ib == nullptr) continue;
+				ItemBase * chief = ib->layerKinChief();
+				if (!genericGroupItems.contains(chief)) genericGroupItems.append(chief);
+			}
+		}
+		genericGroup = (itemBase != nullptr) && genericGroupItems.count() > 1
+		               && genericGroupItems.contains(itemBase->layerKinChief());
+	}
+
 	setUpTitle(itemBase);
 	setUpIcons(itemBase, swappingEnabled);
 
-	QString nameString;
-	if (swappingEnabled) {
-		nameString = (itemBase) != nullptr ? itemBase->getInspectorTitle() : modelPart->title();
+	m_titleEdit->setVisible(!m_tinyMode);
+
+	if (netLabelGroup) {
+		// Read-only title = the list of net names; heading = selection count.
+		showGroupTitle(groupNetLabelNames(selectedNetLabels),
+		               tr("%n net labels", "", selectedNetLabels.count()));
+	}
+	else if (holeGroup) {
+		// Read-only title = min/max diameter; heading = selection count.
+		showGroupTitle(groupHoleDiameters(selectedHoles),
+		               tr("%n holes", "", selectedHoles.count()));
+	}
+	else if (genericGroup) {
+		// Read-only title = list of selected parts; heading = per-family count.
+		showGroupTitle(groupPartTitles(genericGroupItems), groupPartTypeCounts(genericGroupItems));
 	}
 	else {
-		nameString = modelPart->description();
+		QString nameString;
+		if (swappingEnabled) {
+			nameString = (itemBase) != nullptr ? itemBase->getInspectorTitle() : modelPart->title();
+		}
+		else {
+			nameString = modelPart->description();
+		}
+		partTitle(nameString, modelPart->version(), modelPart->url(), modelPart->isObsolete());
 	}
-	partTitle(nameString, modelPart->version(), modelPart->url(), modelPart->isObsolete());
 	m_lockFrame->setVisible(swappingEnabled);
 	m_lockLabel->setVisible(swappingEnabled);
 	m_lockCheckbox->setChecked(itemBase->moveLock());
@@ -500,6 +707,7 @@ void HtmlInfoView::appendItemStuff(ItemBase * itemBase, ModelPart * modelPart, b
 	displayProps(modelPart, itemBase, swappingEnabled);
 	addSpice(modelPart);
 	addTags(modelPart);
+	addRevisions(modelPart);
 
 	m_placementLabel->setVisible(swappingEnabled);
 	m_placementFrame->setVisible(swappingEnabled);
@@ -509,14 +717,27 @@ void HtmlInfoView::appendItemStuff(ItemBase * itemBase, ModelPart * modelPart, b
 void HtmlInfoView::setContent()
 {
 	m_setContentTimer.stop();
-	//DebugDialog::debug(QString("start updating %1").arg(QTime::currentTime().toString("HH:mm:ss.zzz")));
+
+	// Refreshing the inspector can hide or (when a plugin widget is not reusable, see
+	// displayProps / ItemBase::collectExtraInfo) destroy the property widget that currently
+	// holds the keyboard focus — e.g. a combo or button the user just changed a value with.
+	// That leaves the application without a focus widget, so shortcuts like undo/redo are no
+	// longer delivered. Remember the inspector's focus so restoreFocusAfterRefresh can hand it
+	// back after the refresh. We only restore focus the inspector already had, so ordinary
+	// hover/selection refreshes never steal it from the sketch.
+	QWidget * focusWidget = QApplication::focusWidget();
+	bool hadFocus = isAncestorOf(focusWidget);
+	QPointer<QWidget> previouslyFocused = hadFocus ? focusWidget : nullptr;
+
 	if (m_pendingItemBase == nullptr) {
 		setNullContent();
 		m_setContentTimer.stop();
+		if (hadFocus) {
+			restoreFocusAfterRefresh(previouslyFocused);
+		}
 		return;
 	}
 
-	//DebugDialog::debug(QString("pending %1").arg(m_pendingItemBase->title()));
 	m_currentSwappingEnabled = m_pendingSwappingEnabled;
 
 	appendStuff(m_pendingItemBase, m_pendingSwappingEnabled);
@@ -532,8 +753,55 @@ void HtmlInfoView::setContent()
 	m_propFrame->setVisible(true);
 
 	m_setContentTimer.stop();
+
+	// See note at the top of this method.
+	if (hadFocus) {
+		restoreFocusAfterRefresh(previouslyFocused);
+	}
 	//DebugDialog::debug(QString("end   updating %1").arg(QTime::currentTime().toString("HH:mm:ss.zzz")));
 
+}
+
+void HtmlInfoView::restoreFocusAfterRefresh(QWidget * previouslyFocused)
+{
+	QWidget * focusWidget = QApplication::focusWidget();
+	if ((focusWidget != nullptr) && (focusWidget == previouslyFocused)) {
+		return;   // focus survived the refresh (reused plugin widget, see displayProps)
+	}
+
+	// Hiding the focused widget during the refresh handed the focus to an arbitrary next
+	// widget (or to nothing, if the widget was destroyed). Prefer giving it back to the
+	// widget that had it — a reused plugin survives the refresh. Fall back to the inspector
+	// itself, which at least keeps shortcuts like undo/redo working.
+	if ((previouslyFocused != nullptr) && previouslyFocused->isVisible() && isAncestorOf(previouslyFocused)) {
+		previouslyFocused->setFocus(Qt::OtherFocusReason);
+	}
+	else {
+		setFocus(Qt::OtherFocusReason);
+	}
+}
+
+bool HtmlInfoView::eventFilter(QObject * target, QEvent * event)
+{
+	// Text fields consume the undo/redo shortcuts for their internal text-editing history,
+	// even when that history is empty — which it always is right after a committed value
+	// change, because committing syncs the field programmatically via setText. So a ctrl-z
+	// immediately after changing e.g. a board width died in the field. Let the field consume
+	// undo/redo only while it can actually use them (i.e. while editing); otherwise decline
+	// the shortcut override so the application's undo/redo action handles the key.
+	// Installed on every text field shown in the inspector (see init and displayProps).
+	if (event->type() == QEvent::ShortcutOverride) {
+		auto * lineEdit = qobject_cast<QLineEdit *>(target);
+		if (lineEdit != nullptr) {
+			auto * keyEvent = static_cast<QKeyEvent *>(event);
+			if ((keyEvent->matches(QKeySequence::Undo) && !lineEdit->isUndoAvailable())
+					|| (keyEvent->matches(QKeySequence::Redo) && !lineEdit->isRedoAvailable())) {
+				event->ignore();
+				return true;
+			}
+		}
+	}
+	return QScrollArea::eventFilter(target, event);
 }
 
 QSize HtmlInfoView::sizeHint() const {
@@ -578,6 +846,7 @@ void HtmlInfoView::setNullContent()
 	displayProps(nullptr, nullptr, false);
 	addSpice(NULL);
 	addTags(nullptr);
+	addRevisions(nullptr);
 	viewConnectorItemInfo(nullptr, nullptr);
 	m_connFrame->setVisible(false);
 	m_propFrame->setVisible(false);
@@ -657,30 +926,75 @@ void HtmlInfoView::setUpTitle(ItemBase * itemBase)
 
 }
 
+// Cache inspector icon pixmaps by moduleID + viewID to avoid repeated file I/O and SVG rendering.
+// Cost is in bytes (160x160 RGBA = ~102KB per entry). 200 entries ~ 20MB max.
+static QCache<QString, QPixmap> & inspectorIconCache() {
+	static QCache<QString, QPixmap> cache(200);
+	return cache;
+}
+
+static const QPixmap * cachedIconFromSvg(ItemBase * itemBase, ViewLayer::ViewID vid, bool swappingEnabled, QSize size) {
+	if (itemBase == nullptr || itemBase->modelPart() == nullptr) return nullptr;
+
+	// Check visibility
+	if (itemBase->viewID() == vid) {
+		if (!itemBase->isEverVisible()) return nullptr;
+	} else {
+		ItemBase * vItemBase = itemBase->modelPart()->viewItem(vid);
+		if (vItemBase != nullptr && !vItemBase->isEverVisible()) return nullptr;
+	}
+
+	vid = itemBase->useViewIDForPixmap(vid, swappingEnabled);
+	if (vid == ViewLayer::UnknownView) return nullptr;
+
+	QString cacheKey = itemBase->modelPart()->moduleID() + "/" + QString::number(vid);
+	if (const QPixmap * cached = inspectorIconCache().object(cacheKey)) {
+		// DebugDialog::debug(QString("inspector icon cache hit: %1").arg(cacheKey));
+		return cached;
+	}
+
+	if (!itemBase->modelPart()->hasViewFor(vid)) return nullptr;
+
+	QString baseName = itemBase->modelPart()->hasBaseNameFor(vid);
+	if (baseName.isEmpty()) return nullptr;
+
+	QString filename = PartFactory::getSvgFilename(itemBase->modelPart(), baseName, true, true);
+	if (filename.isEmpty()) return nullptr;
+
+	QSvgRenderer renderer(filename);
+	if (!renderer.isValid()) return nullptr;
+
+	auto * pixmap = new QPixmap(size);
+	pixmap->fill(Qt::transparent);
+	QPainter painter(pixmap);
+	QSize def = renderer.defaultSize();
+	double newW = size.width();
+	double newH = newW * def.height() / def.width();
+	if (newH > size.height()) {
+		newH = size.height();
+		newW = newH * def.width() / def.height();
+	}
+	QRectF bounds((size.width() - newW) / 2.0, (size.height() - newH) / 2.0, newW, newH);
+	renderer.render(&painter, bounds);
+	painter.end();
+
+	// DebugDialog::debug(QString("inspector icon cache miss, loaded SVG: %1 from %2").arg(cacheKey, filename));
+	inspectorIconCache().insert(cacheKey, pixmap);
+	return pixmap;
+}
+
 void HtmlInfoView::setUpIcons(ItemBase * itemBase, bool swappingEnabled) {
 	if (m_lastIconItemBase == itemBase) return;
 
 	m_lastIconItemBase = itemBase;
 
-	QPixmap *pixmap1 = nullptr;
-	QPixmap *pixmap2 = nullptr;
-	QPixmap *pixmap3 = nullptr;
-
 	QSize size = QSize(ScaledIconFrame::STANDARD_ICON_IMG_WIDTH, ScaledIconFrame::STANDARD_ICON_IMG_HEIGHT);
 
-	if (itemBase != nullptr) {
-		itemBase->getPixmaps(pixmap1, pixmap2, pixmap3, swappingEnabled, size);
-	}
+	const QPixmap *pixmap1 = cachedIconFromSvg(itemBase, ViewLayer::BreadboardView, swappingEnabled, size);
+	const QPixmap *pixmap2 = cachedIconFromSvg(itemBase, ViewLayer::SchematicView, swappingEnabled, size);
+	const QPixmap *pixmap3 = cachedIconFromSvg(itemBase, ViewLayer::PCBView, swappingEnabled, size);
 
-	QPixmap* use1 = pixmap1;
-	QPixmap* use2 = pixmap2;
-	QPixmap* use3 = pixmap3;
-
-	m_iconFrame->setIcons(use1, use2, use3);
-
-	if (pixmap1 != nullptr) delete pixmap1;
-	if (pixmap2 != nullptr) delete pixmap2;
-	if (pixmap3 != nullptr) delete pixmap3;
+	m_iconFrame->setIcons(pixmap1, pixmap2, pixmap3);
 }
 
 void HtmlInfoView::addSpice(ModelPart * modelPart) {
@@ -747,6 +1061,47 @@ void HtmlInfoView::partTitle(const QString & title, const QString & version, con
 	else m_partVersion->setText("");
 }
 
+void HtmlInfoView::addRevisions(ModelPart * modelPart) {
+	if (m_revisionsTextLabel == nullptr) return;
+
+	if (m_lastRevisionsModelPart == modelPart) return;
+	m_lastRevisionsModelPart = modelPart;
+
+	QString html;
+	if (modelPart != nullptr) {
+		// History may not be loaded yet for parts that came from the parts database.
+		if (!modelPart->hasHistory()) modelPart->loadHistoryFromFile();
+
+		const QList<HistoryEntry> & history = modelPart->history();
+		// newest entry first
+		for (int i = history.count() - 1; i >= 0; --i) {
+			const HistoryEntry & entry = history.at(i);
+
+			QString modeTag;
+			if (entry.isRecommended()) modeTag = QString(" [%1]").arg(tr("recommended"));
+			else if (entry.isRequired()) modeTag = QString(" [%1]").arg(tr("automatic"));
+
+			QString date = entry.date.trimmed();
+			QString author = entry.author.trimmed();
+			QString description = entry.description.trimmed();
+
+			if (!html.isEmpty()) html += "<br/>";
+			html += QString("<b>%1</b>%2%3")
+			        .arg(date.toHtmlEscaped(),
+			             author.isEmpty() ? QString() : QString(" (%1)").arg(author.toHtmlEscaped()),
+			             modeTag);
+			if (!description.isEmpty()) {
+				html += QString("<br/>%1").arg(description.toHtmlEscaped());
+			}
+		}
+	}
+
+	bool hasRevisions = !html.isEmpty() && !m_tinyMode;
+	m_revisionsTextLabel->setText(html);
+	m_revisionsTextLabel->setVisible(hasRevisions);
+	if (m_revisionsLabel != nullptr) m_revisionsLabel->setVisible(hasRevisions);
+}
+
 void HtmlInfoView::displayProps(ModelPart * modelPart, ItemBase * itemBase, bool swappingEnabled)
 {
 	bool repeatPossible = (modelPart == m_lastPropsModelPart && itemBase == m_lastPropsItemBase && swappingEnabled == m_lastPropsSwappingEnabled);
@@ -777,6 +1132,64 @@ void HtmlInfoView::displayProps(ModelPart * modelPart, ItemBase * itemBase, bool
 	}
 
 	showLayers(sl, itemBase, family, properties.value("layer", ""), swappingEnabled);
+
+	// Generic multi-selection rule: when several items are selected, show only the
+	// properties they all have in common. Value-based editors (the per-type group handlers)
+	// keep applying to the whole selection; generic swap-based combos are disabled here
+	// (applying a part swap to every selected item is deferred).
+	QList<ItemBase *> groupItems;
+	{
+		InfoGraphicsView * igv = (itemBase != nullptr) ? InfoGraphicsView::getInfoGraphicsView(itemBase) : nullptr;
+		if ((igv != nullptr) && (igv->scene() != nullptr)) {
+			Q_FOREACH (QGraphicsItem * gItem, igv->scene()->selectedItems()) {
+				auto * ib = dynamic_cast<ItemBase *>(gItem);
+				if (ib == nullptr) continue;
+				ItemBase * chief = ib->layerKinChief();
+				if (!groupItems.contains(chief)) groupItems.append(chief);
+			}
+		}
+	}
+	bool multiSelect = (itemBase != nullptr) && groupItems.count() > 1
+	                   && groupItems.contains(itemBase->layerKinChief());
+
+	if (multiSelect) {
+		QStringList commonKeys;
+		Q_FOREACH (const QString & key, keys) {
+			bool inAll = true;
+			Q_FOREACH (ItemBase * gi, groupItems) {
+				if ((gi->modelPart() == nullptr) || !gi->modelPart()->properties().contains(key)) {
+					inAll = false;
+					break;
+				}
+			}
+			if (inAll) commonKeys.append(key);
+		}
+		keys = commonKeys;
+
+		// Manufacturer number / part number only make sense for a group of identical parts
+		// (same moduleID). For a mixed group, drop them.
+		bool identicalParts = true;
+		Q_FOREACH (ItemBase * gi, groupItems) {
+			if (gi->moduleID() != itemBase->moduleID()) { identicalParts = false; break; }
+		}
+		if (!identicalParts) {
+			keys.removeAll("mn");
+			keys.removeAll("mpn");
+			keys.removeAll("part number");
+		}
+	}
+
+	// True if the selected items disagree on the value of a property (so we blank it).
+	auto valuesDiffer = [&groupItems](const QString & key) -> bool {
+		QString v0;
+		bool first = true;
+		Q_FOREACH (ItemBase * gi, groupItems) {
+			QString v = gi->getProperty(key);
+			if (first) { v0 = v; first = false; }
+			else if (v != v0) return true;
+		}
+		return false;
+	};
 
 	int ix = 0;
 	Q_FOREACH(QString key, keys) {
@@ -838,6 +1251,16 @@ void HtmlInfoView::displayProps(ModelPart * modelPart, ItemBase * itemBase, bool
 				}
 				//DebugDialog::debug(QString("adding %1 %2").arg(newName).arg((long) resultWidget, 0, 16));
 				propThing->m_plugin = resultWidget;
+
+				// don't let the plugin's text fields swallow undo/redo they can't use
+				// (installing twice is harmless, so no need to skip reused plugins)
+				auto * lineEdit = qobject_cast<QLineEdit *>(resultWidget);
+				if (lineEdit != nullptr) {
+					lineEdit->installEventFilter(this);
+				}
+				for (QLineEdit * childEdit : resultWidget->findChildren<QLineEdit *>()) {
+					childEdit->installEventFilter(this);
+				}
 			}
 			else {
 				newValue = resultValue;
@@ -846,6 +1269,34 @@ void HtmlInfoView::displayProps(ModelPart * modelPart, ItemBase * itemBase, bool
 		else {
 			newName = translatedName;
 			newValue = value;
+		}
+
+		if (multiSelect && !hide) {
+			auto * familyCombo = qobject_cast<FamilyPropertyComboBox *>(newWidget);
+			if ((familyCombo != nullptr) && key.compare("package", Qt::CaseInsensitive) == 0) {
+				// Offer the packages common to all selected parts' families; choosing one
+				// swaps every selected part (handled in MainWindow::swapSelectionForProp).
+				QStringList common;
+				InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(itemBase);
+				if (igv != nullptr) common = igv->commonPropValues("package");
+
+				QSignalBlocker blocker(familyCombo);   // repopulating must not fire swapEntry
+				familyCombo->clear();
+				Q_FOREACH (const QString & v, common) familyCombo->addItem(v);
+				QString shared = valuesDiffer(key) ? QString() : itemBase->getProperty(key);
+				familyCombo->setCurrentIndex(shared.isEmpty() ? -1 : familyCombo->findText(shared));
+				familyCombo->setEnabled(true);
+			}
+			else if (familyCombo != nullptr) {
+				// Other generic swap combos would only swap the active item, so disable them
+				// in a multi-selection (swap-to-all is deferred); blank if values differ.
+				familyCombo->setEnabled(false);
+				if (valuesDiffer(key)) familyCombo->setCurrentIndex(-1);
+			}
+			else if ((newWidget == nullptr) && valuesDiffer(key)) {
+				// Plain value row whose items disagree: show nothing rather than one value.
+				newValue = "";
+			}
 		}
 
 		if (oldPlugin != nullptr) {
@@ -922,7 +1373,13 @@ void HtmlInfoView::changeLock(bool lockState)
 	if (m_currentItem == nullptr) return;
 	if (m_currentItem->itemType() == ModelPart::Wire) return;
 
-	m_currentItem->setMoveLock(lockState);
+	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(m_currentItem);
+	if (infoGraphicsView != nullptr) {
+		infoGraphicsView->changeMoveLock(m_currentItem, lockState);		// undoable
+	}
+	else {
+		m_currentItem->setMoveLock(lockState);
+	}
 	m_locationFrame->setDisabled(lockState);
 	m_rotationFrame->setDisabled(lockState);
 }
@@ -937,7 +1394,8 @@ void HtmlInfoView::changeSticky(bool lockState)
 }
 
 void HtmlInfoView::clickObsolete(const QString &) {
-	Q_EMIT clickObsoleteSignal();
+	// Hand the currently inspected part to the migration flow (-1 if none is shown).
+	Q_EMIT clickObsoleteSignal(m_lastItemBase ? m_lastItemBase->id() : -1);
 }
 
 void HtmlInfoView::showLayers(bool show, ItemBase * itemBase, const QString & family, const QString & value, bool swappingEnabled) {
@@ -1195,6 +1653,12 @@ void HtmlInfoView::updateRotation(ItemBase * itemBase) {
 	if (itemBase != m_lastItemBase) return;
 
 	setRotation(itemBase);
+
+	// Some property widgets show transform-dependent values (e.g. a net label's actual
+	// text alignment); rebuild the inspector so they reflect the new transform.
+	if (itemBase->inspectorRefreshOnTransform()) {
+		reloadContent(InfoGraphicsView::getInfoGraphicsView(itemBase));
+	}
 }
 
 void HtmlInfoView::xyEntry() {

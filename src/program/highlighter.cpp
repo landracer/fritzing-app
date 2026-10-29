@@ -49,12 +49,9 @@ void Highlighter::loadStyles(const QString & filename) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(filename));
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!parseResult) {
 		return;
 	}
 
@@ -68,7 +65,7 @@ void Highlighter::loadStyles(const QString & filename) {
 		QColor color(Qt::black);
 		QString colorString = style.attribute("color");
 		if (!colorString.isEmpty()) {
-			color.setNamedColor(colorString);
+			color = QColor::fromString(colorString);
 			tcf->setForeground(QBrush(color));
 		}
 		QString italicString = style.attribute("italic");

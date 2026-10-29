@@ -20,6 +20,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QSvgGenerator>
 #include <QColor>
+#include <QTimer>
 #include <QImageWriter>
 #include <QInputDialog>
 #include <QApplication>
@@ -33,6 +34,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "mainwindow.h"
 #include "../debugdialog.h"
 #include "../waitpushundostack.h"
+#include "../commands.h"
 #include "../partseditor/pemainwindow.h"
 #include "../help/aboutbox.h"
 #include "../autoroute/mazerouter/mazerouter.h"
@@ -48,6 +50,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../sketch/schematicsketchwidget.h"
 #include "../sketch/pcbsketchwidget.h"
 #include "../sketch/sketchwidget.h"
+#include "../sketch/migrationhandler.h"
 #include "../partsbinpalette/binmanager/binmanager.h"
 #include "../utils/expandinglabel.h"
 #include "../infoview/htmlinfoview.h"
@@ -225,7 +228,7 @@ void MainWindow::mainLoadAux(const QString & fileName)
 
 	QFile file(fileName);
 	if (!file.exists()) {
-		FMessageBox::warning(this, tr("Fritzing"),
+		FMessageBox::warning(this, tr("Fritzing", "dialog title"),
 		                     tr("Cannot find file %1.")
 		                     .arg(fileName));
 
@@ -236,7 +239,7 @@ void MainWindow::mainLoadAux(const QString & fileName)
 
 
 	if (!file.open(QFile::ReadOnly | QFile::Text)) {
-		FMessageBox::warning(this, tr("Fritzing"),
+		FMessageBox::warning(this, tr("Fritzing", "dialog title"),
 		                     tr("Cannot read file  1 %1:\n%2.")
 							 .arg(fileName, file.errorString()));
 		return;
@@ -272,7 +275,7 @@ void MainWindow::mainLoadAux(const QString & fileName)
 void MainWindow::revert() {
 	QMessageBox::StandardButton answer = QMessageBox::question(
 	        this,
-	        tr("Revert?"),
+	        tr("Revert?", "dialog title"),
 	        tr("This operation can not be undone--you will lose all of your changes."
 	           "\n\nGo ahead and revert?"),
 	        QMessageBox::Yes | QMessageBox::No,
@@ -291,14 +294,24 @@ MainWindow * MainWindow::revertAux()
 	MainWindow* mw = newMainWindow( m_referenceModel, fileName(), true, true, this->currentTabIndex());
 	mw->setGeometry(this->geometry());
 
+	bool loaded = true;
 	QFileInfo info(fileName());
 	if (info.exists() || !FolderUtils::isEmptyFileName(this->m_fwFilename, untitledFileName())) {
-		mw->loadWhich(fileName(), true, true, true, "");
+		loaded = mw->loadWhich(fileName(), true, true, true, "");
 	}
 	else {
 		mw->addDefaultParts();
 		mw->show();
 		mw->hideTempPartsBin();
+	}
+
+	if (!loaded) {
+		// The sketch could not be reloaded (e.g. the file is damaged). loadWhich
+		// has already told the user why. Keep the current window open and discard
+		// the empty replacement -- closing the last window here would quit
+		// Fritzing instead of just reporting the error (issue #1158).
+		mw->close();
+		return this;
 	}
 
 	mw->clearFileProgressDialog();
@@ -315,7 +328,7 @@ MainWindow * MainWindow::revertAux()
 bool MainWindow::loadWhich(const QString & fileName, bool setAsLastOpened, bool addToRecent, bool checkObsolete, const QString & displayName)
 {
 	if (!QFileInfo(fileName).exists()) {
-		FMessageBox::warning(nullptr, tr("Fritzing"), tr("File '%1' not found").arg(fileName));
+		FMessageBox::warning(nullptr, tr("Fritzing", "dialog title"), tr("File '%1' not found").arg(fileName));
 		return false;
 	}
 
@@ -323,14 +336,16 @@ bool MainWindow::loadWhich(const QString & fileName, bool setAsLastOpened, bool 
 	if (fileName.endsWith(FritzingSketchExtension)) {
 		QFileInfo info(fileName);
 
-		QString bundledFileName;
-		mainLoad(fileName, displayName, checkObsolete);
-		result = true;
-
-		QFile file(fileName);
-		QDir dest(m_fzzFolder);
-		FolderUtils::slamCopy(file, dest.absoluteFilePath(info.fileName()));			// copy the .fz file directly
-		setCurrentFile(fileName, false, false);
+		// Use the real load result: a damaged .fz must report failure so callers
+		// (e.g. revertAux) keep the working window open instead of replacing it
+		// with an empty one (issue #1158).
+		result = mainLoad(fileName, displayName, checkObsolete);
+		if (result) {
+			QFile file(fileName);
+			QDir dest(m_fzzFolder);
+			FolderUtils::slamCopy(file, dest.absoluteFilePath(info.fileName()));			// copy the .fz file directly
+			setCurrentFile(fileName, false, false);
+		}
 	}
 	else if(fileName.endsWith(FritzingBundleExtension)) {
 		QString error = loadBundledSketch(fileName, addToRecent, setAsLastOpened, checkObsolete);
@@ -488,12 +503,12 @@ bool MainWindow::mainLoad(const QString & fileName, const QString & displayName,
 	}
 	disconnect(migratePartLabelOffsetConnection);
 
-	if (!m_useOldSchematic && checkObsolete) {
-		if (m_pcbGraphicsView) {
-			QList<ItemBase *> items = m_pcbGraphicsView->selectAllObsolete();
-			if (items.count() > 0) {
-				checkSwapObsolete(items, true);
-			}
+	// On load, route every obsolete part through the Part Migration dialog (or silent auto-swap).
+	if (!FMessageBox::BlockMessages && !m_useOldSchematic && checkObsolete) {
+		QList<ItemBase *> items = collectObsoleteAcrossViews();
+		DebugDialog::debug(QString("[migration] (load) obsolete parts in sketch: %1").arg(items.count()));
+		if (!items.isEmpty()) {
+			routeHistoryMigrations(items, TriggerContext::Load);
 		}
 	}
 
@@ -764,10 +779,24 @@ QHash<QString, struct SketchDescriptor *> MainWindow::indexAvailableElements(QDo
 	return retval;
 }
 
+bool MainWindow::evaluateMenuRequires(const QString & requiresAttr) {
+	// Conditional gate for example-menu entries. Empty = always shown.
+	// Supported tokens: "transient" — only show when transient simulation is enabled
+	// (which itself is debug/FTesting-gated, see isTransientSimulationEnabled()).
+	if (requiresAttr.isEmpty()) return true;
+	if (requiresAttr == "transient") return isTransientSimulationEnabled();
+	qWarning() << QString("MainWindow::populateMenuWithIndex: unknown requires='%1'").arg(requiresAttr);
+	return false;
+}
+
 void MainWindow::populateMenuWithIndex(const QHash<QString, struct SketchDescriptor *>  &index, QMenu * parentMenu, QDomElement &domElem, const QString & localeName) {
 	// note: the <sketch> element here is not the same as the <sketch> element in indexAvailableElements()
 	QDomElement e = domElem.firstChildElement();
 	while(!e.isNull()) {
+		if (!evaluateMenuRequires(e.attribute("requires"))) {
+			e = e.nextSiblingElement();
+			continue;
+		}
 		if (e.nodeName() == "sketch") {
 			QString id = e.attribute("id");
 			if (!id.isEmpty()) {
@@ -1451,6 +1480,7 @@ void MainWindow::createFileMenu() {
 
 	m_exportMenu->addAction(m_exportBomAct);
 	m_exportMenu->addAction(m_exportBomCsvAct);
+	m_exportMenu->addAction(m_exportBomPdfAct);
 	m_exportMenu->addAction(m_exportIpcAct);
 	m_exportMenu->addAction(m_exportNetlistAct);
 	m_exportMenu->addAction(m_exportSpiceNetlistAct);
@@ -1538,8 +1568,10 @@ void MainWindow::createPartMenu() {
 	m_partMenu->addAction(m_dumpAllPartsAction);
 #endif
 
-	m_partMenu->addSeparator();
-	m_partMenu->addAction(m_regeneratePartsDatabaseAct);
+	if (DebugDialog::enabled()) {
+		m_partMenu->addSeparator();
+		m_partMenu->addAction(m_regeneratePartsDatabaseAct);
+	}
 }
 
 void MainWindow::createViewMenu()
@@ -2016,11 +2048,14 @@ void MainWindow::updatePartMenu() {
 	m_convertToBendpointAct->setVisible(ctbpVisible);
 	m_convertToBendpointSeparator->setVisible(ctbpVisible);
 
-	m_selectAllObsoleteAct->setEnabled(itemCount.obsoleteCount > 0);
+	// "Select outdated parts" works on the whole sketch, so enable it whenever the sketch has
+	// any obsolete part (otherwise it's a catch-22: you can't select what you must select first).
+	// "Update selected parts" acts on the selection, so it stays selection-based.
+	m_selectAllObsoleteAct->setEnabled(hasObsoleteParts());
 	m_swapObsoleteAct->setEnabled(itemCount.obsoleteCount > 0);
 
 	m_findPartInSketchAct->setEnabled(m_currentGraphicsView);
-	m_regeneratePartsDatabaseAct->setEnabled(true);
+	m_regeneratePartsDatabaseAct->setEnabled(DebugDialog::enabled());
 	m_openProgramWindowAct->setEnabled(true);
 }
 
@@ -2052,6 +2087,12 @@ void MainWindow::updateTransformationActions() {
 	Q_FOREACH(SketchToolButton* flipButton, m_flipButtons) {
 		flipButton->setEnabled(enable);
 	}
+
+	// Keep the obsolete-part actions in sync with the selection here (not only on the Part menu's
+	// aboutToShow): selecting a part should immediately enable "Update selected parts", including
+	// for programmatic/automated selections that never open the menu.
+	if (m_selectAllObsoleteAct != nullptr) m_selectAllObsoleteAct->setEnabled(hasObsoleteParts());
+	if (m_swapObsoleteAct != nullptr) m_swapObsoleteAct->setEnabled(itemCount.obsoleteCount > 0);
 }
 
 void MainWindow::updateItemMenu() {
@@ -2297,7 +2338,7 @@ void MainWindow::hundredPercentSize() {
 }
 
 void MainWindow::actualSize() {
-	QMessageBox::information(this, tr("Actual Size"),
+	QMessageBox::information(this, tr("Actual Size", "dialog title"),
 	                         tr("It doesn't seem to be possible to automatically determine the actual physical size of the monitor, so "
 	                            "'actual size' as currently implemented is only a guess. "
 	                            "Your best bet would be to drag out a ruler part, then place a real (physical) ruler on top and zoom until they match up."
@@ -2528,7 +2569,7 @@ void MainWindow::pageSetup() {
 }
 
 void MainWindow::notYetImplemented(QString action) {
-	QMessageBox::warning(this, tr("Fritzing"),
+	QMessageBox::warning(this, tr("Fritzing", "dialog title"),
 	                     tr("Sorry, \"%1\" has not been implemented yet").arg(action));
 }
 
@@ -2702,7 +2743,7 @@ void MainWindow::openRecentOrExampleFile() {
 
 void MainWindow::openRecentOrExampleFile(const QString & filename, const QString & actionText) {
 	if (!QFileInfo(filename).exists()) {
-		QMessageBox::warning(nullptr, tr("Fritzing"), tr("File '%1' not found").arg(filename));
+		QMessageBox::warning(nullptr, tr("Fritzing", "dialog title"), tr("File '%1' not found").arg(filename));
 		return;
 	}
 
@@ -2963,7 +3004,7 @@ void MainWindow::createActiveLayerActions() {
 	connect(m_activeLayerBottomAct, SIGNAL(triggered()), this, SLOT(activeLayerBottom()));
 }
 
-void MainWindow::activeLayerBoth() {
+void MainWindow::activeLayerBoth(bool showMessage) {
 	auto * pcbSketchWidget = qobject_cast<PCBSketchWidget *>(m_currentGraphicsView);
 	if (pcbSketchWidget == nullptr) return;
 
@@ -2971,11 +3012,13 @@ void MainWindow::activeLayerBoth() {
 	pcbSketchWidget->setLayerActive(ViewLayer::Copper0, true);
 	pcbSketchWidget->setLayerActive(ViewLayer::Silkscreen0, true);
 	pcbSketchWidget->setLayerActive(ViewLayer::Silkscreen1, true);
-	AutoCloseMessageBox::showMessage(this, tr("Copper Top and Copper Bottom layers are both active"));
+	if (showMessage) {
+		AutoCloseMessageBox::showMessage(this, tr("Copper Top and Copper Bottom layers are both active"));
+	}
 	updateActiveLayerButtons();
 }
 
-void MainWindow::activeLayerTop() {
+void MainWindow::activeLayerTop(bool showMessage) {
 	auto * pcbSketchWidget = qobject_cast<PCBSketchWidget *>(m_currentGraphicsView);
 	if (pcbSketchWidget == nullptr) return;
 
@@ -2983,11 +3026,13 @@ void MainWindow::activeLayerTop() {
 	pcbSketchWidget->setLayerActive(ViewLayer::Silkscreen1, true);
 	pcbSketchWidget->setLayerActive(ViewLayer::Copper0, false);
 	pcbSketchWidget->setLayerActive(ViewLayer::Silkscreen0, false);
-	AutoCloseMessageBox::showMessage(this, tr("Copper Top layer is active"));
+	if (showMessage) {
+		AutoCloseMessageBox::showMessage(this, tr("Copper Top layer is active"));
+	}
 	updateActiveLayerButtons();
 }
 
-void MainWindow::activeLayerBottom() {
+void MainWindow::activeLayerBottom(bool showMessage) {
 	auto * pcbSketchWidget = qobject_cast<PCBSketchWidget *>(m_currentGraphicsView);
 	if (pcbSketchWidget == nullptr) return;
 
@@ -2995,7 +3040,9 @@ void MainWindow::activeLayerBottom() {
 	pcbSketchWidget->setLayerActive(ViewLayer::Silkscreen1, false);
 	pcbSketchWidget->setLayerActive(ViewLayer::Copper0, true);
 	pcbSketchWidget->setLayerActive(ViewLayer::Silkscreen0, true);
-	AutoCloseMessageBox::showMessage(this, tr("Copper Bottom layer is active"));
+	if (showMessage) {
+		AutoCloseMessageBox::showMessage(this, tr("Copper Bottom layer is active"));
+	}
 	updateActiveLayerButtons();
 }
 
@@ -3071,12 +3118,12 @@ void MainWindow::newAutoroute() {
 		int boardCount;
 		board = pcbSketchWidget->findSelectedBoard(boardCount);
 		if (boardCount == 0) {
-			QMessageBox::critical(this, tr("Fritzing"),
+			QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 			                      tr("Your sketch does not have a board yet!  Please add a PCB in order to use the autorouter."));
 			return;
 		}
 		if (board == nullptr) {
-			QMessageBox::critical(this, tr("Fritzing"),
+			QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 			                      tr("Please select the board you want to autoroute. The autorouter can only handle one board at a time."));
 			return;
 		}
@@ -3100,9 +3147,10 @@ void MainWindow::newAutoroute() {
 	Autorouter * autorouter = nullptr;
 	autorouter = new MazeRouter(pcbSketchWidget, board, true);
 
-	connect(autorouter, SIGNAL(wantTopVisible()), this, SLOT(activeLayerTop()), Qt::DirectConnection);
-	connect(autorouter, SIGNAL(wantBottomVisible()), this, SLOT(activeLayerBottom()), Qt::DirectConnection);
-	connect(autorouter, SIGNAL(wantBothVisible()), this, SLOT(activeLayerBoth()), Qt::DirectConnection);
+	// the autorouter's layer switches are transient (restored below), so no layer message
+	connect(autorouter, &Autorouter::wantTopVisible, this, [this]() { activeLayerTop(false); }, Qt::DirectConnection);
+	connect(autorouter, &Autorouter::wantBottomVisible, this, [this]() { activeLayerBottom(false); }, Qt::DirectConnection);
+	connect(autorouter, &Autorouter::wantBothVisible, this, [this]() { activeLayerBoth(false); }, Qt::DirectConnection);
 
 	connect(&progress, SIGNAL(cancel()), autorouter, SLOT(cancel()), Qt::DirectConnection);
 	connect(&progress, SIGNAL(skip()), autorouter, SLOT(cancelTrace()), Qt::DirectConnection);
@@ -3367,12 +3415,12 @@ void MainWindow::groundFillAux(bool fillGroundTraces, ViewLayer::ViewLayerID vie
 	int boardCount;
 	ItemBase * board = m_pcbGraphicsView->findSelectedBoard(boardCount);
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Your sketch does not have a board yet!  Please add a PCB in order to use ground or copper fill."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Please select a PCB--copper fill only works for one board at a time."));
 		return;
 	}
@@ -3411,12 +3459,12 @@ void MainWindow::removeGroundFill(ViewLayer::ViewLayerID viewLayerID, QUndoComma
 	int boardCount;
 	ItemBase * board = m_pcbGraphicsView->findSelectedBoard(boardCount);
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Your sketch does not have a board yet!  Please add a PCB in order to remove copper fill."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Please select a PCB--ground fill operations only work on a one board at a time."));
 		return;
 	}
@@ -3747,19 +3795,21 @@ void MainWindow::oldSchematicsSlot(const QString &filename, bool & useOldSchemat
 QMessageBox::StandardButton MainWindow::oldSchematicMessage(const QString & filename)
 {
 	QFileInfo info(filename);
-	QString text = tr("There is a new graphics standard for schematic-view part images, beginning with version 0.8.6.\n\n") +
-				   tr("Would you like to convert '%1' to the new standard now or open the file read-only?\n").arg(info.fileName());
+	QString text = tr("There is a new graphics standard for schematic-view part images, beginning with version 0.8.6.\n\n"
+				   "Would you like to convert '%1' to the new standard now or open the file read-only?\n").arg(info.fileName());
 
 	QString informativeText = "<ul><li>" +
 							  tr("The conversion process will not modify '%1', until you save the file. ").arg(info.fileName()) +
 							  "</li><li>" +
-							  tr("You will have to rearrange parts and connections in schematic view, as the sizes of most part images will have changed. Consider using the Autorouter to clean up traces. ") +
+							  tr("You will have to rearrange parts and connections in schematic view, as the sizes of most "
+							     "part images will have changed. Consider using the Autorouter to clean up traces. ") +
 							  "</li><li>" +
-							  tr("Note that any custom parts will not be converted. A tool for converting 'rectangular' schematic images is available in the Parts Editor.") +
+							  tr("Note that any custom parts will not be converted. A tool for converting 'rectangular' "
+							     "schematic images is available in the Parts Editor.") +
 							  "</li></ul>";
 
 	QScopedPointer<FMessageBox> messageBox(FMessageBox::createCustom(
-		nullptr, QMessageBox::Icon::Question, tr("Schematic view update"), text,
+		nullptr, QMessageBox::Icon::Question, tr("Schematic view update", "dialog title"), text,
 		QMessageBox::StandardButtons(), QMessageBox::NoButton));
 
 	messageBox->setInformativeText(informativeText);
@@ -3863,8 +3913,7 @@ void MainWindow::loadedViewsSlot(ModelBase *, QDomElement & views) {
 			}
 			sketchWidget->setAutorouterSettings(autorouterSettings);
 
-			QColor color;
-			color.setNamedColor(colorName);
+			QColor color = QColor::fromString(colorName);
 
 			bool redraw = false;
 			if (color.isValid()) {
@@ -3997,7 +4046,7 @@ void MainWindow::onShareOnlineFinished() {
 	if (reply->error() == QNetworkReply::NoError) {
 		QDesktopServices::openUrl(QString("https://fritzing.org/projects/create/"));
 	} else {
-		FMessageBox::critical(this, tr("Fritzing"), QString("Online sharing is currently not available."));
+		FMessageBox::critical(this, tr("Fritzing", "dialog title"), QString("Online sharing is currently not available."));
 	}
 	reply->deleteLater();
 }
@@ -4023,62 +4072,213 @@ void MainWindow::selectAllObsolete() {
 }
 
 QList<ItemBase *> MainWindow::selectAllObsolete(bool displayFeedback) {
+	// Select only — replacement is a separate, explicit action ("Update selected parts" or the
+	// Inspector's obsolete link, both routed through the Part Migration dialog).
 	QList<ItemBase *> items = m_pcbGraphicsView->selectAllObsolete();
-	if (!displayFeedback) return items;
-
-	if (items.count() <= 0) {
-		QMessageBox::information(this, tr("Fritzing"), tr("No outdated parts found.\nAll your parts are up-to-date.") );
+	if (displayFeedback && items.isEmpty()) {
+		QMessageBox::information(this, tr("Fritzing", "dialog title"), tr("No outdated parts found.\nAll your parts are up-to-date.") );
 	}
-	else {
-		checkSwapObsolete(items, false);
-	}
-
 	return items;
-}
-
-void MainWindow::checkSwapObsolete(QList<ItemBase *> & items, bool includeUpdateLaterMessage) {
-	QString msg = includeUpdateLaterMessage ? tr("\n\nNote: if you want to update later, there are options under the 'Part' menu for dealing with outdated parts individually. ") : "";
-
-	QMessageBox::StandardButton answer = FMessageBox::question(
-	        this,
-	        tr("Outdated parts"),
-	        tr("There are %n outdated part(s) in this sketch. ", "", items.count()) +
-	        tr("We strongly recommend that you update these %n parts  to the latest version. ", "", items.count()) +
-	        tr("This may result in changes to your sketch, as parts or connectors may be shifted. ") +
-	        msg +
-	        tr("\n\nDo you want to update now?"),
-	        QMessageBox::Yes | QMessageBox::No,
-	        QMessageBox::Yes
-	                                     );
-	// TODO: make button texts translatable
-	if (answer == QMessageBox::Yes) {
-		swapObsolete(true, items);
-	}
 }
 
 
 
 ModelPart * MainWindow::findReplacedby(ModelPart * originalModelPart) {
-	ModelPart * newModelPart = originalModelPart;
-	while (true) {
-		QString newModuleID = newModelPart->replacedby();
-		if (newModuleID.isEmpty()) {
-			return ((newModelPart == originalModelPart) ? nullptr : newModelPart);
-		}
+	// One hop along the replacedby chain (stepwise migration): the part `originalModelPart` is
+	// *immediately* replaced by, or nullptr if it isn't replaced (or the target isn't installed).
+	// Migrating one version at a time lets each step keep its own history mode -- e.g. for a
+	// v1->v2->v3 chain a v1 instance is offered v2 (with v1->v2's mode), and v2->v3 only surfaces
+	// after the user is on v2. (Previously this chased to the end of the chain, jumping v1->v3 and
+	// collapsing every step's mode into the final part's history.)
+	QString newModuleID = originalModelPart->replacedby();
+	if (newModuleID.isEmpty()) return nullptr;
+	return m_referenceModel->retrieveModelPart(newModuleID);
+}
 
-		ModelPart * tempModelPart = this->m_referenceModel->retrieveModelPart(newModuleID);
-		if (tempModelPart == nullptr) {
-			// something's screwy
-			return nullptr;
-		}
+QList<SketchWidget *> MainWindow::migrationScanViews() {
+	// The non-null breadboard/schematic/pcb views the migration logic iterates. (sketchWidgets()
+	// can contain nulls; the migration code wants the present ones only.)
+	QList<SketchWidget *> views;
+	if (m_breadboardGraphicsView) views << m_breadboardGraphicsView;
+	if (m_schematicGraphicsView) views << m_schematicGraphicsView;
+	if (m_pcbGraphicsView) views << m_pcbGraphicsView;
+	return views;
+}
 
-		newModelPart = tempModelPart;
+QList<ItemBase *> MainWindow::collectObsoleteAcrossViews() {
+	// Obsolete instances across all views, deduped by their shared cross-view id.
+	QHash<qint64, ItemBase *> obsoleteById;
+	Q_FOREACH (SketchWidget * view, migrationScanViews()) {
+		Q_FOREACH (ItemBase * item, view->collectObsolete()) {
+			obsoleteById.insert(item->id(), item);
+		}
 	}
+	return obsoleteById.values();
+}
+
+bool MainWindow::hasObsoleteParts() {
+	// Whether the sketch contains any obsolete part, short-circuiting on the first view that
+	// has one. Used to enable "Select outdated parts" regardless of the current selection.
+	Q_FOREACH (SketchWidget * view, migrationScanViews()) {
+		if (!view->collectObsolete().isEmpty()) return true;
+	}
+	return false;
+}
+
+QList<ItemBase *> MainWindow::routeHistoryMigrations(const QList<ItemBase *> & obsoleteItems, TriggerContext context) {
+	// Every obsolete part is routed to the "Part Migration" dialog (or auto-swapped), keyed on
+	// the replacement's effective history mode:
+	//   recommended (classic, incl. parts with no history) → prompt on Load + ManualUpdate always; on Drop when mixed + unseen
+	//   optional    (soft, silenceable)                    → prompt on ManualUpdate; on Drop when mixed + unseen; on Load only to join a dialog a recommended part is already opening
+	//   required    (auto)                                  → queued and auto-applied with no dialog
+	// Only parts with no resolvable replacement are returned to the caller (to report/ignore).
+	QList<ItemBase *> rest;
+	if (obsoleteItems.isEmpty()) return rest;
+
+	QList<SketchWidget *> views = migrationScanViews();
+	if (views.isEmpty()) return obsoleteItems;
+
+	// "Mixed" detection is only needed for soft (ask) parts on the automatic triggers.
+	QSet<QString> modulesInSketch;
+	if (context != TriggerContext::ManualUpdate) {
+		Q_FOREACH (SketchWidget * view, views) {
+			Q_FOREACH (QGraphicsItem * gi, view->scene()->items()) {
+				ItemBase * ib = dynamic_cast<ItemBase *>(gi);
+				if (ib != nullptr) modulesInSketch.insert(ib->moduleID());
+			}
+		}
+	}
+
+	MigrationHandler * migrationHandler = views.first()->migrationHandler();
+
+	// On load the dialog is opened by "recommended" parts; "optional" parts then join it but never
+	// pop it on their own. So note up front whether a recommended part is opening the load dialog.
+	bool loadDialogOpening = false;
+	if (context == TriggerContext::Load) {
+		Q_FOREACH (ItemBase * item, obsoleteItems) {
+			ModelPart * newPart = findReplacedby(item->modelPart());
+			if (newPart == nullptr) continue;
+			if (!newPart->hasHistory()) newPart->loadHistoryFromFile();
+			if (MigrationHandler::computeEffectiveMode(newPart->history()) == "recommended") {
+				loadDialogOpening = true;
+				break;
+			}
+		}
+	}
+
+	Q_FOREACH (ItemBase * item, obsoleteItems) {
+		ModelPart * oldPart = item->modelPart();
+		ModelPart * newPart = findReplacedby(oldPart);
+
+		if (newPart == nullptr) {
+			rest << item;
+			continue;
+		}
+
+		// History lives in the FZP for parts that came from the parts database.
+		if (!newPart->hasHistory()) newPart->loadHistoryFromFile();
+
+		QList<HistoryEntry> relevantHistory =
+		    MigrationHandler::getRelevantHistory(oldPart, newPart->history());
+		QString mode = MigrationHandler::computeEffectiveMode(newPart->history());
+		bool mixed = modulesInSketch.contains(newPart->moduleID());
+		bool unseen = !relevantHistory.isEmpty();
+
+		bool queue = false;
+		if (mode == "required") {
+			queue = true;                                   // auto-applied by processMigrations
+		}
+		else if (mode == "recommended") {
+			// classic: always prompt on load + manual; on drop only when its replacement is already
+			// mixed in and there's an unseen revision.
+			queue = (context != TriggerContext::Drop) || (mixed && unseen);
+		}
+		else {                                              // "optional"
+			// silenceable: prompt on manual update; on a mixed drop; and on load only to join a
+			// dialog a recommended part is already opening (never on its own).
+			queue = (context == TriggerContext::ManualUpdate)
+			     || (context == TriggerContext::Load && loadDialogOpening)
+			     || (context == TriggerContext::Drop && mixed && unseen);
+		}
+
+		if (queue) {
+			QString reason;
+			if (context == TriggerContext::ManualUpdate)
+				reason = tr("You chose to update this outdated part.");
+			else if (mode == "recommended")
+				reason = tr("This part is outdated. We recommend updating it to the latest version.");
+			else if (context == TriggerContext::Load)
+				reason = tr("This part has an optional update available.");
+			else
+				reason = tr("This sketch contains both this part and a newer revision of it. Choose which one to use.");
+
+			// Stepwise: if the immediate replacement is itself replaced by a later revision, the
+			// dialog hints that another step will follow once the user takes this one.
+			bool hasFurtherRevision = (findReplacedby(newPart) != nullptr);
+			migrationHandler->queueMigration(item, oldPart, newPart, relevantHistory, reason, hasFurtherRevision);
+		}
+	}
+
+	if (migrationHandler->hasPendingMigrations()) {
+		migrationHandler->processMigrations();
+	}
+	return rest;
+}
+
+void MainWindow::onItemAddedToSketch(ModelPart *, ItemBase *, ViewLayer::ViewLayerPlacement, const ViewGeometry &, long, SketchWidget * dropOrigin) {
+	// dropOrigin is non-null only for user-initiated drops/pastes (not load, swap, undo or
+	// cross-view sync), so this is the safe place to react to a part the user just added.
+	if (dropOrigin != nullptr) scheduleDropMigrationCheck();
+}
+
+void MainWindow::scheduleDropMigrationCheck() {
+	// A single drop emits itemAddedSignal several times (once per view); coalesce into one
+	// deferred check that runs after the whole add (incl. cross-view sync) has settled.
+	if (m_migrationCheckPending) return;
+	m_migrationCheckPending = true;
+	QTimer::singleShot(0, this, [this]() {
+		m_migrationCheckPending = false;
+		checkDroppedPartMigration();
+	});
+}
+
+void MainWindow::checkDroppedPartMigration() {
+	if (m_useOldSchematic) return;
+
+	QList<SketchWidget *> views = migrationScanViews();
+	if (views.isEmpty()) return;
+
+	// Don't pile onto an already-open migration dialog.
+	if (views.first()->migrationHandler()->hasPendingMigrations()) return;
+
+	QList<ItemBase *> obsolete = collectObsoleteAcrossViews();
+	if (obsolete.isEmpty()) return;
+
+	// Only soft parts mixed with their replacement prompt mid-edit; classic parts wait for the next load.
+	routeHistoryMigrations(obsolete, TriggerContext::Drop);
 }
 
 void MainWindow::swapObsolete() {
 	QList<ItemBase *> items;
 	swapObsolete(true, items);
+}
+
+void MainWindow::migrateObsoletePart(qint64 itemId) {
+	// Both triggers -- the obsolete "bug" badge and the Inspector's "obsolete" link -- fire from
+	// inside a mouse-press / event handler. Running the swap synchronously deletes the clicked part
+	// mid-event, leaving the originating handler (e.g. SketchWidget::mousePressEvent) holding a
+	// dangling item pointer -> crash. Defer to the next event-loop turn so the originating event
+	// finishes first; we re-resolve the part by id then, so it stays safe. (This matches the menu
+	// "Update selected parts" path, which already runs the swap after the click.)
+	QTimer::singleShot(0, this, [this, itemId]() {
+		// Route this one part to the Part Migration dialog (showing its history for soft parts),
+		// exactly like "Update selected parts".
+		ItemBase * item = findItemInAnyView(itemId);
+		if (item == nullptr || !item->isObsolete()) return;
+		QList<ItemBase *> items;
+		items << item->layerKinChief();
+		swapObsolete(true, items);
+	});
 }
 
 void MainWindow::swapObsolete(bool displayFeedback, QList<ItemBase *> & items) {
@@ -4100,10 +4300,24 @@ void MainWindow::swapObsolete(bool displayFeedback, QList<ItemBase *> & items) {
 		Q_FOREACH (ItemBase * itemBase, items) itemBases.insert(itemBase);
 	}
 
+	// Route obsolete parts to the Part Migration dialog (forced/ask) or silent auto-swap;
+	// only parts with no resolvable replacement come back to be reported here.
+	QList<ItemBase *> rest = routeHistoryMigrations(itemBases.values(), TriggerContext::ManualUpdate);
+	if (rest.isEmpty()) return;
+	swapObsoleteDirect(rest, displayFeedback);
+}
+
+// Directly swap each obsolete item to its replacedby target as a single undoable command,
+// porting the special-cased properties (resistance, LED colour). Does NOT route through
+// routeHistoryMigrations, so it is safe to call from the silent auto-swap path without
+// re-queuing. Returns the number of parts updated.
+int MainWindow::swapObsoleteDirect(const QList<ItemBase *> & items, bool displayFeedback) {
+	if (items.isEmpty()) return 0;
+
 	auto* parentCommand = new QUndoCommand();
 	int count = 0;
 	QMap<QString, QString> propsMap;
-	Q_FOREACH (ItemBase * itemBase, itemBases) {
+	Q_FOREACH (ItemBase * itemBase, items) {
 		ModelPart * newModelPart = findReplacedby(itemBase->modelPart());
 		if (newModelPart == nullptr) {
 			FMessageBox::information(
@@ -4116,50 +4330,8 @@ void MainWindow::swapObsolete(bool displayFeedback, QList<ItemBase *> & items) {
 
 		count++;
 		long newID = swapSelectedAuxAux(itemBase, newModelPart->moduleID(), itemBase->viewLayerPlacement(), propsMap, parentCommand);
-		if (itemBase->modelPart()) {
-			// special case for swapping old resistors.
-			QString resistance = itemBase->modelPart()->properties().value("resistance", "");
-			if (!resistance.isEmpty()) {
-				QChar r = resistance.at(resistance.length() - 1);
-				ushort ohm = r.unicode();
-				if (ohm == 8486) {
-					// ends with the ohm symbol
-					resistance.chop(1);
-				}
-			}
-			QString footprint = itemBase->modelPart()->properties().value("footprint", "");
-			if (!resistance.isEmpty() && !footprint.isEmpty()) {
-				new SetResistanceCommand(m_currentGraphicsView, newID, resistance, resistance, footprint, footprint, parentCommand);
-			}
-
-			// special case for swapping LEDs
-			if (newModelPart->moduleID().contains(ModuleIDNames::ColorLEDModuleIDName)) {
-				QString oldColor = itemBase->modelPart()->properties().value("color");
-				QString newColor;
-				if (oldColor.contains("red", Qt::CaseInsensitive)) {
-					newColor = "Red (633nm)";
-				}
-				else if (oldColor.contains("blue", Qt::CaseInsensitive)) {
-					newColor = "Blue (430nm)";
-				}
-				else if (oldColor.contains("yellow", Qt::CaseInsensitive)) {
-					newColor = "Yellow (585nm)";
-				}
-				else if (oldColor.contains("green", Qt::CaseInsensitive)) {
-					newColor = "Green (555nm)";
-				}
-				else if (oldColor.contains("white", Qt::CaseInsensitive)) {
-					newColor = "White (4500K)";
-				}
-
-				if (newColor.length() > 0) {
-					new SetPropCommand(m_currentGraphicsView, newID, "color", newColor, newColor, true, parentCommand);
-				}
-			}
-
-		}
+		MigrationHandler::portObsoleteSpecialProps(m_currentGraphicsView, itemBase, newModelPart, newID, parentCommand);
 	}
-
 
 	if (count == 0) {
 		delete parentCommand;
@@ -4169,11 +4341,36 @@ void MainWindow::swapObsolete(bool displayFeedback, QList<ItemBase *> & items) {
 		m_undoStack->push(parentCommand);
 	}
 
-	if (displayFeedback) {
-		FMessageBox::information(this, tr("Fritzing"), tr("Successfully updated %1 part(s).\n"
+	if (displayFeedback && count > 0) {
+		FMessageBox::information(this, tr("Fritzing", "dialog title"), tr("Successfully updated %1 part(s).\n"
 		                         "Please check all views for potential side-effects.").arg(count) );
 	}
 	DebugDialog::debug(QString("updated %1 obsolete in %2").arg(count).arg(m_fwFilename));
+	return count;
+}
+
+// Swap a single part to an explicit target module as one undoable command, reusing the same
+// machinery as the obsolete auto-swap (swapSelectedAuxAux + portObsoleteSpecialProps). Unlike
+// swapObsoleteDirect it takes an explicit moduleID rather than following replacedby, so the Part
+// Migration dialog can drive it in both directions (old->new preview and new->old revert).
+// Returns the new item's cross-view id directly, so callers never have to rediscover it from the
+// (non-deterministically ordered) selection. Returns 0 if the target module can't be resolved.
+long MainWindow::swapPartForMigration(ItemBase * itemBase, const QString & newModuleID) {
+	if (itemBase == nullptr) return 0;
+	itemBase = itemBase->layerKinChief();
+
+	ModelPart * newModelPart = m_referenceModel->retrieveModelPart(newModuleID);
+	if (newModelPart == nullptr) {
+		DebugDialog::debug(QString("swapPartForMigration: no model part for %1").arg(newModuleID));
+		return 0;
+	}
+
+	auto* parentCommand = new QUndoCommand(tr("Swapped %1 with module %2").arg(itemBase->instanceTitle(), newModuleID));
+	QMap<QString, QString> propsMap;
+	long newID = swapSelectedAuxAux(itemBase, newModuleID, itemBase->viewLayerPlacement(), propsMap, parentCommand);
+	MigrationHandler::portObsoleteSpecialProps(m_currentGraphicsView, itemBase, newModelPart, newID, parentCommand);
+	m_undoStack->push(parentCommand);
+	return newID;
 }
 
 void MainWindow::throwFakeException() {
@@ -4394,13 +4591,13 @@ QStringList MainWindow::newDesignRulesCheck(bool showOkMessage)
 		if (boardCount == 0) {
 			QString message = tr("Your sketch does not have a board yet! DRC only works with a PCB.");
 			results << message;
-			FMessageBox::critical(this, tr("Fritzing"), message);
+			FMessageBox::critical(this, tr("Fritzing", "dialog title"), message);
 			return results;
 		}
 		if (board == nullptr) {
 			QString message = tr("Please select a PCB. DRC only works on one board at a time.");
 			results << message;
-			FMessageBox::critical(this, tr("Fritzing"), message);
+			FMessageBox::critical(this, tr("Fritzing", "dialog title"), message);
 			return results;
 		}
 	}
@@ -4492,17 +4689,26 @@ void MainWindow::moveLock()
 		}
 	}
 
-	ItemBase * viewedItem = m_infoView->currentItem();
+	auto * parentCommand = new QUndoCommand();
+	QSet<long> seen;
 	Q_FOREACH (QGraphicsItem  * item, m_currentGraphicsView->scene()->selectedItems()) {
 		ItemBase * itemBase = ItemBase::extractTopLevelItemBase(item);
 		if (itemBase == nullptr) continue;
 		if (itemBase->itemType() == ModelPart::Wire) continue;
+		if (itemBase->moveLock() == moveLock) continue;
+		if (seen.contains(itemBase->id())) continue;
 
-		itemBase->setMoveLock(moveLock);
-		if (viewedItem && viewedItem->layerKinChief() == itemBase->layerKinChief()) {
-			m_currentGraphicsView->viewItemInfo(itemBase);
-		}
+		seen.insert(itemBase->id());
+		new MoveLockCommand(m_currentGraphicsView, itemBase->id(), itemBase->moveLock(), moveLock, parentCommand);
 	}
+
+	if (seen.isEmpty()) {
+		delete parentCommand;
+		return;
+	}
+
+	parentCommand->setText(moveLock ? tr("Lock %n part(s)", "", seen.count()) : tr("Unlock %n part(s)", "", seen.count()));
+	m_undoStack->push(parentCommand);
 }
 
 void MainWindow::selectMoveLock()
@@ -4537,7 +4743,8 @@ void MainWindow::orderFab()
 			QCheckBox *notAgain = new QCheckBox(tr("Don't show this again."));
 
 			QMessageBox box(this);
-			box.setWindowTitle(tr("Missing copper fill"));
+			//: Noun phrase: the copper fill (poured copper area on the board) is missing. Not a command.
+			box.setWindowTitle(tr("Missing copper fill", "dialog title"));
 			box.setText(tr("It is recommended to add copper/ground fill to your circuit to reduce acid usage during production.\n\nContinue upload?"));
 			box.setIcon(QMessageBox::Icon::Question);
 			box.addButton(QMessageBox::Cancel);
@@ -4570,7 +4777,7 @@ void MainWindow::orderFab()
 		upload.exec();
 		delete manager;
 	} else {
-		FMessageBox::information(this, tr("Fritzing Fab Upload"), tr("Please first save your project in order to upload it."));
+		FMessageBox::information(this, tr("Fritzing Fab Upload", "dialog title"), tr("Please first save your project in order to upload it."));
 	}
 }
 
@@ -4578,12 +4785,12 @@ void MainWindow::setGroundFillSeeds() {
 	int boardCount;
 	ItemBase * board = m_pcbGraphicsView->findSelectedBoard(boardCount);
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Your sketch does not have a board yet! Please add a PCB in order to use copper fill operations."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Please select a PCB. Copper fill operations only work on one board at a time."));
 		return;
 	}
@@ -4595,12 +4802,12 @@ void MainWindow::clearGroundFillSeeds() {
 	int boardCount;
 	ItemBase * board = m_pcbGraphicsView->findSelectedBoard(boardCount);
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Your sketch does not have a board yet! Please add a PCB in order to use copper fill operations."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Please select a PCB. Copper fill operations only work on one board at a time."));
 		return;
 	}
@@ -4701,7 +4908,7 @@ void MainWindow::findPartInSketch() {
 	if (m_currentGraphicsView == nullptr) return;
 
 	bool ok;
-	QString text = QInputDialog::getText(this, tr("Enter Text"),
+	QString text = QInputDialog::getText(this, tr("Enter Text", "dialog title"),
 	                                     tr("Text will match part label, description, title, etc. Enter text to search for:"),
 	                                     QLineEdit::Normal, lastSearchText, &ok);
 	if (!ok || text.isEmpty()) return;
@@ -4748,7 +4955,7 @@ void MainWindow::findPartInSketch() {
 	QList<ItemBase *> matched = partialMatched + exactMatched;
 
 	if (matched.isEmpty()) {
-		QMessageBox::information(this, tr("Search"), tr("No parts matched search term '%1'.").arg(text));
+		QMessageBox::information(this, tr("Search", "dialog title"), tr("No parts matched search term '%1'.").arg(text));
 		return;
 	}
 

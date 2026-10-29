@@ -26,10 +26,12 @@ QT_LEAST=6.5.3
 !versionAtLeast(QT_VERSION, $${QT_LEAST}):error("Use at least Qt version $${QT_LEAST}")
 
 CONFIG += debug_and_release
-CONFIG += c++17
+CONFIG += c++20
 
 unix {
-    QMAKE_CXXFLAGS += -O3 -fno-omit-frame-pointer
+    QMAKE_CXXFLAGS += -fno-omit-frame-pointer
+    QMAKE_CXXFLAGS_RELEASE -= -O2
+    QMAKE_CXXFLAGS_RELEASE += -O3
 }
 
 unix:!macx {
@@ -85,7 +87,7 @@ macx {
     Debug:UI_DIR = $${DEBDIR}
 
     #QMAKE_MAC_SDK = macosx10.11            # uncomment/adapt for your version of OSX
-    CONFIG += x86_64 # x86 ppc
+    # CONFIG += x86_64 # x86 ppc
     QMAKE_INFO_PLIST = FritzingInfo.plist
     #DEFINES += QT_NO_DEBUG                # uncomment this for xcode
     LIBS += -lz
@@ -93,11 +95,12 @@ macx {
     LIBS += -framework Carbon
     LIBS += -framework IOKit
     LIBS += -liconv
+    QMAKE_APPLE_DEVICE_ARCHS = x86_64 arm64
 }
 unix {
     !macx { # unix is defined on mac
         HARDWARE_PLATFORM = $$system(uname -m)
-        contains(HARDWARE_PLATFORM, x86_64) {
+        contains(HARDWARE_PLATFORM, x86_64)|contains(HARDWARE_PLATFORM, aarch64) {
             DEFINES += LINUX_64
         } else {
             DEFINES += LINUX_32

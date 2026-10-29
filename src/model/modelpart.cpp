@@ -243,7 +243,8 @@ void ModelPart::saveInstance(QXmlStreamWriter & streamWriter, bool flipAware)
 		moduleIdRef.remove(PartFactory::OldSchematicPrefix);
 		streamWriter.writeAttribute("moduleIdRef", moduleIdRef);
 		streamWriter.writeAttribute("modelIndex", QString::number(m_index));
-		streamWriter.writeAttribute("path", m_modelPartShared->path());
+		QString fullPath = m_modelPartShared->path();
+		streamWriter.writeAttribute("path", QFileInfo(fullPath).fileName());
 		if (m_modelPartShared->flippedSMD()) {
 			streamWriter.writeAttribute("flippedSMD", "true");
 		}
@@ -911,6 +912,22 @@ const QString & ModelPart::replacedby() {
 bool ModelPart::isObsolete() {
 	if (m_modelPartShared != nullptr) return !m_modelPartShared->replacedby().isEmpty();
 
+	return false;
+}
+
+const QList<HistoryEntry> & ModelPart::history() {
+	static QList<HistoryEntry> emptyHistory;
+	if (m_modelPartShared != nullptr) return m_modelPartShared->history();
+	return emptyHistory;
+}
+
+bool ModelPart::hasHistory() {
+	if (m_modelPartShared != nullptr) return m_modelPartShared->hasHistory();
+	return false;
+}
+
+bool ModelPart::loadHistoryFromFile() {
+	if (m_modelPartShared != nullptr) return m_modelPartShared->loadHistoryFromFile();
 	return false;
 }
 

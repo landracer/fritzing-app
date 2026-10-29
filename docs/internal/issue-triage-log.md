@@ -15,6 +15,33 @@
 
 ---
 
+
+## 2026-10-29 — Part Migration dialog: "New" appeared to do nothing + re-asked forever
+**Disposition:** `FIXED` (real bug, code changed) — `src/sketch/migrationhandler.cpp` only.
+
+**Suspected:** clicking **New** in the Part Migration dialog did nothing, and the sketch re-prompted on
+every open.
+
+**Found (root cause).** `onVersionChosen()` (the handler for picking a version radio) set `info.decided`
+then called only `updateDialogForCurrentMigration()` — re-rendering the *same* panel, never advancing or
+closing. For a single `recommended` part the "keep / don't ask" radio is hidden (`canSilence` is true only
+for `optional`), so only **Close** is an obvious control; clicking **New** swapped silently but left the
+dialog looking unchanged, so it appeared inert and the file re-prompted every load. Separately, the dialog's
+labels fell back to the dark system palette (grey-on-grey text, black history box) because they matched no
+rule in the per-`MainWindow` `fritzing.qss`.
+
+**Fix.** (1) `onVersionChosen` now calls `processNextMigration()` after recording the decision — advance to
+the next undecided part, or close when none remain (the existing "Update all"/multi-part termination path).
+A radio choice is now a terminal action: **New** swaps and dismisses. (2) The dialog sets its own scoped
+`setStyleSheet(...)` (object-name rules) so it renders dark-on-light regardless of theme; `fritzing.qss`
+unchanged. Recommended parts still re-ask by design (per-session `decided`, not persisted); **saving** the
+migrated sketch is what stops the re-flag. No automated test drives the dialog (manual + `-ftesting` probe).
+
+**Anchors.** `MigrationHandler::onVersionChosen` / `processNextMigration` / `createMigrationDialog`
+(`src/sketch/migrationhandler.cpp`); routing entry `MainWindow::routeHistoryMigrations`
+(`src/mainwindow/mainwindow_menu.cpp:4128`). Full reference: `docs/design/part-migration.md`.
+
+---
 ## 2026-10-25 — Feature backlog decisions: 1 ported (#4323), rest formally ditched
 **Disposition:** of the deferred *feature* PRs, **only #4323 (breadboard autorouter) was landed**; the rest are
 **ditched**, each with an author-facing write-up in `docs/internal/feature-backlog.md` explaining why. This

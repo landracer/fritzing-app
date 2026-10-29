@@ -33,6 +33,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QGraphicsItem>
 #include <QMainWindow>
 #include <QApplication>
+#include <QStyleHints>
 #include <QDomElement>
 #include <QSettings>
 #include <QClipboard>
@@ -56,6 +57,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../debugdialog.h"
 #include "sketchwidget.h"
 #include "outlierhandler.h"
+#include "FProbeScrollPosition.h"
+#include "migrationhandler.h"
 #include "subpartswapmanager.h"
 #include "../connectors/connectoritem.h"
 #include "../connectors/svgidlayer.h"
@@ -145,6 +148,14 @@ SketchWidget::SketchWidget(ViewLayer::ViewID viewID, QWidget *parent, int size, 
 	m_arrowTimer.setTimerType(Qt::PreciseTimer);
 	m_autoScrollTimer.setTimerType(Qt::PreciseTimer);
 	connect(&m_arrowTimer, SIGNAL(timeout()), this, SLOT(arrowTimerTimeout()));
+	m_lockLongPressTimer.setSingleShot(true);
+	m_lockLongPressTimer.setInterval(QGuiApplication::styleHints()->mousePressAndHoldInterval());
+	connect(&m_lockLongPressTimer, &QTimer::timeout, this, [this]() {
+		if (m_lockFlashCandidate) {
+			m_lockFlashCandidate->flashLockSymbol();
+			m_lockFlashCandidate = nullptr;
+		}
+	});
 	//setAlignment(Qt::AlignLeft | Qt::AlignTop);
 	setDragMode(QGraphicsView::RubberBandDrag);
 	setFrameStyle(QFrame::Sunken | QFrame::StyledPanel);
@@ -186,6 +197,12 @@ SketchWidget::SketchWidget(ViewLayer::ViewID viewID, QWidget *parent, int size, 
 	
 	// Initialize outlier handler
 	m_outlierHandler = new OutlierHandler(this, this);
+
+	// Initialize scroll position probe for test instrumentation
+	new FProbeScrollPosition(this, ViewLayer::viewIDName(viewID));
+	
+	// Initialize migration handler
+	m_migrationHandler = new MigrationHandler(this, this);
 
 	//this->scene()->setSceneRect(0,0, rect().width(), rect().height());
 
@@ -241,6 +258,10 @@ void SketchWidget::restartPasteCount() {
 
 WaitPushUndoStack* SketchWidget::undoStack() {
 	return m_undoStack;
+}
+
+MigrationHandler* SketchWidget::migrationHandler() {
+	return m_migrationHandler;
 }
 
 void SketchWidget::setUndoStack(WaitPushUndoStack * undoStack) {
@@ -703,11 +724,9 @@ ItemBase * SketchWidget::addItemForCommand(const QString & moduleID, ViewLayer::
 	if (modelPart) {
 		if (!m_blockUI) {
 			QApplication::setOverrideCursor(Qt::WaitCursor);
-			statusMessage(tr("loading part"));
 		}
 		itemBase = addItem(modelPart, viewLayerPlacement, crossViewType, viewGeometry, id, modelIndex, originatingCommand);
 		if (!m_blockUI) {
-			statusMessage(tr("done loading"), 2000);
 			QApplication::restoreOverrideCursor();
 		}
 	}
@@ -1781,11 +1800,8 @@ QByteArray SketchWidget::removeOutsideConnections(const QByteArray & itemData, Q
 	// now have to remove each connection that points to a part outside of the set of parts being copied
 
 	QDomDocument domDocument;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument.setContent(itemData, &errorStr, &errorLine, &errorColumn);
-	if (!result) return ___emptyByteArray___;
+	QDomDocument::ParseResult parseResult = domDocument.setContent(itemData);
+	if (!parseResult) return ___emptyByteArray___;
 
 	QDomElement root = domDocument.documentElement();
 	if (root.isNull()) {
@@ -2299,7 +2315,11 @@ bool SketchWidget::moveByArrow(double dx, double dy, QKeyEvent * event, bool isR
 			rubberBandLegEnabled = (event) && ((event->modifiers() & altOrMetaModifier()) != 0);
 			prepMove(nullptr, rubberBandLegEnabled, true);
 		}
-		if (m_savedItems.count() == 0) return false;
+		if (m_savedItems.count() == 0) {
+			// nothing movable: if the selection consists of locked items, tell the user why
+			flashLockedSelectedItems();
+			return false;
+		}
 
 		m_mousePressScenePos = this->mapToScene(this->rect().center());
 		m_movingByArrow = true;
@@ -2344,6 +2364,7 @@ bool SketchWidget::shouldAlignToGrid() const {
 void SketchWidget::mousePressEvent(QMouseEvent *event)
 {
 	m_originatingItem = nullptr;
+	m_modifierClickItem = nullptr;
 	m_draggingBendpoint = false;
 	if (m_movingByArrow) return;
 
@@ -2380,6 +2401,38 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 	QList<QGraphicsItem *> items = this->items(event->pos());
 	QGraphicsItem* wasItem = getClickedItem(items);
 
+	m_lockLongPressTimer.stop();
+	m_lockFlashCandidate = nullptr;
+	if (event->button() == Qt::LeftButton) {
+		// a press on a locked item falls through (the item ignores it); arm the topmost locked
+		// chief for a lock-symbol flash on long-press or drag, unless some accepting item
+		// beneath takes the press instead
+		for (QGraphicsItem * gitem : items) {
+			if (dynamic_cast<LockSymbolItem *>(gitem)) {
+				// the lock symbol handles its own clicks
+				m_lockFlashCandidate = nullptr;
+				break;
+			}
+			if (!(gitem->acceptedMouseButtons() & Qt::LeftButton)) continue;
+			if (!gitem->isEnabled() || !gitem->isVisible()) continue;
+
+			auto * pressTarget = dynamic_cast<ItemBase *>(gitem);
+			if (pressTarget && pressTarget->layerKinChief()->moveLock()) {
+				if (!m_lockFlashCandidate) {
+					m_lockFlashCandidate = pressTarget->layerKinChief();
+				}
+				continue;	// locked items ignore the press; keep looking for whoever takes it
+			}
+
+			// an unlocked item (or connector, part label, ...) takes the press
+			m_lockFlashCandidate = nullptr;
+			break;
+		}
+		if (m_lockFlashCandidate) {
+			m_lockLongPressTimer.start();
+		}
+	}
+
 	m_anyInRotation = false;
 	// mouse event gets passed through to individual QGraphicsItems
 	QGraphicsView::mousePressEvent(event);
@@ -2407,13 +2460,21 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 	unsquashShapes();
 
 	if (!item) {
-		if (items.length() == 1) {
-			// if we unambiguously click on a partlabel whose owner is unselected, go ahead and activate it
-			auto * partLabel =  dynamic_cast<PartLabel *>(items[0]);
-			if (partLabel) {
-				partLabel->owner()->setSelected(true);
-				return;
-			}
+		// if we unambiguously click on a partlabel whose owner is unselected, go ahead and
+		// activate it; locked items beneath the label don't count, they yield the press
+		PartLabel * partLabel = nullptr;
+		for (QGraphicsItem * gitem : items) {
+			partLabel = dynamic_cast<PartLabel *>(gitem);
+			if (partLabel) break;
+
+			auto * itemBase = dynamic_cast<ItemBase *>(gitem);
+			if (itemBase && itemBase->layerKinChief()->moveLock()) continue;
+
+			break;	// some other item is in the way: not unambiguous
+		}
+		if (partLabel) {
+			partLabel->owner()->setSelected(true);
+			return;
 		}
 
 		clickBackground(event);
@@ -2443,6 +2504,14 @@ void SketchWidget::mousePressEvent(QMouseEvent *event)
 	if (itemBase) {
 		viewItemInfo(itemBase);
 		setLastPaletteItemSelectedIf(itemBase);
+		// Remember a Ctrl+left-click target and its selection state so the release handler can
+		// apply the toggle deterministically (see mouseReleaseEvent). Store the layer kin chief
+		// so the toggle stays consistent across layer kin. With Ctrl held, Qt changes selection
+		// only on release, never on press, so isSelected() here is the pre-click state.
+		if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier) != 0) {
+			m_modifierClickItem = itemBase->layerKinChief();
+			m_modifierClickWasSelected = m_modifierClickItem->isSelected();
+		}
 	}
 
 	if (resizingBoardPress(itemBase)) {
@@ -3103,6 +3172,14 @@ void SketchWidget::mouseMoveEvent(QMouseEvent *event) {
 	// if its just dragging a wire end do default
 	// otherwise handle all move action here
 
+	if (m_lockFlashCandidate && (event->buttons() & Qt::LeftButton)
+	        && (event->globalPosition().toPoint() - m_mousePressGlobalPos).manhattanLength() >= QApplication::startDragDistance()) {
+		// a real drag gesture started on a locked item: flash its lock symbol once
+		m_lockLongPressTimer.stop();
+		m_lockFlashCandidate->flashLockSymbol();
+		m_lockFlashCandidate = nullptr;
+	}
+
 	if (m_movingByArrow) return;
 
 	QPointF scenePos = mapToScene(event->pos());
@@ -3145,7 +3222,7 @@ void SketchWidget::mouseMoveEvent(QMouseEvent *event) {
 
 				auto * drag = new QDrag(this);
 				drag->setMimeData(mimeData);
-				//QBitmap bitmap = *CursorMaster::MoveCursor->bitmap();
+				//QBitmap bitmap = *SvgCursorBuilder::MoveCursor->bitmap();
 				//drag->setDragCursor(bitmap, Qt::MoveAction);
 
 				QPointF offset;
@@ -3155,6 +3232,7 @@ void SketchWidget::mouseMoveEvent(QMouseEvent *event) {
 
 				m_moveEventCount = 0;					// reset m_moveEventCount to make sure that equal potential highlights are cleared
 				m_movingByMouse = false;
+				m_modifierClickItem = nullptr;			// a real drag owns the release; the gesture is no longer a Ctrl+click
 
 				drag->exec();
 
@@ -3240,6 +3318,23 @@ void SketchWidget::moveItemsScene(QPointF scenePos, bool checkAutoScrollFlag, bo
 	moveItemsAux(scenePos, globalPos, checkAutoScrollFlag, rubberBandLegEnabled);
 }
 
+void SketchWidget::flashLockedSelectedItems() {
+	QSet<ItemBase *> lockedChiefs;
+	const QList<QGraphicsItem *> selectedItems = scene()->selectedItems();
+	for (QGraphicsItem * gitem : selectedItems) {
+		auto * itemBase = dynamic_cast<ItemBase *>(gitem);
+		if (!itemBase) continue;
+
+		ItemBase * chief = itemBase->layerKinChief();
+		if (chief->moveLock()) {
+			lockedChiefs.insert(chief);
+		}
+	}
+	for (ItemBase * chief : lockedChiefs) {
+		chief->flashLockSymbol();
+	}
+}
+
 void SketchWidget::moveItemsAux(QPointF scenePos, QPointF globalPos, bool checkAutoScrollFlag, bool rubberBandLegEnabled)
 {
 	if (checkAutoScrollFlag) {
@@ -3269,6 +3364,9 @@ void SketchWidget::moveItemsAux(QPointF scenePos, QPointF globalPos, bool checkA
 			//DebugDialog::debug(QString("disconnecting from female %1").arg(item->instanceTitle()));
 			disconnectFromFemale(item, m_savedItems, m_moveDisconnectedFromFemale, false, rubberBandLegEnabled, nullptr);
 		}
+
+		// selected items that prepMove left behind because they are locked: flash once per gesture
+		flashLockedSelectedItems();
 	}
 
 	Q_FOREACH (ItemBase * itemBase, m_savedItems) {
@@ -3324,6 +3422,16 @@ void SketchWidget::mouseReleaseEvent(QMouseEvent *event) {
 
 	//DebugDialog::debug("sketch mouse release event");
 
+	m_lockLongPressTimer.stop();
+	if (m_lockFlashCandidate) {
+		// a click that would have selected a locked part: flash the lock to say why
+		// nothing got selected. A drag would have flashed earlier via mouseMoveEvent,
+		// and a long hold via m_lockLongPressTimer; each consumes the candidate, so
+		// the candidate surviving to release means the gesture was a plain click.
+		m_lockFlashCandidate->flashLockSymbol();
+		m_lockFlashCandidate = nullptr;
+	}
+
 	m_draggingBendpoint = false;
 	if (m_movingByArrow) return;
 
@@ -3368,6 +3476,28 @@ void SketchWidget::mouseReleaseEvent(QMouseEvent *event) {
 	turnOffAutoscroll();
 
 	QGraphicsView::mouseReleaseEvent(event);
+
+	// Qt applies a Ctrl+click selection toggle only when the release scene position exactly
+	// equals the press position (QGraphicsItem::mouseReleaseEvent), so even a single pixel of
+	// drift during the click silently drops the toggle; conversely Qt may deliver move events
+	// with no actual movement, so counting them cannot tell whether Qt toggled. Instead of
+	// guessing, enforce the deterministic outcome of a Ctrl+click: the item ends up in the
+	// opposite of its pre-press selection state. If Qt's toggle already fired this is a no-op;
+	// if Qt dropped it, this applies it. A release beyond startDragDistance was a drag, not a
+	// click, and keeps whatever selection state the drag produced.
+	if (m_modifierClickItem) {
+		bool wasClick = (event->globalPosition().toPoint() - m_mousePressGlobalPos).manhattanLength()
+		                < QApplication::startDragDistance();
+		bool shouldBeSelected = !m_modifierClickWasSelected;
+		// the left button is already up here, so the moveLock selection veto in
+		// ItemBase::itemChange no longer applies: block selecting (not deselecting)
+		// a locked item by pointer explicitly
+		bool blocked = shouldBeSelected && m_modifierClickItem->moveLock();
+		if (wasClick && !blocked && m_modifierClickItem->isSelected() != shouldBeSelected) {
+			m_modifierClickItem->setSelected(shouldBeSelected);
+		}
+	}
+	m_modifierClickItem = nullptr;
 
 	if (m_connectorDragWire) {
 		// remove again (may not have been removed earlier)
@@ -4038,6 +4168,26 @@ void SketchWidget::dragWireChanged(Wire* wire, ConnectorItem * fromOnWire, Conne
 		}
 		if (to) {
 			extendChangeConnectionCommand(BaseCommand::CrossView, to, fromOnWire, ViewLayer::specFromID(wire->viewLayerID()), true, parentCommand);
+
+			// At a wire-bendpoint bigdot 'to' is one of two sibling wire connectors at the
+			// same junction point. Connect fromOnWire to the sibling as well so that
+			// categorizeDragWires can propagate OUT_ through the full junction and correctly
+			// leave this wire at the bendpoint when a component is later moved.
+			//
+			// Guard 1: skip when 'to' is a component connector. Wires sharing a component
+			// connector (e.g. R1.1) are independent; chaining them together causes ghost
+			// connections when one is later dragged away.
+			// Guard 2: only add connections to other wire connectors in the loop body so that
+			// a component connector reachable from 'to' cannot sneak in and make chained=true.
+			if (to->attachedToItemType() == ModelPart::Wire) {
+				for (const QPointer<ConnectorItem>& connectedConnector : to->connectedToItems()) {
+					if (connectedConnector != to && connectedConnector != fromOnWire
+					        && connectedConnector->attachedToItemType() == ModelPart::Wire) {
+						extendChangeConnectionCommand(BaseCommand::CrossView, connectedConnector, fromOnWire,
+						                              ViewLayer::specFromID(wire->viewLayerID()), true, parentCommand);
+					}
+				}
+			}
 		}
 
 		setUpColor(m_connectorDragConnector, to, wire, parentCommand);
@@ -4125,7 +4275,7 @@ void SketchWidget::dragRatsnestChanged()
 	ViewLayer::ViewLayerPlacement viewLayerPlacement = createWireViewLayerPlacement(ends[0], ends[1]);
 	if (viewLayerPlacement == ViewLayer::UnknownPlacement) {
 		// for now this should not be possible
-		FMessageBox::critical(this, tr("Fritzing"), tr("This seems like an attempt to create a trace across layers. This circumstance should not arise: please contact the developers."));
+		FMessageBox::critical(this, tr("Fritzing", "dialog title"), tr("This seems like an attempt to create a trace across layers. This circumstance should not arise: please contact the developers."));
 		return;
 	}
 
@@ -4218,6 +4368,8 @@ void SketchWidget::addViewLayer(ViewLayer * viewLayer) {
 	}
 
 	m_viewLayers.insert(viewLayer->viewLayerID(), viewLayer);
+	//: Menu entry toggling one display layer; %1 = translated layer name (e.g. "Copper Bottom").
+	//: Phrase it so the name can stand apart, e.g. layer "%1" — do not build a compound word with %1.
 	auto* action = new QAction(QObject::tr("%1 Layer").arg(viewLayer->displayName()), this);
 	action->setData(QVariant::fromValue<ViewLayer *>(viewLayer));
 	action->setCheckable(true);
@@ -4503,7 +4655,33 @@ double SketchWidget::fitInWindow() {
 	setHorizontalScrollBarPolicy(originalHorizontalPolicy);
 	setVerticalScrollBarPolicy(originalVerticalPolicy);
 
-	QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+	// Check if stabilized fit mode is enabled via environment variable.
+	// Set FRITZING_STABILIZED_FIT=1 to enable more deterministic positioning
+	// for screenshot tests. This may require regenerating reference images.
+	static bool stabilizedFit = qEnvironmentVariableIsSet("FRITZING_STABILIZED_FIT");
+
+	if (stabilizedFit) {
+		// Process events multiple times to ensure all layout updates complete.
+		// A single processEvents call is insufficient as Qt layout operations
+		// may schedule additional updates in subsequent event loop iterations.
+		// Using 5 iterations provides sufficient settling time for complex layouts.
+		for (int i = 0; i < 5; i++) {
+			QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+		}
+
+		// Force scroll positions to integer values for deterministic positioning.
+		// This prevents sub-pixel differences that can cause screenshot test failures.
+		int hValue = horizontalScrollBar()->value();
+		int vValue = verticalScrollBar()->value();
+		horizontalScrollBar()->setValue(hValue);
+		verticalScrollBar()->setValue(vValue);
+
+		// Final event flush after scroll adjustment
+		QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+	} else {
+		// Legacy behavior: single processEvents call
+		QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+	}
 
 	double scaleFactor = qAbs(this->transform().m11());
 	m_scaleValue = scaleFactor * 100; // Convert scale factor to percentage
@@ -5176,6 +5354,14 @@ void SketchWidget::setWireMenu(QMenu* wireMenu) {
 	m_wireMenu = wireMenu;
 }
 
+void SketchWidget::setPartLabelMenu(PartLabelContextMenu* partLabelMenu) {
+	m_partLabelMenu = partLabelMenu;
+}
+
+PartLabelContextMenu * SketchWidget::partLabelContextMenu() {
+	return m_partLabelMenu;
+}
+
 void SketchWidget::wireConnectedSlot(long fromID, QString fromConnectorID, long toID, QString toConnectorID) {
 	ItemBase * fromItem = findItem(fromID);
 	if (!fromItem) return;
@@ -5703,12 +5889,45 @@ void SketchWidget::prepDeleteProps(ItemBase * itemBase, long id, const QString &
 
 void SketchWidget::prepDeleteOtherProps(ItemBase * itemBase, long id, const QString & newModuleID, QMap<QString, QString> & propsMap, QUndoCommand * parentCommand)
 {
+	if (itemBase->moduleID().endsWith(ModuleIDNames::NetLabelModuleIDName)) {
+		// A net-label swap (legacy <-> modern) creates a fresh part, so carry the net name and
+		// orientation across, and apply the chosen alignment -- the renderer reads these local
+		// props (instanceTitle alone does not drive the rendered text).
+		QString label = itemBase->modelPart()->localProp("label").toString();
+		if (label.isEmpty()) label = itemBase->instanceTitle();
+		QString direction = itemBase->modelPart()->localProp("direction").toString();
+		QString oldStyle = itemBase->modelPart()->localProp("style").toString();
+		QString newStyle = propsMap.value("style", oldStyle);
+		// Direction first (no re-render), then style and label (each re-renders using it).
+		if (!direction.isEmpty()) new SetPropCommand(this, id, "direction", direction, direction, true, parentCommand);
+		new SetPropCommand(this, id, "style", oldStyle, newStyle, true, parentCommand);
+		if (!label.isEmpty()) new SetPropCommand(this, id, "label", label, label, true, parentCommand);
+		return;
+	}
+
 	auto * capacitor = qobject_cast<Capacitor *>(itemBase);
 	if (capacitor) {
 		QHash<QString, QString> properties;
 		capacitor->getProperties(properties);
-		Q_FOREACH(QString prop, properties.keys()) {
-			new SetPropCommand(this, id, prop, properties.value(prop), properties.value(prop), true, parentCommand);
+
+		// If no properties from Capacitor class, try to get them from ModelPart directly
+		// This handles obsolete capacitors that don't have PropertyDef entries
+		if (properties.isEmpty()) {
+			QHash<QString, QString> modelPartProps = itemBase->modelPart()->properties();
+			for (const QString& key : modelPartProps.keys()) {
+				QString value = modelPartProps.value(key);
+				if (key.compare("capacitance", Qt::CaseInsensitive) == 0 ||
+				    key.compare("voltage", Qt::CaseInsensitive) == 0) {
+					DebugDialog::debug(QString("prepDeleteOtherProps: Preserving static property '%1' = '%2' from obsolete capacitor %3")
+						.arg(key).arg(value).arg(itemBase->moduleID()));
+					properties.insert(key, value);
+				}
+			}
+		}
+
+		for (const QString& prop : properties.keys()) {
+			QString value = properties.value(prop);
+			new SetPropCommand(this, id, prop, value, value, true, parentCommand);
 		}
 	}
 
@@ -6115,9 +6334,9 @@ void SketchWidget::hoverEnterItem(QGraphicsSceneHoverEvent * event, ItemBase * i
 		if (canChainWire(wire)) {
 			bool segment = wire->connector0()->chained() && wire->connector1()->chained();
 			bool disconnected = wire->connector0()->connectionsCount() == 0 &&  wire->connector1()->connectionsCount() == 0;
-			statusMessage(QString("%1 to add a bendpoint %2")
-			              .arg(disconnected ? tr("Double-click") : tr("Drag or double-click"))
-			              .arg(segment ? tr("or alt-drag to move the segment") : tr("")));
+			statusHint(QString("%1 to add a bendpoint %2")
+			           .arg(disconnected ? tr("Double-click") : tr("Drag or double-click"))
+			           .arg(segment ? tr("or alt-drag to move the segment") : tr("")));
 			m_lastHoverEnterItem = item;
 		}
 	}
@@ -6146,6 +6365,24 @@ void SketchWidget::statusMessage(QString message, int timeout)
 	}
 }
 
+void SketchWidget::statusHint(QString message)
+{
+	auto * mainWindow = qobject_cast<QMainWindow *>(window());
+	if (!mainWindow) return;
+
+	if (m_hintConnectState == StatusConnectNotTried) {
+		bool result = connect(this, SIGNAL(statusHintSignal(QString)),
+		                      mainWindow, SLOT(statusHint(QString)));
+		m_hintConnectState = (result) ? StatusConnectSucceeded : StatusConnectFailed;
+	}
+
+	// no status bar fallback: a window without the hint channel
+	// (e.g. the parts editor) simply shows no hover hints
+	if (m_hintConnectState == StatusConnectSucceeded) {
+		Q_EMIT statusHintSignal(message);
+	}
+}
+
 void SketchWidget::hoverLeaveItem(QGraphicsSceneHoverEvent * event, ItemBase * item) {
 	m_lastHoverEnterItem = nullptr;
 
@@ -6154,7 +6391,7 @@ void SketchWidget::hoverLeaveItem(QGraphicsSceneHoverEvent * event, ItemBase * i
 	}
 
 	if (canChainWire(qobject_cast<Wire *>(item))) {
-		statusMessage(QString());
+		statusHint(QString());
 	}
 }
 
@@ -6169,11 +6406,11 @@ void SketchWidget::hoverEnterConnectorItem(QGraphicsSceneHoverEvent * event, Con
 
 		m_lastHoverEnterConnectorItem = item;
 		QString msg = hoverEnterWireConnectorMessage(event, item);
-		statusMessage(msg);
+		statusHint(msg);
 	}
 	else {
 		QString msg = hoverEnterPartConnectorMessage(event, item);
-		statusMessage(msg);
+		statusHint(msg);
 	}
 
 }
@@ -6213,10 +6450,10 @@ void SketchWidget::hoverLeaveConnectorItem(QGraphicsSceneHoverEvent * event, Con
 		if (!this->m_chainDrag) return;
 		if (!item->chained()) return;
 
-		statusMessage(QString());
+		statusHint(QString());
 	}
 	else {
-		statusMessage(QString());
+		statusHint(QString());
 	}
 }
 
@@ -6448,10 +6685,22 @@ void SketchWidget::setUpSwapRenamePins(SwapThing & swapThing, ItemBase * itemBas
 	new RenamePinsCommand(this, swapThing.newID, oldLabels, newLabels, swapThing.parentCommand);
 }
 
+// An obsolete part and its declared replacement are linked by the `replacedby` attribute. A swap
+// between them can run in either direction (obsolete->replacement when updating, replacement->
+// obsolete on "keep old"), so accept the relation whichever part is the swap source.
+static bool isReplacedbyRelation(ModelPart * a, ModelPart * b)
+{
+	if (a == nullptr || b == nullptr) return false;
+	return a->replacedby() == b->moduleID() || b->replacedby() == a->moduleID();
+}
+
 void SketchWidget::setUpSwapReconnect(SwapThing & swapThing, QString newModuleID, ItemBase * itemBase, long newID, bool master)
 {
 	ModelPart * newModelPart = m_referenceModel->retrieveModelPart(newModuleID);
 	if (!newModelPart) return;
+
+	// Reset per swap/view; checkFitAux may set it (below) to keep connectors in place on a swap.
+	m_swapAlignOffset = QPointF(0, 0);
 
 	QList<ConnectorItem *> fromConnectorItems(itemBase->cachedConnectorItems());
 
@@ -6564,9 +6813,21 @@ void SketchWidget::setUpSwapReconnect(SwapThing & swapThing, QString newModuleID
 
 	QHash<QString, QPolygonF> legs;
 	QHash<QString, ConnectorItem *> formerLegs;
-	if (m2f.count() > 0 && (m_viewID == ViewLayer::BreadboardView)) {
+	// Run the fit/align check for breadboard (by-wire holes) and, in any view, for an
+	// obsolete<->replacement swap (to re-align connectors so wiring doesn't drift). checkFit makes
+	// exactly one temp item per call -- never more than one per view, or the swap corrupts.
+	if ((m2f.count() > 0 && (m_viewID == ViewLayer::BreadboardView))
+	    || isReplacedbyRelation(itemBase->modelPart(), newModelPart)) {
 		checkFit(newModelPart, itemBase, newID, found, notFound, m2f, swapThing.byWire, legs, formerLegs, swapThing.parentCommand);
 	}
+
+	// Place the swapped-in part at its final position BEFORE reconnecting its wires, so the wires
+	// snap to the final connector positions. Applying the alignment offset only afterwards (the move
+	// at the end of this function) leaves the wires/traces at the pre-offset spot -- stranded -- in
+	// any view where the offset is non-zero (e.g. PCB). m_swapAlignOffset is zero except for
+	// replacedby swaps that need re-aligning.
+	QPointF p = itemBase->getViewGeometry().loc() + m_swapAlignOffset;
+	new SimpleMoveItemCommand(this, newID, p, p, swapThing.parentCommand);
 
 	fromConnectorItems.append(other);
 	Q_FOREACH (ConnectorItem * fromConnectorItem, fromConnectorItems) {
@@ -6660,9 +6921,9 @@ void SketchWidget::setUpSwapReconnect(SwapThing & swapThing, QString newModuleID
 	}
 
 
-	// changeConnection calls PaletteItemBase::connectedMoved which repositions the new part
-	// so slam in the desired position
-	QPointF p = itemBase->getViewGeometry().loc();
+	// changeConnection calls PaletteItemBase::connectedMoved which can reposition the new part, so
+	// re-affirm the desired position. It was already set before the reconnect loop (above), so the
+	// wires snapped to the final connector spots; this just keeps the part there.
 	new SimpleMoveItemCommand(this, newID, p, p, swapThing.parentCommand);
 
 	Q_FOREACH (QString connectorID, legs.keys()) {
@@ -6719,7 +6980,49 @@ void SketchWidget::checkFit(ModelPart * newModelPart, ItemBase * itemBase, long 
 	ItemBase * tempItemBase = addItemAuxTemp(newModelPart, itemBase->viewLayerPlacement(), itemBase->getViewGeometry(), newID, true, m_viewID, true);
 	if (!tempItemBase) return;			// we're really screwed
 
-	checkFitAux(tempItemBase, itemBase, newID, found, notFound, m2f, byWire, legs, formerLegs, parentCommand);
+	// The by-wire fitting logic (reconnecting around female breadboard holes) only applies in
+	// breadboard.
+	if (m_viewID == ViewLayer::BreadboardView) {
+		checkFitAux(tempItemBase, itemBase, newID, found, notFound, m2f, byWire, legs, formerLegs, parentCommand);
+	}
+
+	// For an obsolete<->replacement swap, record the shift that re-aligns the new part's anchor
+	// connector onto the old part's, so connectors -- and the wires/traces on them -- don't drift
+	// when the two versions have different connector offsets. Reuses this one temp item: creating a
+	// second temp item in the same view corrupts the swap, so do NOT add another.
+	if (isReplacedbyRelation(itemBase->modelPart(), newModelPart)) {
+		const qreal big = std::numeric_limits<int>::max();
+		QPointF oldAnchor(big, big), newAnchor(big, big);
+		bool any = false;
+		Q_FOREACH (ConnectorItem * fromConnectorItem, found.keys()) {
+			Connector * newConnector = found.value(fromConnectorItem);
+			ConnectorItem * newConnectorItem = nullptr;
+			Q_FOREACH (ConnectorItem * nci, tempItemBase->cachedConnectorItems()) {
+				if (nci->connector()->connectorShared() == newConnector->connectorShared()) {
+					newConnectorItem = nci;
+					break;
+				}
+			}
+			if (newConnectorItem == nullptr) continue;
+			// Align by the connector's pin (body) point, NOT its leg tip: the temp item carries the
+			// new part's DEFAULT (often long) leg, so aligning leg tips would shove the body off by the
+			// leg length and the swapped-in leg would then be stretched to reach its hole. The
+			// old leg is re-applied below, so aligning the pins keeps the tip where it was.
+			QPointF op = fromConnectorItem->scenePinPoint();
+			QPointF np = newConnectorItem->scenePinPoint();
+			oldAnchor.setX(qMin(oldAnchor.x(), op.x()));
+			oldAnchor.setY(qMin(oldAnchor.y(), op.y()));
+			newAnchor.setX(qMin(newAnchor.x(), np.x()));
+			newAnchor.setY(qMin(newAnchor.y(), np.y()));
+			any = true;
+		}
+		if (any) m_swapAlignOffset = oldAnchor - newAnchor;
+	}
+
+	// Delete the temp item's layer-kin (PCB copper layers) too, not just the chief -- a plain
+	// `delete` leaves the kin dangling in the scene, and a stray kin crashes overSticky's sticky
+	// check during the swap. Breadboard parts have no kin, so this is a no-op there.
+	tempItemBase->removeLayerKin();
 	delete tempItemBase;
 }
 
@@ -6779,16 +7082,27 @@ void SketchWidget::checkFitAux(ItemBase * tempItemBase, ItemBase * itemBase, lon
 	}
 
 
+	// An obsolete part and its declared replacement (linked by `replacedby`, in either swap
+	// direction) are the same logical part: their connectors are correlated by name/replacedby,
+	// not by exact geometry. A broken/zero-width terminal element in one of the two SVGs shifts its
+	// fallback terminal point to the connector-rect centre (see FSvgRenderer::calcTerminalPoint),
+	// which can fail the position check below and wrongly route the swap by wires — collapsing any
+	// junction connector to a single bridge wire and dropping its other connections.
+	// For such swaps trust the connector correlation and reconnect directly.
+	bool sameLogicalPart = isReplacedbyRelation(itemBase->modelPart(), tempItemBase->modelPart());
+
 	bool allCorrespond = true;
-	Q_FOREACH (ConnectorItem * foundConnectorItem, foundNews.keys()) {
-		QPointF fp = foundPoints.value(foundConnectorItem) - foundAnchor;
-		ConnectorItem * newConnectorItem = foundNews.value(foundConnectorItem);
-		QPointF np = newPoints.value(newConnectorItem) - newAnchor;
-		if (!newConnectorItem->hasRubberBandLeg() && (qAbs(fp.x() - np.x()) >= CloseEnough || qAbs(fp.y() - np.y()) >= CloseEnough)) {
-			// pins can be off by a little
-			// but if even one connector is out of place, hook everything up by wires
-			allCorrespond = false;
-			break;
+	if (!sameLogicalPart) {
+		Q_FOREACH (ConnectorItem * foundConnectorItem, foundNews.keys()) {
+			QPointF fp = foundPoints.value(foundConnectorItem) - foundAnchor;
+			ConnectorItem * newConnectorItem = foundNews.value(foundConnectorItem);
+			QPointF np = newPoints.value(newConnectorItem) - newAnchor;
+			if (!newConnectorItem->hasRubberBandLeg() && (qAbs(fp.x() - np.x()) >= CloseEnough || qAbs(fp.y() - np.y()) >= CloseEnough)) {
+				// pins can be off by a little
+				// but if even one connector is out of place, hook everything up by wires
+				allCorrespond = false;
+				break;
+			}
 		}
 	}
 
@@ -7101,12 +7415,12 @@ void SketchWidget::spaceBarIsPressedSlot(bool isPressed) {
 	if (isPressed) {
 		setDragMode(QGraphicsView::ScrollHandDrag);
 		//setInteractive(false);
-		//CursorMaster::instance()->addCursor(this, Qt::OpenHandCursor);
+		//SvgCursorBuilder::instance()->addCursor(this, Qt::OpenHandCursor);
 		//setCursor(Qt::OpenHandCursor);
 		//DebugDialog::debug("setting open hand cursor");
 	}
 	else {
-		//CursorMaster::instance()->removeCursor(this);
+		//SvgCursorBuilder::instance()->removeCursor(this);
 		setDragMode(QGraphicsView::RubberBandDrag);
 		//setInteractive(true);
 		//setCursor(Qt::ArrowCursor);
@@ -7749,11 +8063,9 @@ void SketchWidget::processTextElementsInSVG(QString &svg, ItemBase *itemBase, Re
 	}
 
 	QDomDocument doc;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
+	QDomDocument::ParseResult parseResult = doc.setContent(svg);
+	if (!parseResult) {
 		return;
 	}
 
@@ -7886,10 +8198,8 @@ QString SketchWidget::renderToSVG(RenderThing & renderThing, QList<QGraphicsItem
 
 			QString legSvg;
 			QDomDocument doc;
-			QString errorStr;
-			int errorLine;
-			int errorColumn;
-			if (doc.setContent(itemSvg, &errorStr, &errorLine, &errorColumn)) {
+			QDomDocument::ParseResult parseResult = doc.setContent(itemSvg);
+			if (parseResult) {
 				bool changed = false;
 				if (renderThing.renderBlocker) {
 					Pad * pad = qobject_cast<Pad *>(itemBase);
@@ -8140,27 +8450,35 @@ void SketchWidget::setLastPaletteItemSelectedIf(ItemBase * itemBase)
 
 void SketchWidget::setResistance(QString resistance, QString pinSpacing)
 {
-	PaletteItem * item = getSelectedPart();
-	if (!item) return;
+	// Apply to every selected resistor (getSelectedPart() returns null on a multi-selection).
+	QList<Resistor *> resistors;
+	Q_FOREACH (QGraphicsItem * gItem, scene()->selectedItems()) {
+		auto * resistor = dynamic_cast<Resistor *>(gItem);
+		if (resistor != nullptr) resistors.append(resistor);
+	}
+	if (resistors.isEmpty()) {
+		// Not a multi-selection: fall back to the single active part.
+		auto * resistor = qobject_cast<Resistor *>(getSelectedPart());
+		if (resistor != nullptr) resistors.append(resistor);
+	}
+	if (resistors.isEmpty()) return;
 
-	ModelPart * modelPart = item->modelPart();
+	auto * parentCommand = new QUndoCommand(tr("Change resistance of %n part(s)", "", resistors.count()));
 
-	if (!modelPart->moduleID().endsWith(ModuleIDNames::ResistorModuleIDName)) return;
-
-	auto * resistor = qobject_cast<Resistor *>(item);
-	if (!resistor) return;
-
-	if (resistance.isEmpty()) {
-		resistance = resistor->resistance();
+	bool any = false;
+	Q_FOREACH (Resistor * resistor, resistors) {
+		QString newResistance = resistance.isEmpty() ? resistor->resistance() : resistance;
+		QString newPinSpacing = pinSpacing.isEmpty() ? resistor->pinSpacing() : pinSpacing;
+		if (newResistance == resistor->resistance() && newPinSpacing == resistor->pinSpacing()) continue;
+		new SetResistanceCommand(this, resistor->id(), resistor->resistance(), newResistance, resistor->pinSpacing(), newPinSpacing, parentCommand);
+		any = true;
 	}
 
-	if (pinSpacing.isEmpty()) {
-		pinSpacing = resistor->pinSpacing();
+	if (any) {
+		m_undoStack->waitPush(parentCommand, PropChangeDelay);
+	} else {
+		delete parentCommand;
 	}
-
-	auto * cmd = new SetResistanceCommand(this, item->id(), resistor->resistance(), resistance, resistor->pinSpacing(), pinSpacing, nullptr);
-	cmd->setText(tr("Change Resistance from %1 to %2").arg(resistor->resistance()).arg(resistance));
-	m_undoStack->waitPush(cmd, PropChangeDelay);
 }
 
 void SketchWidget::setResistance(long itemID, QString resistance, QString pinSpacing, bool doEmit) {
@@ -8186,6 +8504,160 @@ void SketchWidget::setProp(ItemBase * item, const QString & prop, const QString 
 	cmd->setText(tr("Change %1 from %2 to %3").arg(trProp).arg(oldValue).arg(newValue));
 	// unhook triggered action from originating widget event
 	m_undoStack->waitPush(cmd, PropChangeDelay);
+}
+
+void SketchWidget::setPropForSelection(const QString & prop, const QString & value)
+{
+	if (prop.isEmpty()) return;
+
+	// Apply `prop` = `value` to every selected part that exposes that property, in one
+	// undoable action (mirrors setResistance / setHoleSizeForSelection). The single-item
+	// setProp above only touches the part whose inspector combo was edited; this is the
+	// multi-selection counterpart. getSelectedPart() returns null on a multi-selection,
+	// so we walk the selection ourselves.
+	QList<ItemBase *> items;
+	Q_FOREACH (QGraphicsItem * gItem, scene()->selectedItems()) {
+		auto * itemBase = dynamic_cast<ItemBase *>(gItem);
+		if (itemBase == nullptr) continue;
+		itemBase = itemBase->layerKinChief();
+		// Skip co-selected parts of another family that don't have this property
+		// (e.g. a resistor has no "capacitance"), so we never write a bogus local prop.
+		if (itemBase->getProperty(prop).isEmpty()) continue;
+		if (!items.contains(itemBase)) items.append(itemBase);
+	}
+	if (items.isEmpty()) {
+		// Not a multi-selection: fall back to the single active part.
+		ItemBase * itemBase = getSelectedPart();
+		if ((itemBase != nullptr) && !itemBase->getProperty(prop).isEmpty()) items.append(itemBase);
+	}
+	if (items.isEmpty()) return;
+
+	auto * parentCommand = new QUndoCommand(tr("Change %1 of %n part(s)", "", items.count()).arg(prop));
+
+	bool any = false;
+	Q_FOREACH (ItemBase * itemBase, items) {
+		QString oldValue = itemBase->getProperty(prop);
+		if (oldValue == value) continue;
+		new SetPropCommand(this, itemBase->id(), prop, oldValue, value, true, parentCommand);
+		any = true;
+	}
+
+	if (any) {
+		m_undoStack->waitPush(parentCommand, PropChangeDelay);
+	} else {
+		delete parentCommand;
+	}
+}
+
+int SketchWidget::collectSelectedNetLabels(QList<SymbolPaletteItem *> & netLabels)
+{
+	Q_FOREACH (QGraphicsItem * gItem, scene()->selectedItems()) {
+		auto * symbol = dynamic_cast<SymbolPaletteItem *>(gItem);
+		if ((symbol != nullptr) && symbol->isOnlyNetLabel()) {
+			netLabels.append(symbol);
+		}
+	}
+	return netLabels.count();
+}
+
+int SketchWidget::collectSelectedWires(QList<Wire *> & wires)
+{
+	Q_FOREACH (QGraphicsItem * gItem, scene()->selectedItems()) {
+		auto * wire = dynamic_cast<Wire *>(gItem);
+		if (wire != nullptr) {
+			wires.append(wire);
+		}
+	}
+	return wires.count();
+}
+
+int SketchWidget::collectSelectedHoles(QList<Hole *> & holes)
+{
+	Q_FOREACH (QGraphicsItem * gItem, scene()->selectedItems()) {
+		auto * hole = dynamic_cast<Hole *>(gItem);
+		if (hole != nullptr) {
+			holes.append(hole);
+		}
+	}
+	return holes.count();
+}
+
+QStringList SketchWidget::commonPropValues(const QString & prop)
+{
+	// The intersection of available values for `prop` across the families of the selected
+	// parts (e.g. the packages every selected part's family offers).
+	QList<ItemBase *> items;
+	Q_FOREACH (QGraphicsItem * gItem, scene()->selectedItems()) {
+		auto * ib = dynamic_cast<ItemBase *>(gItem);
+		if (ib == nullptr) continue;
+		ItemBase * chief = ib->layerKinChief();
+		if (!items.contains(chief)) items.append(chief);
+	}
+	ReferenceModel * refModel = referenceModel();
+	if (items.isEmpty() || (refModel == nullptr)) return QStringList();
+
+	QStringList common;
+	bool first = true;
+	Q_FOREACH (ItemBase * item, items) {
+		if (item->modelPart() == nullptr) continue;
+		QStringList values = refModel->propValues(item->modelPart()->family(), prop, true);
+		if (first) {
+			common = values;
+			first = false;
+		}
+		else {
+			QStringList keep;
+			Q_FOREACH (const QString & v, common) {
+				if (values.contains(v)) keep.append(v);
+			}
+			common = keep;
+		}
+		if (common.isEmpty()) break;
+	}
+	return common;
+}
+
+void SketchWidget::setHoleSizeForSelection(const QString & diameter, const QString & ringThickness)
+{
+	// Apply a hole diameter and/or ring thickness to every selected hole/via in one
+	// undoable action. An empty argument means "keep that hole's current value", so a
+	// diameter-only change preserves each hole's own ring thickness and vice versa.
+	QList<Hole *> holes;
+	collectSelectedHoles(holes);
+	if (holes.isEmpty()) return;
+
+	auto * parentCommand = new QUndoCommand(tr("Change hole size of %n hole(s)", "", holes.count()));
+
+	bool any = false;
+	Q_FOREACH (Hole * hole, holes) {
+		QStringList dt = hole->holeSize().split(",");
+		if (dt.count() != 2) continue;
+		QString newDiameter = diameter.isEmpty() ? dt.at(0) : diameter;
+		QString newThickness = ringThickness.isEmpty() ? dt.at(1) : ringThickness;
+		QString oldSize = hole->holeSize();
+		// Clamp to this hole's limits (e.g. a via's minimum ring thickness) so a value
+		// below the minimum becomes the minimum rather than an invalid size.
+		QString newSize = hole->clampHoleSize(newDiameter + "," + newThickness);
+		if (newSize == oldSize) continue;
+
+		QRectF oldRect = hole->getRect(oldSize);
+		QRectF newRect = hole->getRect(newSize);
+
+		new SetPropCommand(this, hole->id(), "hole size", oldSize, newSize, true, parentCommand);
+		hole->saveGeometry();
+		ViewGeometry vg(hole->getViewGeometry());
+		QPointF p(vg.loc().x() + (oldRect.width() / 2) - (newRect.width() / 2),
+		          vg.loc().y() + (oldRect.height() / 2) - (newRect.height() / 2));
+		vg.setLoc(p);
+		new MoveItemCommand(this, hole->id(), hole->getViewGeometry(), vg, false, parentCommand);
+		any = true;
+	}
+
+	if (any) {
+		m_undoStack->waitPush(parentCommand, PropChangeDelay);
+	} else {
+		delete parentCommand;
+	}
 }
 
 void SketchWidget::setHoleSize(ItemBase * item, const QString & prop, const QString & trProp, const QString & oldValue, const QString & newValue, QRectF & oldRect, QRectF & newRect, bool redraw)
@@ -8253,6 +8725,12 @@ void SketchWidget::resizeBoard(double mmW, double mmH, bool doEmit)
 	PaletteItem * item = getSelectedPart();
 	if (!item) {
 		return InfoGraphicsView::resizeBoard(mmW, mmH, doEmit);
+	}
+
+	ItemBase * chief = item->layerKinChief();
+	if (chief->moveLock()) {
+		chief->flashLockSymbol();
+		return;
 	}
 
 	switch (item->itemType()) {
@@ -8503,8 +8981,7 @@ void SketchWidget::initBackgroundColor() {
 	QSettings settings;
 	QString colorName = settings.value(QString("%1BackgroundColor").arg(getShortName())).toString();
 	if (!colorName.isEmpty()) {
-		QColor color;
-		color.setNamedColor(colorName);
+		QColor color = QColor::fromString(colorName);
 		setBackground(color);
 	}
 
@@ -8719,7 +9196,7 @@ void SketchWidget::resizeJumperItem(long itemID, QPointF pos, QPointF c0, QPoint
 	qobject_cast<JumperItem *>(item)->resize(pos, c0, c1);
 }
 
-QList<ItemBase *> SketchWidget::selectAllObsolete()
+QList<ItemBase *> SketchWidget::collectObsolete()
 {
 	QSet<ItemBase *> itemBases;
 	Q_FOREACH (QGraphicsItem * item, scene()->items()) {
@@ -8729,9 +9206,15 @@ QList<ItemBase *> SketchWidget::selectAllObsolete()
 
 		itemBases.insert(itemBase->layerKinChief());
 	}
-
-	selectAllItems(itemBases, QObject::tr("Select outdated parts"));
 	return itemBases.values();
+}
+
+QList<ItemBase *> SketchWidget::selectAllObsolete()
+{
+	QList<ItemBase *> items = collectObsolete();
+	QSet<ItemBase *> itemBases(items.begin(), items.end());
+	selectAllItems(itemBases, QObject::tr("Select outdated parts"));
+	return items;
 }
 
 int SketchWidget::selectAllMoveLock()
@@ -9186,6 +9669,12 @@ bool SketchWidget::resizingBoardRelease() {
 }
 
 void SketchWidget::resizeBoard() {
+	if (m_resizingBoard && m_resizingBoard->moveLock()) {
+		m_resizingBoard->flashLockSymbol();
+		m_resizingBoard = nullptr;
+		return;
+	}
+
 	QSizeF oldSize;
 	QPointF oldPos;
 	m_resizingBoard->getParams(oldPos, oldSize);
@@ -9586,7 +10075,26 @@ bool SketchWidget::curvyWiresIndicated(Qt::KeyboardModifiers modifiers)
 void SketchWidget::setMoveLockForCommand(long id, bool lock)
 {
 	ItemBase * itemBase = findItem(id);
-	if (itemBase) itemBase->setMoveLock(lock);
+	if (itemBase == nullptr) return;
+
+	itemBase->setMoveLock(lock);
+	if (m_infoView && m_infoView->currentItem()
+	        && m_infoView->currentItem()->layerKinChief() == itemBase->layerKinChief()) {
+		// keep the Inspector lock checkbox in sync, also on undo/redo replay
+		viewItemInfo(itemBase);
+	}
+}
+
+void SketchWidget::changeMoveLock(ItemBase * itemBase, bool moveLock)
+{
+	if (itemBase == nullptr) return;
+
+	ItemBase * chief = itemBase->layerKinChief();
+	if (chief->moveLock() == moveLock) return;
+
+	auto * parentCommand = new QUndoCommand(moveLock ? tr("Lock part") : tr("Unlock part"));
+	new MoveLockCommand(this, chief->id(), chief->moveLock(), moveLock, parentCommand);
+	m_undoStack->push(parentCommand);
 }
 
 void SketchWidget::triggerRotate(ItemBase * itemBase, double degrees)
@@ -9995,7 +10503,8 @@ void SketchWidget::showUnrouted() {
 
 	QString message = tr("Unrouted connections are highlighted in yellow.");
 	if (toShow.count() == 0) message = tr("There are no unrouted connections");
-	FMessageBox::information(this, tr("Unrouted connections"),
+	//: Shown for whichever view is active (breadboard/schematic/pcb) — keep the translation view-neutral.
+	FMessageBox::information(this, tr("Unrouted connections", "dialog title"),
 	                         tr("%1\n\n"
 	                            "Note: you can also trigger this display by mousing down on the routing status text in the status bar.").arg(message));
 
@@ -10041,10 +10550,20 @@ void SketchWidget::selectItem(ItemBase * itemBase) {
 }
 
 void SketchWidget::selectItemsWithModuleID(ModelPart * modelPart) {
+	// Net labels are one logical part split across several moduleIDs (left/right facing,
+	// v4/v5), so match the whole family by suffix rather than the exact moduleID -- otherwise
+	// "Find Part in Sketch" on the bin's v5 net label never finds placed v4/left labels.
+	// This mirrors the family test used in PartFactory, PaletteModel and SymbolPaletteItem.
+	bool isNetLabel = modelPart->moduleID().endsWith(ModuleIDNames::NetLabelModuleIDName);
+
 	QSet<ItemBase *> itemBases;
 	Q_FOREACH (QGraphicsItem * item, scene()->items()) {
 		auto * itemBase = dynamic_cast<ItemBase *>(item);
-		if (itemBase && itemBase->moduleID() == modelPart->moduleID()) {
+		if (itemBase == nullptr) continue;
+		bool match = isNetLabel
+			? itemBase->moduleID().endsWith(ModuleIDNames::NetLabelModuleIDName)
+			: itemBase->moduleID() == modelPart->moduleID();
+		if (match) {
 			itemBases.insert(itemBase->layerKinChief());
 		}
 	}
@@ -10137,6 +10656,11 @@ void SketchWidget::selectItems(QList<ItemBase *> startingItemBases) {
 QGraphicsItem * SketchWidget::getClickedItem(QList<QGraphicsItem *> & items) {
 	Q_FOREACH (QGraphicsItem * gitem, items) {
 		if (gitem->acceptedMouseButtons() != Qt::NoButton) {
+			auto * itemBase = dynamic_cast<ItemBase *>(gitem);
+			if (itemBase && itemBase->layerKinChief()->moveLock()) {
+				// locked items yield the click to whatever lies beneath
+				continue;
+			}
 			bool ok = true;
 			Q_EMIT clickedItemCandidateSignal(gitem, ok);
 			if (ok) {

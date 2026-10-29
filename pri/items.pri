@@ -14,6 +14,7 @@
 # ********************************************************************/
 
 HEADERS += \
+    src/items/bugannotation.h \
     src/items/breadboard.h \
     src/items/capacitor.h \
     src/items/clipablewire.h \
@@ -22,6 +23,7 @@ HEADERS += \
     src/items/groundplane.h \
     src/items/hole.h \
     src/items/itembase.h \
+    src/items/itemdecorations.h \
     src/items/jumperitem.h \
     src/items/layerkinpaletteitem.h \
     src/items/led.h \
@@ -29,11 +31,13 @@ HEADERS += \
     src/items/moduleidnames.h \
     src/items/mysterypart.h \
     src/items/note.h \
+    src/items/oscilloscope.h \
     src/items/pad.h \
     src/items/paletteitem.h \
     src/items/paletteitembase.h \
     src/items/partfactory.h \
     src/items/partlabel.h \
+    src/items/partlabelcontextmenu.h \
     src/items/perfboard.h \
     src/items/pinheader.h \
     src/items/propertydef.h \
@@ -56,6 +60,7 @@ HEADERS += \
 
 
 SOURCES += \
+    src/items/bugannotation.cpp \
     src/items/breadboard.cpp \
     src/items/capacitor.cpp \
     src/items/clipablewire.cpp \
@@ -64,6 +69,7 @@ SOURCES += \
     src/items/groundplane.cpp \
     src/items/hole.cpp \
     src/items/itembase.cpp \
+    src/items/itemdecorations.cpp \
     src/items/jumperitem.cpp \
     src/items/layerkinpaletteitem.cpp \
     src/items/led.cpp \
@@ -71,11 +77,13 @@ SOURCES += \
     src/items/moduleidnames.cpp \
     src/items/mysterypart.cpp \
     src/items/note.cpp \
+    src/items/oscilloscope.cpp \
     src/items/pad.cpp \
     src/items/paletteitem.cpp \
     src/items/paletteitembase.cpp \
     src/items/partfactory.cpp \
     src/items/partlabel.cpp \
+    src/items/partlabelcontextmenu.cpp \
     src/items/perfboard.cpp \
     src/items/pinheader.cpp \
     src/items/propertydef.cpp \

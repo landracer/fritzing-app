@@ -21,12 +21,14 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "prefsdialog.h"
 #include "translatorlistmodel.h"
 #include "../items/itembase.h"
+#include "../items/symbolpaletteitem.h"
 #include "setcolordialog.h"
 #include "../sketch/zoomablegraphicsview.h"
 #include "../mainwindow/mainwindow.h"
 #include "../utils/folderutils.h"
 
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QComboBox>
 #include <QPushButton>
@@ -34,6 +36,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QDialogButtonBox>
 #include <QGroupBox>
 #include <QRadioButton>
+#include <QButtonGroup>
+#include <QAbstractButton>
 #include <QSpinBox>
 #include <QSettings>
 #include <QLineEdit>
@@ -142,6 +146,7 @@ void PrefsDialog::initSchematic(QWidget * widget, ViewInfoThing * viewInfoThing)
 {
 	auto * vLayout = new QVBoxLayout();
 	vLayout->addWidget(createCurvyForm(viewInfoThing));
+	vLayout->addWidget(createNetLabelStyleForm());
 	vLayout->addSpacerItem(new QSpacerItem(1, 1, QSizePolicy::Preferred, QSizePolicy::Expanding));
 
 	widget->setLayout(vLayout);
@@ -168,7 +173,6 @@ void PrefsDialog::initBetaFeatures(QWidget * widget)
 {
 	QVBoxLayout * vLayout = new QVBoxLayout();
 	vLayout->addWidget(createGerberBetaFeaturesForm());
-	vLayout->addWidget(createConnectorDebugForm());
 	vLayout->addWidget(createProjectPropertiesForm());
 	vLayout->addSpacerItem(new QSpacerItem(1, 1, QSizePolicy::Preferred, QSizePolicy::Expanding));
 	widget->setLayout(vLayout);
@@ -483,31 +487,6 @@ QWidget * PrefsDialog::createGerberBetaFeaturesForm() {
 	return gerberGroup;
 }
 
-QWidget * PrefsDialog::createConnectorDebugForm() {
-	QSettings settings;
-	QGroupBox * group = new QGroupBox(tr("Connector debugging"), this);
-
-	QVBoxLayout * layout = new QVBoxLayout();
-
-	QLabel * label = new QLabel(tr("When enabled, the breadboard, schematic and PCB backgrounds turn red "
-								   "whenever Fritzing detects inconsistent or unrouted connectors. "
-								   "This is a developer diagnostic and is disabled by default."));
-	label->setWordWrap(true);
-	layout->addWidget(label);
-	layout->addSpacing(10);
-
-	QCheckBox * box = new QCheckBox(tr("Highlight connector errors in red"));
-	box->setChecked(settings.value("connectorDebugHighlightEnabled", false).toBool());
-	layout->addWidget(box);
-
-	group->setLayout(layout);
-
-	connect(box, &QCheckBox::clicked, this, [this](bool checked) {
-		m_settings.insert("connectorDebugHighlightEnabled", QString::number(checked));
-	});
-
-	return group;
-}
 
 QWidget *PrefsDialog::createProjectPropertiesForm() {
 	QGroupBox * projectPropertiesBox = new QGroupBox(tr("Project properties"), this );
@@ -567,12 +546,26 @@ QWidget *PrefsDialog::createProjectPropertiesForm() {
                                      "Set a negative number for real time.");
     layout->addWidget(simAnimationTimeEdit);
 
+	QLabel * simSpiceOptionsLabel = new QLabel(tr("Specific options for the SPICE simulator: "));
+	layout->addWidget(simSpiceOptionsLabel);
+	QTextEdit *simSpiceOptionsEdit = new QTextEdit();
+	simSpiceOptionsEdit->setText(m_projectProperties->getProjectProperty(ProjectPropertyKeySimulatorSpiceOptions));
+	simSpiceOptionsEdit->setFixedWidth(FORMLABELWIDTH * 2);
+	simSpiceOptionsEdit->setFixedHeight(FORMLABELWIDTH * 0.5);
+	simSpiceOptionsEdit->setToolTip("These are the SPICE options for the simulation.\n"
+									 "Check the ngSpice manual for the options.");
+	layout->addWidget(simSpiceOptionsEdit);
+
     projectPropertiesBox->setLayout(layout);
 
     connect(simTimeStepRB, SIGNAL(toggled(bool)), this, SLOT(setSimulationTimeStepMode(bool)));
     connect(simNumStepsEdit, SIGNAL(textChanged(QString)), this, SLOT(setSimulationNumberOfSteps(QString)));
     connect(simTimeStepEdit, SIGNAL(textChanged(QString)), this, SLOT(setSimulationTimeStep(QString)));
     connect(simAnimationTimeEdit, SIGNAL(textChanged(QString)), this, SLOT(setSimulationAnimationTime(QString)));
+	connect(simSpiceOptionsEdit, &QTextEdit::textChanged, this, [this, simSpiceOptionsEdit]() {
+		QString currentText = simSpiceOptionsEdit->toPlainText();
+		setSimulationSpiceOptions(currentText);
+	});
 
 	return projectPropertiesBox;
 
@@ -593,6 +586,10 @@ void PrefsDialog::setSimulationTimeStep(const QString &timeStep) {
 
 void PrefsDialog::setSimulationAnimationTime(const QString &animationTime) {
     m_projectProperties->setProjectProperty(ProjectPropertyKeySimulatorAnimationTimeS, animationTime);
+}
+
+void PrefsDialog::setSimulationSpiceOptions(const QString &spiceOptions) {
+	m_projectProperties->setProjectProperty(ProjectPropertyKeySimulatorSpiceOptions, spiceOptions);
 }
 
 void PrefsDialog::clear() {
@@ -664,17 +661,20 @@ void PrefsDialog::updateWheelText() {
 	switch((ZoomableGraphicsView::WheelMapping) m_wheelMapping) {
 	case ZoomableGraphicsView::ScrollPrimary:
 	default:
-		text = tr("<b>Scroll priority</b><br/>") + tr("no keys down = scroll<br/><kbd>Shift</kbd> key swaps scroll axis<br/><kbd>Alt</kbd> or <kbd>%1</kbd> = zoom").arg(cKey);
+		text = tr("<b>Scroll priority</b><br/>"
+			"no keys down = scroll<br/><kbd>Shift</kbd> key swaps scroll axis<br/><kbd>Alt</kbd> or <kbd>%1</kbd> = zoom").arg(cKey);
 		break;
 	case ZoomableGraphicsView::ZoomPrimary:
-		text = tr("<b>Zoom priority</b><br/>") + tr("no keys down = zoom<br/><kbd>Alt</kbd> or <kbd>%1</kbd> = scroll<br/><kbd>Shift</kbd> key swaps scroll axis").arg(cKey);
+		text = tr("<b>Zoom priority</b><br/>"
+			"no keys down = zoom<br/><kbd>Alt</kbd> or <kbd>%1</kbd> = scroll<br/><kbd>Shift</kbd> key swaps scroll axis").arg(cKey);
 		break;
 	case ZoomableGraphicsView::Guess:
-		text = tr("<b>Guess</b><br/>") +
-				tr("Let Fritzing guess if the input is from a wheel or a touchpad. <kbd>Alt</kbd> or <kbd>%1</kbd> modify scrolling. <kbd>Shift</kbd> can modify the axis or the speed.").arg(cKey);
+		text = tr("<b>Guess</b><br/>"
+				"Let Fritzing guess if the input is from a wheel or a touchpad. <kbd>Alt</kbd> or <kbd>%1</kbd> modify scrolling. <kbd>Shift</kbd> can modify the axis or the speed.").arg(cKey);
 		break;
 	case ZoomableGraphicsView::Pure:
-		text = tr("<b>Pure</b><br/>") + tr("Use system defaults to interpret the wheel input. Don't try anything fancy. Recommended when using a touchpad with pinch gestures.");
+		text = tr("<b>Pure</b><br/>"
+			"Use system defaults to interpret the wheel input. Don't try anything fancy. Recommended when using a touchpad with pinch gestures.");
 	}
 
 	// border, border-radius and padding are not supported
@@ -733,4 +733,69 @@ void PrefsDialog::curvyChanged() {
 
 	ViewInfoThing * viewInfoThing = &m_viewInfoThings[sender()->property("index").toInt()];
 	m_settings.insert(QString("%1CurvyWires").arg(viewInfoThing->shortName), checkBox->isChecked() ? "1" : "0");
+}
+
+QWidget* PrefsDialog::createNetLabelStyleForm()
+{
+	auto * groupBox = new QGroupBox(tr("Net label style"));
+	auto * layout = new QVBoxLayout;
+
+	auto * label = new QLabel(tr("The default text alignment for new net labels. "
+	                             "\"Connector aligned\" keeps the text next to the connector; "
+	                             "\"Outside aligned\" pushes it to the far edge. The two symbols "
+	                             "show the result for both label orientations. "
+	                             "You can override the alignment per net label in the Inspector."));
+	label->setWordWrap(true);
+	layout->addWidget(label);
+
+	layout->addSpacing(10);
+
+	QSettings settings;
+	QString current = settings.value("schemNetLabelStyle", "outside").toString();
+
+	// "legacy" is intentionally not offered as a global default (it can still be selected
+	// per item in the Inspector).
+	const QString policies[2] = { "outside", "connector" };
+	const QString texts[2] = { tr("Outside aligned"), tr("Connector aligned") };
+	const QSize iconSize(56, 22);
+
+	// A grid keeps the two preview columns vertically aligned regardless of the (differing)
+	// radio-button label widths.
+	auto * grid = new QGridLayout;
+	auto * group = new QButtonGroup(this);
+	for (int i = 0; i < 2; ++i) {
+		auto * radio = new QRadioButton(texts[i]);
+		radio->setProperty("policy", policies[i]);
+		radio->setChecked(current.compare(policies[i], Qt::CaseInsensitive) == 0);
+		group->addButton(radio);
+		grid->addWidget(radio, i, 0);
+
+		// The two arrows point inward (toward each other): right-pointing on the left,
+		// left-pointing on the right. So "outside" reads as text on the outer edges and
+		// "connector" as text meeting in the middle near the connectors.
+		int col = 1;
+		for (bool goLeft : { false, true }) {
+			auto * symbol = new QLabel();
+			symbol->setPixmap(NetLabel::stylePreviewPixmap(policies[i], goLeft, iconSize));
+			symbol->setFixedSize(iconSize);
+			grid->addWidget(symbol, i, col++);
+		}
+	}
+	grid->setColumnStretch(3, 1);
+	grid->setHorizontalSpacing(6);
+	// Make sure exactly one is selected even if the stored value was unexpected.
+	if (group->checkedButton() == nullptr && !group->buttons().isEmpty()) {
+		group->buttons().first()->setChecked(true);
+	}
+
+	connect(group, SIGNAL(buttonClicked(QAbstractButton *)), this, SLOT(netLabelStyleChanged(QAbstractButton *)));
+
+	layout->addLayout(grid);
+	groupBox->setLayout(layout);
+	return groupBox;
+}
+
+void PrefsDialog::netLabelStyleChanged(QAbstractButton * button) {
+	if (button == nullptr) return;
+	m_settings.insert("schemNetLabelStyle", button->property("policy").toString());
 }

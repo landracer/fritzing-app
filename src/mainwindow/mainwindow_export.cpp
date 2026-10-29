@@ -37,6 +37,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QDir>
 #include <QTabWidget>
 
+#include <cmath>
+
 #include "mainwindow.h"
 #include "debugdialog.h"
 #include "waitpushundostack.h"
@@ -46,9 +48,11 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "dialogs/exportparametersdialog.h"
 #include "eagle/fritzing2eagle.h"
 #include "items/partfactory.h"
+#include "items/itemdecorations.h"
 #include "infoview/htmlinfoview.h"
 #include "ipc/ipc_d_356.h"
 #include "program/programwindow.h"
+#include "sketch/breadboardsketchwidget.h"
 #include "sketch/schematicsketchwidget.h"
 #include "sketch/pcbsketchwidget.h"
 #include "sketch/sketchmeta.h"
@@ -57,6 +61,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSvgRenderer>
 #include "svg/svgfilesplitter.h"
 #include "svg/gerbergenerator.h"
+#include "svg/bompdfgenerator.h"
 #include "autoroute/panelizerstartdialog.h"
 #include "autoroute/panelizerinteractivedialog.h"
 #include "gerberpreview/gerberpreviewdialog.h"
@@ -76,6 +81,7 @@ static QString pngActionType = ".png";
 static QString svgActionType = ".svg";
 static QString bomActionType = ".html";
 static QString bomCsvActionType = ".csv";
+static QString bomPdfActionType = "_bom.pdf";
 static QString ipcActionType = ".ipc";
 static QString netlistActionType = ".xml";
 static QString spiceNetlistActionType = ".cir";
@@ -86,6 +92,22 @@ static QHash<QString, QString> fileExtFormats;
 
 static QRegularExpression AaCc("[aAcC]");
 static QRegularExpression LabelNumber("([^\\d]+)(.*)");
+
+namespace {
+
+constexpr qreal NearIntegerExportDimensionEpsilon = 1.0e-6;
+
+int exportImageDimension(qreal scaledDimension)
+{
+	const qreal rounded = std::round(scaledDimension);
+	if (std::abs(scaledDimension - rounded) < NearIntegerExportDimensionEpsilon) {
+		return static_cast<int>(rounded);
+	}
+
+	return static_cast<int>(scaledDimension);
+}
+
+}
 
 static constexpr double InchesPerMeter = 39.3700787;
 
@@ -121,7 +143,7 @@ bool sortPartList(ItemBase * b1, ItemBase * b2) {
 
 void MainWindow::initNames()
 {
-	OtherKnownExtensions << jpgActionType << pdfActionType << pngActionType << svgActionType << bomActionType << bomCsvActionType << ipcActionType << netlistActionType << spiceNetlistActionType;
+	OtherKnownExtensions << jpgActionType << pdfActionType << pngActionType << svgActionType << bomActionType << bomCsvActionType << bomPdfActionType << ipcActionType << netlistActionType << spiceNetlistActionType;
 
 	filePrintFormats[pdfActionType] = QPrinter::PdfFormat;
 
@@ -134,6 +156,7 @@ void MainWindow::initNames()
 	fileExtFormats[svgActionType] = tr("SVG Image (*.svg)");
 	fileExtFormats[bomActionType] = tr("BoM Text File (*.html)");
 	fileExtFormats[bomCsvActionType] = tr("BoM CSV File (*.csv)");
+	fileExtFormats[bomPdfActionType] = tr("PDF (*.pdf)");
 	fileExtFormats[ipcActionType] = tr("IPC-D-356 File (*.ipc)");
 
 	QSettings settings;
@@ -153,9 +176,9 @@ void MainWindow::print() {
 
 	auto *printDialog = new QPrintDialog(&printer, this);
 	if (printDialog->exec() == QDialog::Accepted) {
-		m_statusBar->showMessage(tr("Printing..."));
+		statusMessage(tr("Printing..."), 0);
 		printAux(printer, true, true);
-		m_statusBar->showMessage(tr("Ready"), 2000);
+		statusMessage(tr("Ready"), StatusMessageTimeout);
 	} else {
 		return;
 	}
@@ -175,12 +198,12 @@ void MainWindow::exportEtchable(bool wantPDF, bool wantSVG)
 	int boardCount;
 	ItemBase * board = m_pcbGraphicsView->findSelectedBoard(boardCount);
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Your sketch does not have a board yet! Please add a PCB in order to export etchable."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Etchable export can only handle one board at a time--please select the board you want to export."));
 		return;
 	}
@@ -210,7 +233,7 @@ void MainWindow::exportEtchable(bool wantPDF, bool wantSVG)
 		prefix = QString("%1_%2_").arg(board->instanceTitle()).arg(board->id());
 	}
 
-	QString exportDir = QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting"),
+	QString exportDir = QFileDialog::getExistingDirectory(this, tr("Choose a folder for exporting", "dialog title"),
 	                    defaultSaveFolder(),
 	                    QFileDialog::ShowDirsOnly
 	                    | QFileDialog::DontResolveSymlinks);
@@ -347,7 +370,7 @@ void MainWindow::exportEtchable(bool wantPDF, bool wantSVG)
 
 	}
 
-	m_statusBar->showMessage(tr("Sketch exported"), 2000);
+	statusMessage(tr("Sketch exported"), StatusMessageTimeout);
 	delete fileProgressDialog;
 
 	/*
@@ -411,7 +434,7 @@ void MainWindow::exportEtchable(bool wantPDF, bool wantSVG)
 
 		bool result = image.save(fileName);
 		if (!result) {
-			QMessageBox::warning(this, tr("Fritzing"), tr("Unable to save %1").arg(fileName) );
+			QMessageBox::warning(this, tr("Fritzing", "dialog title"), tr("Unable to save %1").arg(fileName) );
 		}
 
 	*/
@@ -515,6 +538,11 @@ void MainWindow::doExport() {
 		return;
 	}
 
+	if (actionType.compare(bomPdfActionType) == 0) {
+		exportBOM_PDF();
+		return;
+	}
+
 	if (actionType.compare(ipcActionType) == 0) {
 		exportIPC_D_356A_interactive();
 		return;
@@ -559,9 +587,9 @@ void MainWindow::doExport() {
 			QPrinter printer(QPrinter::HighResolution);
 			printer.setOutputFormat(filePrintFormats[actionType]);
 			printer.setOutputFileName(fileName);
-			m_statusBar->showMessage(tr("Exporting..."));
+			statusMessage(tr("Exporting..."), 0);
 			printAux(printer, true, false);
-			m_statusBar->showMessage(tr("Sketch exported"), 2000);
+			statusMessage(tr("Sketch exported"), StatusMessageTimeout);
 		} else { // PNG...
 			DebugDialog::debug(QString("format: %1 %2").arg(fileExt).arg(fileExportFormats[actionType]));
 			int quality = (actionType == pngActionType ? 1 : 100);
@@ -614,7 +642,8 @@ void MainWindow::exportAux(QString fileName, QImage::Format format, int quality,
 
 	double resMultiplier = dpi / GraphicsUtils::SVGDPI;
 
-	QSize imgSize(source.width() * resMultiplier, source.height() * resMultiplier);
+	QSize imgSize(exportImageDimension(source.width() * resMultiplier),
+	              exportImageDimension(source.height() * resMultiplier));
 	QImage image(imgSize, format);
 	image.setDotsPerMeterX(InchesPerMeter * dpi);
 	image.setDotsPerMeterY(InchesPerMeter * dpi);
@@ -640,7 +669,7 @@ void MainWindow::exportAux(QString fileName, QImage::Format format, int quality,
 	imageWriter.setQuality(quality);
 	bool result = imageWriter.write(image);
 	if (!result) {
-		QMessageBox::warning(this, tr("Fritzing"), tr("Unable to save %1").arg(fileName) );
+		QMessageBox::warning(this, tr("Fritzing", "dialog title"), tr("Unable to save %1").arg(fileName) );
 	}
 }
 
@@ -675,7 +704,7 @@ void MainWindow::printAux(QPrinter &printer, bool removeBackground, bool paginat
 	QPainter painter;
 	if (!painter.begin(&printer)) {
 		afterExport(removeBackground);
-		QMessageBox::warning(this, tr("Fritzing"), tr("Cannot print to %1").arg(printer.docName()));
+		QMessageBox::warning(this, tr("Fritzing", "dialog title"), tr("Cannot print to %1").arg(printer.docName()));
 		return;
 	}
 
@@ -759,6 +788,17 @@ QRectF MainWindow::prepareExport(bool removeBackground)
 		item->setSelected(false);
 	}
 
+	// The lock padlock is an on-screen affordance, not part of the design: hide it (and
+	// restore it in afterExport) so it never lands in an exported image. Done before the
+	// bounding-rect pass below so a hidden lock cannot enlarge the exported area.
+	m_hiddenForExport.clear();
+	Q_FOREACH(QGraphicsItem *item, m_currentGraphicsView->scene()->items()) {
+		if ((dynamic_cast<LockSymbolItem *>(item) != nullptr) && item->isVisible()) {
+			item->setVisible(false);
+			m_hiddenForExport.append(item);
+		}
+	}
+
 	QRectF itemsBoundingRect;
 	Q_FOREACH(QGraphicsItem *item,  m_currentGraphicsView->scene()->items()) {
 		if (!item->isVisible()) continue;
@@ -795,6 +835,11 @@ void MainWindow::afterExport(bool removeBackground)
 		item->setSelected(true);
 	}
 
+	Q_FOREACH(QGraphicsItem *item, m_hiddenForExport) {
+		item->setVisible(true);
+	}
+	m_hiddenForExport.clear();
+
 	if (removeBackground) {
 		m_currentGraphicsView->setBackground(m_bgColor);
 	}
@@ -810,7 +855,7 @@ bool MainWindow::saveAsAux(const QString & fileName) {
 
 	if (fileInfo.exists()) {
 		if (!fileInfo.isWritable()) {
-			FMessageBox::warning(this, tr("Fritzing"),
+			FMessageBox::warning(this, tr("Fritzing", "dialog title"),
 					     tr("Cannot write file %1:\n%2.")
 									 .arg(fileName, tr("File is not writable")));
 			return false;
@@ -819,7 +864,7 @@ bool MainWindow::saveAsAux(const QString & fileName) {
 		// If the file does not exist, check if we can create it
 		QFile file(fileName);
 		if (!file.open(QFile::WriteOnly | QFile::Text)) {
-			FMessageBox::warning(this, tr("Fritzing"),
+			FMessageBox::warning(this, tr("Fritzing", "dialog title"),
 					     tr("Cannot write file %1:\n%2.")
 					     .arg(fileName, file.errorString()));
 			return false;
@@ -839,7 +884,7 @@ bool MainWindow::saveAsAux(const QString & fileName) {
 	m_autosaveNeeded = false;
 	undoStackCleanChanged(true);
 
-	m_statusBar->showMessage(tr("Saved '%1'").arg(fileName), 2000);
+	statusMessage(tr("Saved '%1'").arg(fileName), StatusMessageTimeout);
 	setCurrentFile(fileName, true, true);
 
 	if(m_restarting && !m_fwFilename.isEmpty()) {
@@ -860,29 +905,35 @@ bool MainWindow::saveAsAux(const QString & fileName) {
 
 bool MainWindow::saveAsAuxAux(const QString & fileName) {
 	QApplication::setOverrideCursor(Qt::WaitCursor);
-
 	connectStartSave(true);
 
-	m_programView->saveAll();
-
-	QDir dir(this->m_fzzFolder);
-	QStringList nameFilters("*" + FritzingSketchExtension);
-	QFileInfoList fileList = dir.entryInfoList(nameFilters, QDir::Files | QDir::NoSymLinks);
-	Q_FOREACH (QFileInfo fileInfo, fileList) {
-		QFile file(fileInfo.absoluteFilePath());
-		file.remove();
+	bool result = false;
+	if (fileName.endsWith(FritzingBundleExtension, Qt::CaseInsensitive)) {
+		result = saveBundleDirectly(fileName);
+	} else {
+		// Unbundled .fz save — keep existing flow
+		FolderUtils::savePreviousVersionToHistory(fileName);
+		m_programView->saveAll();
+		QDir dir(this->m_fzzFolder);
+		QStringList nameFilters("*" + FritzingSketchExtension);
+		QFileInfoList fileList = dir.entryInfoList(nameFilters, QDir::Files | QDir::NoSymLinks);
+		for (const QFileInfo &fi : fileList) {
+			QFile file(fi.absoluteFilePath());
+			file.remove();
+		}
+		QString fzName = dir.absoluteFilePath(
+			QFileInfo(fileName).completeBaseName() + FritzingSketchExtension);
+		result = m_sketchModel->save(fzName, false);
+		if (result) {
+			result = saveAsShareable(fileName, false);
+		}
 	}
-
-	QString fzName = dir.absoluteFilePath(QFileInfo(fileName).completeBaseName() + FritzingSketchExtension);
-	bool result = m_sketchModel->save(fzName, false);
 
 	if (result) {
 		saveLastTabList();
-		result = saveAsShareable(fileName, false);
 	}
 
 	connectStartSave(false);
-
 	QApplication::restoreOverrideCursor();
 
 	// Keep the landing-page preview in sync with board edits: always regenerate the
@@ -896,16 +947,19 @@ bool MainWindow::saveAsShareable(const QString & path, bool saveModel)
 {
 	QString filename = path;
 	QHash<QString, ModelPart *> saveParts;
-	Q_FOREACH (QGraphicsItem * item, m_pcbGraphicsView->scene()->items()) {
-		auto * itemBase = dynamic_cast<ItemBase *>(item);
-		if (itemBase == nullptr) continue;
-		if (itemBase->modelPart() == nullptr) {
-			continue;
-		}
-		if (itemBase->modelPart()->isCore()) continue;
-		if (itemBase->moduleID().contains(PartFactory::OldSchematicPrefix)) continue;
+	const QList<SketchWidget *> views = {m_pcbGraphicsView, m_breadboardGraphicsView, m_schematicGraphicsView};
+	for (auto *view : views) {
+		if (view == nullptr || view->scene() == nullptr) continue;
+		for (QGraphicsItem *item : view->scene()->items()) {
+			auto * itemBase = dynamic_cast<ItemBase *>(item);
+			if (itemBase == nullptr) continue;
+			if (itemBase->modelPart() == nullptr) continue;
+			if (itemBase->modelPart()->isCore()) continue;
+			if (itemBase->moduleID().contains(PartFactory::OldSchematicPrefix)) continue;
+			if (saveParts.contains(itemBase->moduleID())) continue;
 
-		saveParts.insert(itemBase->moduleID(), itemBase->modelPart());
+			saveParts.insert(itemBase->moduleID(), itemBase->modelPart());
+		}
 	}
 	bool result = false;
 	if(alreadyHasExtension(filename, FritzingSketchExtension)) {
@@ -1007,9 +1061,9 @@ bool MainWindow::saveBundledNonAtomicEntity(QString &filename, const QString &ex
 	if(!result) {
 		FMessageBox::warning(
 			this,
-			tr("Fritzing"),
+			tr("Fritzing", "dialog title"),
 			tr("Unable to export %1 as shareable.").arg(bundledFileName) +
-				tr("Saving failed. Please check if home and destionation directory are writeable and not full.")
+				tr("Saving failed. Please check if home and destination directory are writeable and not full.")
 		);
 	}
 
@@ -1065,6 +1119,11 @@ void MainWindow::createExportActions() {
 	m_exportBomCsvAct->setData(bomCsvActionType);
 	m_exportBomCsvAct->setStatusTip(tr("Save a Bill of Materials (BoM)/Shopping List as text"));
 	connect(m_exportBomCsvAct, SIGNAL(triggered()), this, SLOT(doExport()));
+
+	m_exportBomPdfAct = new QAction(tr("Bill of Materials as &PDF"), this);
+	m_exportBomPdfAct->setData(bomPdfActionType);
+	m_exportBomPdfAct->setStatusTip(tr("Save a Bill of Materials with checkboxes as PDF"));
+	connect(m_exportBomPdfAct, SIGNAL(triggered()), this, SLOT(doExport()));
 
 	m_exportIpcAct = new QAction(tr("IPC-D-356A netlist"), this);
 	m_exportIpcAct->setData(ipcActionType);
@@ -1135,7 +1194,7 @@ void MainWindow::exportToEagle() {
 			"strangely, please let us know.");
 	*/
 
-	QMessageBox::information(this, tr("Fritzing"), text);
+	QMessageBox::information(this, tr("Fritzing", "dialog title"), text);
 
 	auto eagle = Fritzing2Eagle(m_pcbGraphicsView);
 	(void) eagle;
@@ -1167,7 +1226,7 @@ void MainWindow::exportToEagle() {
 
 		exportInfoString += label + tr(" which is a ") + desc + tr(" in a ") + package + tr(" package.\n");
 	}
-	QMessageBox::information(this, tr("Fritzing"), exportInfoString);
+	QMessageBox::information(this, tr("Fritzing", "dialog title"), exportInfoString);
 	*/
 
 	/*
@@ -1278,21 +1337,23 @@ QString MainWindow::getExportBOM_CSV() {
 	}
 	propertiess += "\n";
 
-	QString assembly = "Label" + separator + "Part Type" + separator + propertiess;
+	QString assembly = "Label" + separator + "Value" + separator + "Part Type" + separator + propertiess;
 
 	for (auto&& itemBase: partList) {
-		if (itemBase->itemType() != ModelPart::Part) continue;
-		QStringList keys;
+		if (!itemBase->isBomItem()) continue;
+		QString electricalValue = itemBase->electricalValue();
+		electricalValue.replace('\t', ' ');
 		QString desc = itemBase->title() + separator;
-		for ( const QString & property: properties) {
+		for (const QString & property: properties) {
 			QString prop = itemBase->prop(property);
 			desc += prop.replace('\t', ' ') + separator;
 		}
-		++descrs[desc];
-		assembly += itemBase->instanceTitle() + separator + desc + "\n";
+		QString descWithValue = electricalValue + separator + desc;
+		++descrs[descWithValue];
+		assembly += itemBase->instanceTitle() + separator + descWithValue + "\n";
 	}
 
-	QString shopping = "Amount" + separator + "Part Type" + separator + propertiess;
+	QString shopping = "Amount" + separator + "Value" + separator + "Part Type" + separator + propertiess;
 
 	for(const auto & [key, value] : descrs) {
 		shopping += QString::number(value) + separator + key + "\n";
@@ -1312,6 +1373,33 @@ void MainWindow::exportBOM_CSV() {
 				   );
 
 	return;
+}
+
+void MainWindow::exportBOM_PDF() {
+	QString path = defaultSaveFolder();
+	QString fileName = FolderUtils::getSaveFileName(this,
+		tr("Export Bill of Materials as PDF"),
+		path + "/" + constructFileName("bom", bomPdfActionType),
+		fileExtFormats[bomPdfActionType], nullptr);
+
+	if (fileName.isEmpty()) return;
+	if (!fileName.endsWith(".pdf", Qt::CaseInsensitive)) {
+		fileName += ".pdf";
+	}
+
+	// Collect parts
+	QList<ItemBase*> partList;
+	m_currentGraphicsView->collectParts(partList);
+	std::sort(partList.begin(), partList.end(), sortPartList);
+
+	// Delegate to generator
+	bool ok = BomPdfGenerator::exportToPdf(
+		fileName, m_fwFilename, partList,
+		m_schematicGraphicsView);
+	if (!ok) {
+		FMessageBox::warning(this, tr("Fritzing"),
+		                     tr("Unable to write PDF to %1").arg(fileName));
+	}
 }
 
 void MainWindow::exportBOM() {
@@ -1351,10 +1439,10 @@ void MainWindow::exportBOM() {
 	std::sort(partList.begin(), partList.end(), sortPartList);
 
 	Q_FOREACH (ItemBase * itemBase, partList) {
-		if (itemBase->itemType() != ModelPart::Part) continue;
-		QStringList keys;
-//		QHash<QString, QString> properties = HtmlInfoView::getPartProperties(itemBase->modelPart(), itemBase, false, keys);
-		QString desc = itemBase->prop("mn") + "%%%%%" + itemBase->prop("mpn") + "%%%%%" + itemBase->title() + "%%%%%" + getBomProps(itemBase);  // keeps different parts separate if there are no properties
+		if (!itemBase->isBomItem()) continue;
+		// Group on value+mn+mpn+title+props so that e.g. 100Ω and 10kΩ resistors
+		// land in separate shopping-list rows rather than merging by part type.
+		QString desc = itemBase->electricalValue() + "%%%%%" + itemBase->prop("mn") + "%%%%%" + itemBase->prop("mpn") + "%%%%%" + itemBase->title() + "%%%%%" + getBomProps(itemBase);
 		descrs.insert(desc, itemBase);
 		if (!descrList.contains(desc)) {
 			descrList.append(desc);
@@ -1363,17 +1451,27 @@ void MainWindow::exportBOM() {
 
 	QString assemblyString;
 	Q_FOREACH (ItemBase * itemBase, partList) {
-		if (itemBase->itemType() != ModelPart::Part) continue;
-		QStringList keys;
-//		QHash<QString, QString> properties = HtmlInfoView::getPartProperties(itemBase->modelPart(), itemBase, false, keys);
-		assemblyString += bomRowTemplate.arg(itemBase->instanceTitle()).arg(itemBase->prop("mn")).arg(itemBase->prop("mpn")).arg(itemBase->title()).arg(getBomProps(itemBase));
+		if (!itemBase->isBomItem()) continue;
+		assemblyString += bomRowTemplate
+		                  .arg(itemBase->instanceTitle())
+		                  .arg(itemBase->electricalValue())
+		                  .arg(itemBase->prop("mn"))
+		                  .arg(itemBase->prop("mpn"))
+		                  .arg(itemBase->title())
+		                  .arg(getBomProps(itemBase));
 	}
 
 	QString shoppingListString;
 	Q_FOREACH (QString descr, descrList) {
 		QList<ItemBase *> itemBases = descrs.values(descr);
 		QStringList split = descr.split("%%%%%");
-		shoppingListString += bomRowTemplate.arg(itemBases.count()).arg(split.at(0)).arg(split.at(1)).arg(split.at(2)).arg(split.at(3));
+		shoppingListString += bomRowTemplate
+		                      .arg(itemBases.count())
+		                      .arg(split.at(0))
+		                      .arg(split.at(1))
+		                      .arg(split.at(2))
+		                      .arg(split.at(3))
+		                      .arg(split.at(4));
 	}
 
 	QString bom = bomTemplate.arg(
@@ -1423,7 +1521,7 @@ void MainWindow::save_text_file(QString text, QString actionType, QString dialog
 	}
 
 	if (!TextUtils::writeUtf8(fileName, text)) {
-		QMessageBox::warning(this, tr("Fritzing"), errorMessage);
+		QMessageBox::warning(this, tr("Fritzing", "dialog title"), errorMessage);
 	}
 
 	QFileInfo info(fileName);
@@ -1697,12 +1795,12 @@ void MainWindow::exportIPC_D_356A_interactive() {
 
 	// barf an error if there's no board
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 					  tr("Your sketch does not have a board yet!  Please add a PCB in order to export to IPC netlist."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 					  tr("IPC netlist export can only handle one board at a time--please select the board you want to export."));
 		return;
 	}
@@ -1713,7 +1811,7 @@ void MainWindow::exportIPC_D_356A_interactive() {
 				ipcActionType,
 				tr("Export IPC-D-356..."),
 				"d356a",
-				tr("Unable to save IPC file.") + tr("But the content was copied to the clipboard.")
+				tr("Unable to save IPC file. But the content was copied to the clipboard.")
 				);
 
 	return;
@@ -1796,7 +1894,7 @@ void MainWindow::exportNetlist() {
 				netlistActionType,
 				tr("Export Netlist..."),
 				"netlist",
-				tr("Unable to save netlist file.") + tr("But the content was copied to the clipboard.")
+				tr("Unable to save netlist file. But the content was copied to the clipboard.")
 				);
 
 	return;
@@ -1918,12 +2016,12 @@ void MainWindow::exportToGerber() {
 
 	// barf an error if there's no board
 	if (boardCount == 0) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Your sketch does not have a board yet!  Please add a PCB in order to export to Gerber."));
 		return;
 	}
 	if (board == nullptr) {
-		QMessageBox::critical(this, tr("Fritzing"),
+		QMessageBox::critical(this, tr("Fritzing", "dialog title"),
 		                      tr("Gerber export can only handle one board at a time--please select the board you want to export."));
 		return;
 	}
@@ -1947,7 +2045,7 @@ void MainWindow::exportToGerber() {
 	}
 	GerberGenerator::exportToGerber(prefix, exportDir, board, m_pcbGraphicsView, true);
 
-	m_statusBar->showMessage(tr("Sketch exported to Gerber"), 2000);
+	statusMessage(tr("Sketch exported to Gerber"), StatusMessageTimeout);
 
 	// Record production metadata: md5 of the current source .fzz written into the
 	// gerber folder as a marker, plus the gerber dir + thumbnail into QSettings
