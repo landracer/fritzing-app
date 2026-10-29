@@ -141,6 +141,9 @@ protected:
 				return 1;
 			case PdmDevicePixelRatioScaled:
 				return 1;
+			case PdmDevicePixelRatioF_EncodedA:
+			case PdmDevicePixelRatioF_EncodedB:
+				return QPaintDevice::encodeMetricF(metric, 1.0);
 			default:
 				qWarning("GroundPlanePaintDevice::metric() - metric %d unknown", metric);
 				return 0;
@@ -391,7 +394,7 @@ Paths findPolygonForPoint(PolyTree &tree, IntPoint seedPoint) {
 // this sorts a polygon tree to a list<(contour, hole1, hole2, ...)>
 void sortPolygons(PolyTree &tree, QList<Paths> &polygons) {
 	QList<PolyNode *> contours;
-		foreach(PolyNode *initialNode, tree.Childs) {
+		for (PolyNode *initialNode : tree.Childs) {
 			contours.append(initialNode);
 		}
 	while (contours.length()) {
@@ -562,7 +565,7 @@ QString GroundPlaneGenerator::mergeSVGs(const QString & initialSVG, const QStrin
 	if (!initialSVG.isEmpty()) {
 		TextUtils::mergeSvg(doc, initialSVG, layerName);
 	}
-	Q_FOREACH (QString newSvg, m_newSVGs) {
+	for (const QString &newSvg : m_newSVGs) {
 		TextUtils::mergeSvg(doc, newSvg, layerName);
 	}
 	return TextUtils::mergeSvgFinish(doc);

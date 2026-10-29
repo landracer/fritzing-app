@@ -178,7 +178,7 @@ void FabUploadProgress::onError(QNetworkReply::NetworkError code)
 
 	auto *reply = qobject_cast<QNetworkReply*>(sender());
 	FMessageBox::critical(this,
-						  tr("Fritzing"),
+						  tr("Fritzing", "dialog title"),
 						  tr("Could not connect to Fritzing fab.")
 							  + "Error: " + reply->errorString() + " " + errorString);
 
@@ -208,18 +208,26 @@ void FabUploadProgress::httpError(QNetworkReply* reply)
 		errorMessage += QString(" - %1").arg(jsonErrors);
 	}
 
-	FMessageBox::critical(this, tr("Fritzing"), errorMessage);
+	FMessageBox::critical(this, tr("Fritzing", "dialog title"), errorMessage);
 	DebugDialog::debug(errorMessage);
 
 	Q_EMIT closeUploadError();
 }
 
 // Handle errors reported by remote server
-void FabUploadProgress::apiError(QString message)
+void FabUploadProgress::apiError(const QString &message)
 {
 	DebugDialog::debug(message);
-	FMessageBox::critical(this, tr("Fritzing"), tr("Error processing the project. The factory says: %1").arg(message));
+	FMessageBox::critical(this, tr("Fritzing", "dialog title"), message);
 	Q_EMIT closeUploadError();
+}
+
+QString FabUploadProgress::errorMessageFromCode(const QString &code) const
+{
+	if (code == "fab_error") {
+		return tr("The fabrication service says: %1");
+	}
+	return QString();
 }
 
 
@@ -254,10 +262,19 @@ void FabUploadProgress::updateProcessingStatus()
 		auto d = reply->readAll();
 		auto j = NetworkHelper::string_to_hash(d);
 		int progress = j["progress"].toInt();
-		QString message(j["message"].toString());
 		if (progress < 0) {
+			QString message = j["message"].toString();
+			QString code = j["code"].toString();
+			if (code.isEmpty()) {
+				code = "fab_error";
+			}
+			QString translatedTemplate = errorMessageFromCode(code);
+			if (!translatedTemplate.isEmpty()) {
+				message = translatedTemplate.arg(message);
+			}
 			apiError(message);
 		} else {
+			QString message(j["message"].toString());
 			findChild<QLabel*>("message")->setText(message);
 			Q_EMIT processProgressChanged(std::min(progress, 100));
 			if(progress < 100) {
@@ -271,7 +288,7 @@ void FabUploadProgress::updateProcessingStatus()
 				}
 				if (mRedirect_url.isEmpty()) {
 					QString error("Upload failed, no project url");
-					FMessageBox::critical(this, tr("Fritzing"), error);
+					FMessageBox::critical(this, tr("Fritzing", "dialog title"), error);
 				} else {
 					QSettings settings;
 					QString service = j["service"].toString();

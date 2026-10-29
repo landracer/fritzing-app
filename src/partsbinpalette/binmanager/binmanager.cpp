@@ -43,9 +43,10 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "referencemodel/referencemodel.h"
 #include "items/partfactory.h"
 #include "partsbinpalette/partsbinpalettewidget.h"
-#include "partsbinpalette//searchbinpalettewidget.h"
+#include "partsbinpalette/searchbinpalettewidget.h"
 #include "partsbinpalette/partsbinview.h"
 #include "utils/fmessagebox.h"
+#include "mainwindow/fprobeactions.h"
 
 ///////////////////////////////////////////////////////////
 
@@ -138,6 +139,8 @@ void BinManager::initStandardBins()
 {
 	createCombinedMenu();
 	createContextMenus();
+
+	new FProbeActions("BinMenu", m_combinedMenu);
 
 	//DebugDialog::debug("init bin manager");
 	QList<BinLocation *> actualLocations;
@@ -566,6 +569,10 @@ PartsBinPaletteWidget* BinManager::currentBin() {
 	return qobject_cast<PartsBinPaletteWidget*>(m_stackTabWidget->currentWidget());
 }
 
+PartsBinPaletteWidget* BinManager::searchBin() const {
+	return m_searchBin;
+}
+
 void BinManager::updateFileName(PartsBinPaletteWidget* bin, const QString &newFileName, const QString &oldFilename) {
 	m_openedBins.remove(oldFilename);
 	m_openedBins[newFileName] = bin;
@@ -690,13 +697,11 @@ void BinManager::readTheoreticalLocations(QList<BinLocation *> & theoreticalLoca
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(":/resources/bins/order.xml"));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
 
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse order.xml: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse order.xml: %1 %2 %3").arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn));
 		return;
 	}
 
@@ -759,16 +764,13 @@ void BinManager::hackLocalContrib(QList<BinLocation *> & locations)
 		locations.append(myParts);
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QFile contribFile(localContrib->path);
 	if (!contribFile.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(localContrib->path));
 	}
 	QDomDocument contribDoc;
-	bool result = contribDoc.setContent(&contribFile, true, &errorStr, &errorLine, &errorColumn);
+	QDomDocument::ParseResult parseResult = contribDoc.setContent(&contribFile, QDomDocument::ParseOption::UseNamespaceProcessing);
+	bool result = parseResult.operator bool();
 	locations.removeOne(localContrib);
 	contribFile.close();
 	bool removed = contribFile.remove();
@@ -783,7 +785,8 @@ void BinManager::hackLocalContrib(QList<BinLocation *> & locations)
 		DebugDialog::debug(QString("Unable to open :%1").arg(myParts->path));
 	}
 	QDomDocument myPartsDoc;
-	if (!myPartsDoc.setContent(&myPartsFile, true, &errorStr, &errorLine, &errorColumn)) {
+	QDomDocument::ParseResult myPartsParseResult = myPartsDoc.setContent(&myPartsFile, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!myPartsParseResult) {
 		return;
 	}
 
@@ -962,7 +965,19 @@ void BinManager::search(const QString & searchText) {
 	connect(m_referenceModel, SIGNAL(addSearchMaximum(int)), &progress, SLOT(addMaximum(int)));
 	connect(m_referenceModel, SIGNAL(incSearch()), &progress, SLOT(incValue()));
 
-	QList<ModelPart *> modelParts = m_referenceModel->search(searchText, false);
+	QString effectiveSearchText = searchText;
+	bool allowObsolete = false;
+	QRegularExpression obsoleteRx("\\bobsolete\\b", QRegularExpression::CaseInsensitiveOption);
+	if (obsoleteRx.match(searchText).hasMatch()) {
+		allowObsolete = true;
+		QString stripped = searchText;
+		stripped.remove(obsoleteRx);
+		stripped = stripped.simplified();
+		if (!stripped.isEmpty()) {
+			effectiveSearchText = stripped;
+		}
+	}
+	QList<ModelPart *> modelParts = m_referenceModel->search(effectiveSearchText, allowObsolete);
 
 	progress.setIncValueMod(1);
 	searchBin->removeParts();
@@ -1147,7 +1162,7 @@ void BinManager::deleteBin() {
 
 	QMessageBox::StandardButton answer = QMessageBox::question(
 	        this,
-	        tr("Delete bin"),
+	        tr("Delete bin", "dialog title"),
 	        tr("Do you really want to delete bin '%1'?  This action cannot be undone.").arg(bin->title()),
 	        QMessageBox::Yes | QMessageBox::No,
 	        QMessageBox::No
@@ -1200,7 +1215,7 @@ void BinManager::renameBin() {
 
 	if (!currentBin()->allowsChanges()) {
 		// TODO: disable menu item instead
-		QMessageBox::warning(this, tr("Read-only bin"), tr("This bin cannot be renamed."));
+		QMessageBox::warning(this, tr("Read-only bin", "dialog title"), tr("This bin cannot be renamed."));
 		return;
 	}
 
@@ -1278,13 +1293,13 @@ bool BinManager::removeSelected() {
 	if (mp == nullptr) return false;
 
 	if (m_mainWindow->anyUsePart(mp->moduleID())) {
-		QMessageBox::warning(this, tr("Remove from Bin"), tr("Unable to remove part '%1'--it is in use in a sketch").arg(mp->title()));
+		QMessageBox::warning(this, tr("Remove from Bin", "dialog title"), tr("Unable to remove part '%1'--it is in use in a sketch").arg(mp->title()));
 		return false;
 	}
 
 	QMessageBox::StandardButton answer = QMessageBox::question(
 	        this,
-			tr("Remove from Bin"),
+			tr("Remove from Bin", "dialog title"),
 	        tr("Do you really want to remove '%1' from the bin? This operation cannot be undone.").arg(mp->title()),
 	        QMessageBox::Yes | QMessageBox::No,
 	        QMessageBox::No
@@ -1345,25 +1360,25 @@ void BinManager::copyFilesToContrib(ModelPart * mp, QWidget * originator) {
 	QString path = mp->path();
 	if (path.isEmpty()) return;
 
+	QString moduleID = FolderUtils::sanitizeForFolder(mp->moduleID());
+	if (moduleID.isEmpty()) return;
+
+	QString destDir = FolderUtils::getLocalPartsPath() + "/contrib/" + moduleID;
+	QDir().mkpath(destDir);
+
 	QFileInfo info(path);
 	QFile fzp(path);
+	FolderUtils::slamCopy(fzp, destDir + "/" + info.fileName());
 
-	QString parts = FolderUtils::getUserPartsPath();
-	FolderUtils::slamCopy(fzp, parts + "/contrib/" + info.fileName());
-	QString prefix = parts + "/svg/contrib/";
-
-	QDir dir = info.absoluteDir();
-	dir.cdUp();
-	dir.cd("svg");
-	dir.cd("contrib");
-
+	QDir srcDir = info.absoluteDir();
 	QList<ViewLayer::ViewID> viewIDs;
-	viewIDs << ViewLayer::IconView << ViewLayer::BreadboardView << ViewLayer::SchematicView << ViewLayer::PCBView;
-	Q_FOREACH (ViewLayer::ViewID viewID, viewIDs) {
+	viewIDs << ViewLayer::IconView << ViewLayer::BreadboardView
+	        << ViewLayer::SchematicView << ViewLayer::PCBView;
+	for (ViewLayer::ViewID viewID : viewIDs) {
 		QString fn = mp->hasBaseNameFor(viewID);
 		if (!fn.isEmpty()) {
-			QFile svg(dir.absoluteFilePath(fn));
-			FolderUtils::slamCopy(svg, prefix + fn);
+			QFile svg(srcDir.absoluteFilePath(fn));
+			FolderUtils::slamCopy(svg, destDir + "/" + fn);
 		}
 	}
 }

@@ -39,6 +39,7 @@ public:
 	static QString getTopLevelDocumentsPath();
 	static QString getUserBinsPath();
 	static QString getUserPartsPath();
+	static QString getLocalPartsPath();
 	static bool createFolderAndCdIntoIt(QDir &dir, QString newFolder);
 	static bool setApplicationPath(const QString & path);
 	static bool setAppPartsPath(const QString & path);
@@ -65,6 +66,10 @@ public:
 	static void createUserDataStoreFolders();
 	static QString addToBasename(const QString &filePath, const QString &addition);
 	static bool checkFileLoadability(QWidget* parent, const QString& filePath);
+	static bool ensureDirectoryExists(const QString & filePath);
+	static QString sanitizeForFolder(const QString & name);
+	static void savePreviousVersionToHistory(const QString &filePath, int maxVersions = 10);
+	static QString getHistoryPath();
 
 protected:
 	FolderUtils();

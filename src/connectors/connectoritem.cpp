@@ -223,7 +223,7 @@ parts editor support
 #include "../utils/ratsnestcolors.h"
 #include "../utils/bezier.h"
 #include "../utils/bezierdisplay.h"
-#include "../utils/cursormaster.h"
+#include "../utils/svgcursorbuilder.h"
 #include "ercdata.h"
 #include "utils/ftooltip.h"
 #include "utils/misc.h"
@@ -320,11 +320,6 @@ ConnectorItem::ConnectorItem( Connector * connector, ItemBase * attachedTo )
 		connector->addViewItem(this);
 	}
 	setAcceptHoverEvents(true);
-	this->setCursor((attachedTo && attachedTo->itemType() == ModelPart::Wire) ? *CursorMaster::BendpointCursor : *CursorMaster::MakeWireCursor);
-
-	//DebugDialog::debug(QString("%1 attached to %2")
-	//.arg(this->connector()->connectorShared()->id())
-	//.arg(attachedTo->modelPartShared()->title()) );
 }
 
 ConnectorItem::~ConnectorItem() {
@@ -380,7 +375,7 @@ void ConnectorItem::hoverEnterEvent ( QGraphicsSceneHoverEvent * event ) {
 	}
 
 	//DebugDialog::debug("---CI set override cursor");
-	CursorMaster::instance()->addCursor(this, cursor());
+	SvgCursorBuilder::instance()->addCursor(this, cursor());
 	bool setDefaultCursor = true;
 	m_hoverEnterSpaceBarWasPressed = false;
 	setHoverColor();
@@ -399,7 +394,7 @@ void ConnectorItem::hoverEnterEvent ( QGraphicsSceneHoverEvent * event ) {
 		m_attachedTo->hoverEnterConnectorItem(event, this);
 	}
 
-	if (setDefaultCursor) CursorMaster::instance()->addCursor(this, *CursorMaster::MakeWireCursor);
+	if (setDefaultCursor) SvgCursorBuilder::instance()->addCursor(this, *SvgCursorBuilder::MakeWireCursor);
 }
 
 void ConnectorItem::hoverLeaveEvent ( QGraphicsSceneHoverEvent * event ) {
@@ -415,14 +410,14 @@ void ConnectorItem::hoverLeaveEvent ( QGraphicsSceneHoverEvent * event ) {
 		infoGraphicsView->hoverLeaveConnectorItem(event, this);
 	}
 
-	CursorMaster::instance()->removeCursor(this);
+	SvgCursorBuilder::instance()->removeCursor(this);
 
 	if (this->m_attachedTo) {
 		m_attachedTo->hoverLeaveConnectorItem(event, this);
 	}
 
 	//DebugDialog::debug("------CI restore override cursor");
-	CursorMaster::instance()->removeCursor(this);
+	SvgCursorBuilder::instance()->removeCursor(this);
 }
 
 void ConnectorItem::hoverMoveEvent ( QGraphicsSceneHoverEvent * event ) {
@@ -975,6 +970,14 @@ QPointF ConnectorItem::sceneAdjustedTerminalPoint(ConnectorItem * connectee) {
 	return this->mapToScene(adjustedTerminalPoint());
 }
 
+// The connector's pin point in scene coordinates, IGNORING any rubber-band leg -- i.e. the point on
+// the part body, not the leg tip. sceneAdjustedTerminalPoint() returns the leg tip for leg parts;
+// this returns the pin (matching adjustedTerminalPoint()'s no-leg case), so a swap can align the new
+// part's body without the new part's default leg length skewing the offset.
+QPointF ConnectorItem::scenePinPoint() {
+	return mapToScene(m_terminalPoint + rect().topLeft());
+}
+
 bool ConnectorItem::connectedTo(ConnectorItem * connectorItem) {
 	return this->m_connectedTo.contains(connectorItem);
 }
@@ -1016,14 +1019,29 @@ void ConnectorItem::setInactive(bool inactivate) {
 }
 
 void ConnectorItem::setHiddenOrInactive() {
+	bool hasViews = (scene() && !scene()->views().isEmpty());
+
 	if (m_hidden || m_inactive || m_hybrid || m_layerHidden) {
 		this->setAcceptedMouseButtons(Qt::NoButton);
-		this->unsetCursor();
+		// Only unsetCursor if we have valid views AND the item actually has a cursor
+		if (hasViews) {
+			bool itemHasCursor = this->hasCursor();
+			if (itemHasCursor) {
+				this->unsetCursor();
+			}
+		}
 		setAcceptHoverEvents(false);
-	}
-	else {
+	} else {
 		this->setAcceptedMouseButtons(ALLMOUSEBUTTONS);
-		this->setCursor(attachedToItemType() == ModelPart::Wire ? *CursorMaster::BendpointCursor : *CursorMaster::MakeWireCursor);
+		// Only setCursor if we have valid cursor and views
+		if (hasViews) {
+			QCursor *acceptCursor = attachedToItemType() == ModelPart::Wire
+										? SvgCursorBuilder::BendpointCursor
+										: SvgCursorBuilder::MakeWireCursor;
+			if (acceptCursor) {
+				this->setCursor(*acceptCursor);
+			}
+		}
 		setAcceptHoverEvents(true);
 	}
 	this->update();
@@ -2018,6 +2036,13 @@ ConnectorItem * ConnectorItem::findConnectorUnder(bool useTerminalPoint, bool al
 					return std::pow(this->sceneBoundingRect().center().x() - other->sceneBoundingRect().center().x(), 2) +
 						std::pow(this->sceneBoundingRect().center().y() - other->sceneBoundingRect().center().y(), 2);
 				};
+				// Prefer non-wire connectors over wire connectors
+				// Wire-to-wire connection should only win if there's no part connector nearby
+				bool aIsWire = (a->attachedToItemType() == ModelPart::Wire);
+				bool bIsWire = (b->attachedToItemType() == ModelPart::Wire);
+				if (aIsWire != bIsWire) {
+					return bIsWire;
+				}
 				if (a->zValue() == b->zValue()) {
 					return squaredDistanceTo(a) < squaredDistanceTo(b);
 				}
@@ -2878,7 +2903,7 @@ void ConnectorItem::cursorKeyEvent(Qt::KeyboardModifiers modifiers)
 void ConnectorItem::updateWireCursor(Qt::KeyboardModifiers modifiers)
 {
 	//DebugDialog::debug("uwc");
-	QCursor cursor = *CursorMaster::BendpointCursor;
+	QCursor cursor = *SvgCursorBuilder::BendpointCursor;
 	if (isBendpoint()) {
 		//DebugDialog::debug("uwc bend");
 		if (modifiers & altOrMetaModifier()) {
@@ -2886,12 +2911,12 @@ void ConnectorItem::updateWireCursor(Qt::KeyboardModifiers modifiers)
 			Wire * wire = qobject_cast<Wire *>(attachedTo());
 			if (wire && wire->canChainMultiple()) {
 				//DebugDialog::debug("uwc make wire");
-				cursor = *CursorMaster::MakeWireCursor;
+				cursor = *SvgCursorBuilder::MakeWireCursor;
 			}
 		}
 	}
 
-	CursorMaster::instance()->addCursor(this, cursor);
+	SvgCursorBuilder::instance()->addCursor(this, cursor);
 }
 
 void ConnectorItem::updateLegCursor(QPointF p, Qt::KeyboardModifiers modifiers)
@@ -2904,19 +2929,19 @@ void ConnectorItem::updateLegCursor(QPointF p, Qt::KeyboardModifiers modifiers)
 		cursor = *attachedTo()->getCursor(modifiers);
 		break;
 	case InBendpoint:
-		cursor = *CursorMaster::BendpointCursor;
+		cursor = *SvgCursorBuilder::BendpointCursor;
 		break;
 	case InSegment:
-		cursor = curvyWiresIndicated(modifiers) ? *CursorMaster::MakeCurveCursor : *CursorMaster::NewBendpointCursor;
+		cursor = curvyWiresIndicated(modifiers) ? *SvgCursorBuilder::MakeCurveCursor : *SvgCursorBuilder::NewBendpointCursor;
 		break;
 	case InConnector:
-		cursor = (modifiers & altOrMetaModifier()) ? *CursorMaster::MakeWireCursor : *CursorMaster::BendlegCursor;
+		cursor = (modifiers & altOrMetaModifier()) ? *SvgCursorBuilder::MakeWireCursor : *SvgCursorBuilder::BendpointCursor;
 		break;
 	default:
 		cursor = Qt::ArrowCursor;
 		break;
 	}
-	CursorMaster::instance()->addCursor(this, cursor);
+	SvgCursorBuilder::instance()->addCursor(this, cursor);
 }
 
 bool ConnectorItem::curvyWiresIndicated(Qt::KeyboardModifiers modifiers)

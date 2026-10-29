@@ -37,6 +37,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QLineEdit>
 #include <QDialogButtonBox>
 #include <QPushButton>
+#include <QPaintEngine>
+#include <QImage>
 
 // TODO:
 //		** search for ModelPart:: and fix up
@@ -71,6 +73,15 @@ constexpr int borderWidth = 7;
 constexpr int TriangleOffset = 7;
 
 constexpr double InactiveOpacity = 0.5;
+
+// Line height for Noto Sans to match the line spacing of Droid Sans
+// 80% line height with Noto Sans gives approximately the same line distance as previous default Droid Sans
+// 90% is the compromise between the old compact look and the new spacy appearance (avoid exceeding size for
+// many existing sketches)
+constexpr int NotoSansLineHeightPercent = 90;
+
+// Default font size for notes
+constexpr double NoteDefaultFontSize = 8.5;
 
 QString Note::initialTextString;
 
@@ -112,6 +123,10 @@ NoteGraphicsTextItem::NoteGraphicsTextItem(QGraphicsItem * parent) : QGraphicsTe
 	QTextFrameFormat altFormat(format);
 	altFormat.setMargin(0);										// so document never thinks a mouse click is a move event
 	document()->rootFrame()->setFrameFormat(altFormat);
+
+	// Disable caching to prevent texture-based rendering issues with OpenGL
+	// This forces the text to be re-rendered each frame, which may preserve kerning
+	setCacheMode(QGraphicsItem::NoCache);
 }
 
 void NoteGraphicsTextItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *) {
@@ -135,6 +150,96 @@ void NoteGraphicsTextItem::focusOutEvent(QFocusEvent * event) {
 	QApplication::instance()->removeEventFilter((Note *) this->parentItem());
 	QGraphicsTextItem::focusOutEvent(event);
 	DebugDialog::debug("note focus out");
+}
+
+void NoteGraphicsTextItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) {
+	// Check if we're using an OpenGL paint engine
+	bool isOpenGL = (painter->paintEngine()->type() == QPaintEngine::OpenGL2 ||
+	                 painter->paintEngine()->type() == QPaintEngine::OpenGL);
+
+	if (isOpenGL) {
+		// Workaround for OpenGL kerning issues: render to QImage first, then draw
+		// This bypasses OpenGL's texture-based text caching that breaks kerning
+		QRectF br = boundingRect();
+		if (br.width() > 0 && br.height() > 0) {
+			// Calculate DPI scaling factor
+			// physicalDpiX is set to higher values during exports (e.g., 189 for 300 DPI)
+			qreal dpr = 1.0;
+			if (painter->device()) {
+				int physicalDpiX = painter->device()->physicalDpiX();
+				const int standardDpi = 96;
+
+				if (physicalDpiX > standardDpi) {
+					// Use physical DPI for scaling (handles high-DPI exports)
+					dpr = static_cast<qreal>(physicalDpiX) / standardDpi;
+				}
+			}
+
+			// Detect current zoom level from painter's transformation
+			QTransform transform = painter->transform();
+			qreal zoomLevel = qSqrt(transform.m11() * transform.m11() + transform.m12() * transform.m12());
+
+			// Optimization: only render the visible/exposed portion of the note
+			// This is crucial at high zoom levels where only a fraction is visible
+			QRectF exposedRect = option->exposedRect;
+			QRectF renderRect = br.intersected(exposedRect);
+
+			if (renderRect.isEmpty()) {
+				return; // Nothing visible to render
+			}
+
+			// Start with scale factor matching zoom level
+			qreal scaleFactor = qMax(1.0, zoomLevel);
+
+			// Apply 2x oversampling only if DPR is low (not already scaled for export)
+			if (dpr < 1.5) {
+				scaleFactor *= 2.0;
+			}
+
+			// Calculate desired image size
+			QSizeF desiredSize = renderRect.size() * scaleFactor * dpr;
+
+			// Limit total pixel count to avoid excessive memory usage
+			// 16 megapixels = 64MB for ARGB32, which is reasonable
+			const qreal maxPixels = 16.0 * 1024.0 * 1024.0;
+			qreal actualPixels = desiredSize.width() * desiredSize.height();
+
+			// If pixel count exceeds limit, scale down proportionally
+			if (actualPixels > maxPixels) {
+				qreal scaleRatio = qSqrt(maxPixels / actualPixels);
+				scaleFactor *= scaleRatio;
+			}
+
+			QSize imageSize = (renderRect.size() * scaleFactor * dpr).toSize();
+			QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
+			image.setDevicePixelRatio(1.0);  // Don't use DPR on the image, we handle scaling manually
+			image.fill(Qt::transparent);
+
+			// Paint text to image using non-OpenGL raster engine (preserves kerning)
+			QPainter imagePainter(&image);
+			imagePainter.setRenderHint(QPainter::Antialiasing, true);
+			imagePainter.setRenderHint(QPainter::TextAntialiasing, true);
+			imagePainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+			// Scale the painter to match our higher resolution image
+			imagePainter.scale(scaleFactor * dpr, scaleFactor * dpr);
+			// Translate to render only the visible portion
+			imagePainter.translate(-renderRect.topLeft());
+
+			// Call base class to render to the image
+			QGraphicsTextItem::paint(&imagePainter, option, widget);
+			imagePainter.end();
+
+			// Draw the pre-rendered high-res image to the OpenGL context with smooth scaling
+			painter->save();
+			painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+			painter->drawImage(renderRect, image);
+			painter->restore();
+		}
+	} else {
+		// Non-OpenGL rendering: use standard path
+		QGraphicsTextItem::paint(painter, option, widget);
+	}
 }
 
 //////////////////////////////////////////
@@ -232,10 +337,19 @@ Note::Note( ModelPart * modelPart, ViewLayer::ViewID viewID,  const ViewGeometry
 	//connect(m_resizeGrip, SIGNAL(zoomChangedSignal(double)), this, SLOT(handleZoomChangedSlot(double)));
 
 	m_graphicsTextItem = new NoteGraphicsTextItem();
-	QFont font("Droid Sans", 9, QFont::Normal);
+	QFont font("Noto Sans");
+	font.setPointSizeF(NoteDefaultFontSize);
+	font.setWeight(QFont::Normal);
 	m_graphicsTextItem->setFont(font);
 	m_graphicsTextItem->setDefaultTextColor(QColor("grey"));
 	m_graphicsTextItem->document()->setDefaultFont(font);
+
+	QTextBlockFormat blockFormat;
+	blockFormat.setLineHeight(NotoSansLineHeightPercent, QTextBlockFormat::ProportionalHeight);
+	QTextCursor cursor(m_graphicsTextItem->document());
+	cursor.select(QTextCursor::Document);
+	cursor.mergeBlockFormat(blockFormat);
+
 	m_graphicsTextItem->setParentItem(this);
 	m_graphicsTextItem->setVisible(true);
 	m_graphicsTextItem->setPlainText(initialTextString);
@@ -387,11 +501,13 @@ void Note::forceFormat(int position, int charsAdded) {
 	QTextCursor textCursor = m_graphicsTextItem->textCursor();
 
 	QTextCharFormat f;
-	QFont font("Droid Sans", 9, QFont::Normal);
+	QFont font("Noto Sans");
+	font.setPointSizeF(NoteDefaultFontSize);
+	font.setWeight(QFont::Normal);
 
 	f.setFont(font);
-	f.setFontFamilies(QStringList("Droid Sans"));
-	f.setFontPointSize(9);
+	f.setFontFamilies(QStringList("Noto Sans"));
+	f.setFontPointSize(NoteDefaultFontSize);
 
 	int cc = m_graphicsTextItem->document()->characterCount();
 	textCursor.setPosition(position, QTextCursor::MoveAnchor);
@@ -402,9 +518,10 @@ void Note::forceFormat(int position, int charsAdded) {
 
 	//textCursor.setCharFormat(f);
 	textCursor.mergeCharFormat(f);
-	//DebugDialog::debug(QString("setting font tc:%1,%2 params:%3,%4")
-	//.arg(textCursor.anchor()).arg(textCursor.position())
-	//.arg(position).arg(position + charsAdded));
+
+	QTextBlockFormat blockFormat;
+	blockFormat.setLineHeight(NotoSansLineHeightPercent, QTextBlockFormat::ProportionalHeight);
+	textCursor.mergeBlockFormat(blockFormat);
 
 	/*
 	textCursor = m_graphicsTextItem->textCursor();
@@ -601,12 +718,9 @@ void Note::linkDialog() {
 		QString html = m_graphicsTextItem->toHtml();
 
 		// assumes html is in xml form
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
-
 		QDomDocument domDocument;
-		if (!domDocument.setContent(html, &errorStr, &errorLine, &errorColumn)) {
+		QDomDocument::ParseResult parseResult = domDocument.setContent(html);
+		if (!parseResult) {
 			return;
 		}
 
@@ -803,7 +917,7 @@ QString Note::retrieveSvg(ViewLayer::ViewLayerID viewLayerID, QHash<QString, QSt
 			svg += QString("<text  x='%1' y='%2' font-family='%3' stroke='none' fill='#000000' text-anchor='left' font-size='%4' >\n")
 			       .arg((left + r.left()) * dpi / GraphicsUtils::SVGDPI)
 			       .arg((top + r.top() + line.ascent()) * dpi / GraphicsUtils::SVGDPI)
-			       .arg("Droid Sans")
+			       .arg("Noto Sans")
 			       .arg(line.ascent() * dpi / GraphicsUtils::SVGDPI)
 			       ;
 

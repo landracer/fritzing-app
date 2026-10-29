@@ -52,6 +52,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "stripboard.h"
 #include "led.h"
 #include "schematicsubpart.h"
+#include "oscilloscope.h"
 #include "../utils/folderutils.h"
 #include "../utils/lockmanager.h"
 #include "../utils/textutils.h"
@@ -186,6 +187,9 @@ ItemBase * PartFactory::createPartAux( ModelPart * modelPart, ViewLayer::ViewID 
 			if (moduleID.endsWith(ModuleIDNames::CopperBlockerModuleIDName)) {
 				return new CopperBlocker(modelPart, viewID, viewGeometry, id, itemMenu, doLabel);
 			}
+			if (moduleID.endsWith(ModuleIDNames::OscilloscopeModuleIDName)) {
+				return new Oscilloscope(modelPart, viewID, viewGeometry, id, itemMenu, doLabel);
+			}
 			// must get the subclasses first
 			if (modelPart->itemType() == ModelPart::Breadboard) {
 				return new Breadboard(modelPart, viewID, viewGeometry, id, itemMenu, doLabel);
@@ -201,6 +205,10 @@ ItemBase * PartFactory::createPartAux( ModelPart * modelPart, ViewLayer::ViewID 
 		}
 
 		QString family = modelPart->properties().value("family", "");
+		// Check for obsolete capacitor family to ensure properties are preserved during replacement
+		if (family.compare("//obsolete//capacitor", Qt::CaseInsensitive) == 0) {
+			return new Capacitor(modelPart, viewID, viewGeometry, id, itemMenu, doLabel);
+		}
 		if (family.compare("mystery part", Qt::CaseInsensitive) == 0) {
 			return new MysteryPart(modelPart, viewID, viewGeometry, id, itemMenu, doLabel);
 		}
@@ -228,6 +236,22 @@ QString PartFactory::getSvgFilename(ModelPart * modelPart, const QString & baseN
 	QString postfix = "/"+ SvgFilesDir +"/%1/"+ baseName;
 	QString userStore = FolderUtils::getUserPartsPath()+postfix;
 	QString pfPath = PartFactory::folderPath() + postfix;
+
+	// moduleID-based search paths (highest priority for subfolder-structured parts)
+	// SVGs are co-located with FZP in {partsRoot}/%1/{moduleID}/{baseName}
+	QString moduleID = FolderUtils::sanitizeForFolder(modelPart->moduleID());
+	if (!moduleID.isEmpty()) {
+		QString moduleIDPostfix = "/%1/" + moduleID + "/" + baseName;
+		tempPaths << FolderUtils::getLocalPartsPath() + moduleIDPostfix;
+		tempPaths << FolderUtils::getUserPartsPath() + moduleIDPostfix;
+		tempPaths << PartFactory::folderPath() + moduleIDPostfix;
+	}
+
+	// Search localPartsPath without moduleID or svg subdirectory.
+	// Used for Parts Editor temporary SVGs during editing sessions.
+	QString localPostfix = "/%1/" + baseName;
+	tempPaths << FolderUtils::getLocalPartsPath() + localPostfix;
+
 	if(!modelPart->path().isEmpty()) {
 		QString path = modelPart->path();
 		QDir dir(path);			// is a path to a filename
@@ -241,10 +265,6 @@ QString PartFactory::getSvgFilename(ModelPart * modelPart, const QString & baseN
 		if (tempPaths.at(0).compare(pfPath) != 0) {
 			tempPaths << pfPath;
 		}
-		//DebugDialog::debug("temp path");
-		//foreach (QString tempPath, tempPaths) {
-		//    DebugDialog::debug(tempPath);
-		//}
 	}
 	else {
 		DebugDialog::debug("modelPart with no path--this shouldn't happen");
@@ -277,38 +297,21 @@ QString PartFactory::getSvgFilename(ModelPart * modelPart, const QString & baseN
 
 	if (handleSubparts && (modelPart->modelPartShared() != nullptr) && modelPart->modelPartShared()->hasSubparts())
 	{
-		ModelPartShared * superpart = modelPart->modelPartShared();
-		QString schematicName = superpart->imageFileName(ViewLayer::SchematicView);
-		QString originalPath = getSvgFilename(modelPart, schematicName, true, false);
-		Q_FOREACH (ModelPartShared * mps, superpart->subparts()) {
-			QString schematicFileName = mps->imageFileName(ViewLayer::SchematicView);
-			if (schematicFileName.isEmpty()) continue;
+		generateSubpartSvgs(modelPart, modelPart->modelPartShared());
+	}
 
-			QString path = partPath() + schematicFileName;
-			QFileInfo info(path);
-			if (info.exists()) {
-				mps->setSubpartOffset(SubpartOffsets.value(path, QPointF(0, 0)));
-				continue;
+	// If the file was not found and this part is a subpart, generate all
+	// sibling subpart SVGs from the superpart on demand.  Previously this
+	// only happened as a side effect of icon rendering in SvgIconWidget,
+	// which is skipped when rasterized icons are cached in the database.
+	if (filename.isEmpty() && modelPart->modelPartShared() != nullptr) {
+		ModelPartShared * parentShared = modelPart->modelPartShared()->superpart();
+		if (parentShared != nullptr) {
+			generateSubpartSvgs(modelPart, parentShared);
+			QString generatedPath = partPath() + baseName;
+			if (QFileInfo(generatedPath).exists()) {
+				filename = generatedPath;
 			}
-
-			QFile file(originalPath);
-			if (!file.open(QIODevice::ReadOnly)) {
-				DebugDialog::debug(QString("Unable to open :%1").arg(originalPath));
-			}
-			QString errorStr;
-			int errorLine;
-			int errorColumn;
-			QDomDocument doc;
-			if (!doc.setContent(&file, &errorStr, &errorLine, &errorColumn)) {
-				DebugDialog::debug(QString("xml failure %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
-				continue;
-			}
-
-			QDomElement root = doc.documentElement();
-			QDomElement top = showSubpart(root, mps->subpartID());
-			fixSubpartBounds(top, mps);
-			SubpartOffsets.insert(path, mps->subpartOffset());
-			TextUtils::writeUtf8(path, doc.toString(4));
 		}
 	}
 
@@ -530,6 +533,44 @@ QString PartFactory::getFzpFilename(const QString & moduleID)
 	}
 
 	return "";
+}
+
+void PartFactory::generateSubpartSvgs(ModelPart * modelPart, ModelPartShared * parentShared)
+{
+	QString schematicName = parentShared->imageFileName(ViewLayer::SchematicView);
+	if (schematicName.isEmpty()) return;
+
+	QString originalPath = getSvgFilename(modelPart, schematicName, true, false);
+	if (originalPath.isEmpty()) return;
+
+	for (ModelPartShared * mps : parentShared->subparts()) {
+		QString schematicFileName = mps->imageFileName(ViewLayer::SchematicView);
+		if (schematicFileName.isEmpty()) continue;
+
+		QString path = partPath() + schematicFileName;
+		QFileInfo info(path);
+		if (info.exists()) {
+			mps->setSubpartOffset(SubpartOffsets.value(path, QPointF(0, 0)));
+			continue;
+		}
+
+		QFile file(originalPath);
+		if (!file.open(QIODevice::ReadOnly)) {
+			DebugDialog::debug(QString("Unable to open :%1").arg(originalPath));
+		}
+		QDomDocument doc;
+		QDomDocument::ParseResult parseResult = doc.setContent(&file);
+		if (!parseResult) {
+			DebugDialog::debug(QString("xml failure %1 %2 %3").arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn));
+			continue;
+		}
+
+		QDomElement root = doc.documentElement();
+		QDomElement top = showSubpart(root, mps->subpartID());
+		fixSubpartBounds(top, mps);
+		SubpartOffsets.insert(path, mps->subpartOffset());
+		TextUtils::writeUtf8(path, doc.toString(4));
+	}
 }
 
 void PartFactory::initFolder()

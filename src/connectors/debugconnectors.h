@@ -23,26 +23,24 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QSet>
 #include <QString>
-#include <QColor>
+#include <QPointer>
 #include "../sketch/sketchwidget.h"
+#include "../items/itembase.h"
 
 class DebugConnectors : public QObject {
 	Q_OBJECT
 public:
-	DebugConnectors(SketchWidget *breadboardGraphicsView, SketchWidget *schematicGraphicsView, SketchWidget *pcbGraphicsView);
+	DebugConnectors(SketchWidget *breadboardGraphicsView, SketchWidget *schematicGraphicsView, SketchWidget *pcbGraphicsView, QObject *parent = nullptr);
 
 
 
 public slots:
 	void monitorConnections(bool enabled);
 	void onChangeConnection();
-	void applyMonitorSetting();
+	void performCheck();
 
 	void onSelectErrors();
 	void onRepairErrors();
-
-public:
-	static bool highlightEnabled();
 
 signals:
 	void repairErrorsCompleted();
@@ -52,26 +50,23 @@ private:
 	QSet<ItemBase *> doRoutingCheck();
 	QSet<ItemBase *> doWireCheck();
 
-	SketchWidget *m_breadboardGraphicsView;
-	SketchWidget *m_schematicGraphicsView;
-	SketchWidget *m_pcbGraphicsView;
+	// Guarded so a deferred check (the timer fires from the global event loop, e.g. while the
+	// headless example service is tearing one sketch window down and loading the next) can detect
+	// that a view has been destroyed instead of dereferencing freed memory.
+	QPointer<SketchWidget> m_breadboardGraphicsView;
+	QPointer<SketchWidget> m_schematicGraphicsView;
+	QPointer<SketchWidget> m_pcbGraphicsView;
 
 	QSet<QString> getItemConnectorSet(ConnectorItem *connectorItem);
 	QList<ItemBase *> toSortedItembases(const QList<QGraphicsItem *> &graphicsItems);
 	void collectPartsForCheck(QList<ItemBase *> &partList, QGraphicsScene *scene);
 	QList<Wire *> collectWiresForCheck(ViewGeometry::WireFlag flag, QGraphicsScene *scene);
-	void fixColor();
 
 	QTimer *timer;
-	QElapsedTimer lastExecution;
-	bool firstCall;
-	bool colorChanged;
 	static constexpr qint64 minimumInterval = 300;
-	QColor breadboardBackgroundColor;
-	QColor schematicBackgroundColor;
-	QColor pcbBackgroundColor;
 
 	bool m_monitorEnabled;
+	QList<QPointer<ItemBase>> m_displayedBugs;
 
 	QSet<ItemBase *> findConnectors(ConnectorItem *c1);
 	void reportErrors(QSet<ItemBase *> errors);

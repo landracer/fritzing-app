@@ -15,13 +15,23 @@
 HEADERS += \
     src/testing/FTesting.h \
     src/testing/FProbe.h \
-    src/testing/FTestingServer.h
+    src/testing/FTestingServer.h \
+    src/testing/FProbeWire.h \
+    src/testing/FProbePart.h \
+    src/testing/FProbeSelectedPartLabel.h \
+    src/testing/FProbeMigrationDialog.h \
+    src/testing/FProbeBugAnnotations.h
 
 
 SOURCES += \
     src/testing/FTesting.cpp \
     src/testing/FProbe.cpp \
-    src/testing/FTestingServer.cpp
+    src/testing/FTestingServer.cpp \
+    src/testing/FProbeWire.cpp \
+    src/testing/FProbePart.cpp \
+    src/testing/FProbeSelectedPartLabel.cpp \
+    src/testing/FProbeMigrationDialog.cpp \
+    src/testing/FProbeBugAnnotations.cpp
 
 
 INCLUDEPATH += src

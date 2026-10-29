@@ -43,6 +43,20 @@ struct ViewImage {
 	ViewImage(ViewLayer::ViewID);
 };
 
+struct HistoryEntry {
+	QString date;        // ISO date string "2026-01-01"
+	QString author;
+	QString mode;        // "required", "recommended", "optional"
+	QString description;
+
+	QDate parsedDate() const { return QDate::fromString(date, Qt::ISODate); }
+	// Migration insistence of this change. The legacy tokens silent/forced/ask are accepted as
+	// aliases of required/recommended/optional so part FZPs written before the rename still parse.
+	bool isRequired() const { return mode == "required" || mode == "silent"; }          // auto-apply, no choice
+	bool isRecommended() const { return mode == "recommended" || mode == "forced"; }    // prompt every load, can't mute
+	bool isOptional() const { return mode == "optional" || mode == "ask"; }             // prompt when relevant, mutable
+};
+
 class ModelPartShared : public QObject
 {
 	Q_OBJECT
@@ -133,6 +147,9 @@ public:
 	bool showInLabel(const QString & key);
 	const QString & replacedby();
 	void setReplacedby(const QString & replacedby);
+	const QList<HistoryEntry> & history() const;
+	bool hasHistory() const;
+	bool loadHistoryFromFile();
 
 	void flipSMDAnd();
 	void setFlippedSMD(bool);
@@ -159,6 +176,9 @@ protected:
 	LayerList viewLayersAux(ViewLayer::ViewID viewID, qulonglong (*accessor)(ViewImage *)) const;
 	void addSchematicText(ViewImage *);
 	bool setDomDocument(QDomDocument &);
+	// Parse the <history> children of `root` into m_history (shared by setDomDocument and
+	// loadHistoryFromFile).
+	void parseHistory(const QDomElement & root);
 
 protected Q_SLOTS:
 	void removeOwner();
@@ -185,6 +205,7 @@ protected:
 	QString m_url;
 	QString m_date;
 	QString m_replacedby;
+	QList<HistoryEntry> m_history;
 
 	QString m_path;
 	QString m_taxonomy;

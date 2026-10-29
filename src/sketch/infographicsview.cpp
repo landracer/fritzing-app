@@ -42,6 +42,11 @@ void InfoGraphicsView::viewItemInfo(ItemBase * item) {
 	m_infoView->viewItemInfo(this, item != nullptr ? item->layerKinChief() : item, swappingEnabled(item));
 }
 
+void InfoGraphicsView::requestObsoleteMigration(ItemBase * itemBase) {
+	if (itemBase == nullptr) return;
+	Q_EMIT migrateObsoletePartSignal(itemBase->layerKinChief()->id());
+}
+
 void InfoGraphicsView::hoverEnterItem(QGraphicsSceneHoverEvent * event, ItemBase * itemBase) {
 	if (m_infoView == nullptr) return;
 
@@ -212,6 +217,42 @@ void InfoGraphicsView::setProp(ItemBase * item, const QString & prop, const QStr
 	Q_UNUSED(oldValue);
 	Q_UNUSED(newValue);
 	Q_UNUSED(redraw);
+}
+
+void InfoGraphicsView::setPropForSelection(const QString & prop, const QString & value)
+{
+	Q_UNUSED(prop);
+	Q_UNUSED(value);
+}
+
+int InfoGraphicsView::collectSelectedNetLabels(QList<SymbolPaletteItem *> & netLabels)
+{
+	Q_UNUSED(netLabels);
+	return 0;
+}
+
+int InfoGraphicsView::collectSelectedWires(QList<Wire *> & wires)
+{
+	Q_UNUSED(wires);
+	return 0;
+}
+
+int InfoGraphicsView::collectSelectedHoles(QList<Hole *> & holes)
+{
+	Q_UNUSED(holes);
+	return 0;
+}
+
+void InfoGraphicsView::setHoleSizeForSelection(const QString & diameter, const QString & ringThickness)
+{
+	Q_UNUSED(diameter);
+	Q_UNUSED(ringThickness);
+}
+
+QStringList InfoGraphicsView::commonPropValues(const QString & prop)
+{
+	Q_UNUSED(prop);
+	return QStringList();
 }
 
 void InfoGraphicsView::setHoleSize(ItemBase * item, const QString & prop, const QString & trProp, const QString & oldValue, const QString & newValue, QRectF & oldRect, QRectF & newRect, bool redraw)
@@ -408,4 +449,9 @@ void InfoGraphicsView::rotateX(double degrees, bool rubberBandLegEnabled, ItemBa
 	Q_UNUSED(degrees);
 	Q_UNUSED(rubberBandLegEnabled);
 	Q_UNUSED(originatingItem);
+}
+
+void InfoGraphicsView::changeMoveLock(ItemBase *, bool moveLock)
+{
+	Q_UNUSED(moveLock);
 }

@@ -49,12 +49,17 @@ public:
 	void setInfoView(class HtmlInfoView *);
 	class HtmlInfoView * infoView();
 
+	// Ask the host window to open the Part Migration dialog for one obsolete part (the obsolete
+	// "bug" badge on a part is a clickable shortcut to this). Emits migrateObsoletePartSignal.
+	void requestObsoleteMigration(ItemBase * itemBase);
+
 	virtual void mousePressConnectorEvent(ConnectorItem *, QGraphicsSceneMouseEvent *);
 
 
 	virtual void hidePartLabel(ItemBase * item);
 	virtual void partLabelMoved(ItemBase *, QPointF oldPos, QPointF oldOffset, QPointF newPos, QPointF newOffset);
 	virtual void rotateFlipPartLabelForCommand(ItemBase *, double degrees, Qt::Orientations flipDirection);
+	virtual class PartLabelContextMenu * partLabelContextMenu() { return nullptr; }
 	virtual void noteSizeChanged(ItemBase * itemBase, const QSizeF & oldSize, const QSizeF & newSize);
 
 	virtual bool spaceBarIsPressed();
@@ -94,10 +99,21 @@ public:
 	virtual ViewGeometry::WireFlag getTraceFlag();
 	virtual void setAnyInRotation();
 
+	// Grid alignment, queried by resizable items to snap a mouse resize. Default
+	// off / no grid; SketchWidget overrides with the view's actual settings.
+	virtual bool shouldAlignToGrid() const { return false; }
+	virtual double gridSizeInches() { return 0.0; }
+
 	virtual void partLabelChanged(ItemBase *, const QString &oldText, const QString & newText);
 	virtual void noteChanged(ItemBase *, const QString &oldText, const QString & newText, QSizeF oldSize, QSizeF newSize);
 	virtual void setResistance(QString resistance, QString pinSpacing);
 	virtual void setProp(ItemBase *, const QString & propName, const QString & translatedPropName, const QString & oldValue, const QString & newValue, bool redraw);
+	virtual void setPropForSelection(const QString & prop, const QString & value);
+	virtual int collectSelectedNetLabels(QList<class SymbolPaletteItem *> & netLabels);
+	virtual int collectSelectedWires(QList<class Wire *> & wires);
+	virtual int collectSelectedHoles(QList<class Hole *> & holes);
+	virtual void setHoleSizeForSelection(const QString & diameter, const QString & ringThickness);
+	virtual QStringList commonPropValues(const QString & prop);
 	virtual void setHoleSize(ItemBase *, const QString & propName, const QString & translatedPropName, const QString & oldValue, const QString & newValue, QRectF & oldRect, QRectF & newRect, bool redraw);
 	virtual void changeWireWidthMils(const QString newWidth);
 	virtual void changeWireColor(const QString newColor);
@@ -110,6 +126,7 @@ public:
 	Qt::Orientations smdOrientation();
 	virtual void moveItem(ItemBase *, double x, double y);
 	virtual void rotateX(double degrees, bool rubberBandLegEnabled, ItemBase * originatingItem);
+	virtual void changeMoveLock(ItemBase *, bool moveLock);
 
 public Q_SLOTS:
 	virtual void setVoltage(double, bool doEmit);
@@ -123,6 +140,7 @@ Q_SIGNALS:
 	void setActiveWireSignal(Wire *);
 	void setActiveConnectorItemSignal(ConnectorItem *);
 	void newWireSignal(Wire *);
+	void migrateObsoletePartSignal(qint64 itemId);
 
 public:
 	static InfoGraphicsView * getInfoGraphicsView(QGraphicsItem *);

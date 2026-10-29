@@ -44,12 +44,9 @@ bool Syntaxer::loadSyntax(const QString &filename)
 		DebugDialog::debug(QString("Unable to open :%1").arg(filename));
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!parseResult) {
 		return false;
 	}
 
@@ -86,7 +83,7 @@ bool Syntaxer::loadSyntax(const QString &filename)
 	m_name = root.attribute("name");
 	QStringList extensions = root.attribute("extensions").split(";", Qt::SkipEmptyParts);
 	if (extensions.count() > 0) {
-		m_extensionString = m_name + " " + QObject::tr("files") + " (";
+		m_extensionString = QObject::tr("%1 files (", "file type filter, e.g. 'Arduino files ('").arg(m_name);
 		Q_FOREACH (QString ext, extensions) {
 			m_extensionString += ext + " ";
 			int ix = ext.indexOf(".");

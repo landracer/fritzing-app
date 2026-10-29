@@ -36,7 +36,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../utils/folderutils.h"
 #include "../utils/textutils.h"
 #include "../utils/graphicsutils.h"
-#include "../utils/cursormaster.h"
+#include "../utils/svgcursorbuilder.h"
 #include "../utils/clickablelabel.h"
 #include "../utils/familypropertycombobox.h"
 #include "../referencemodel/referencemodel.h"
@@ -50,10 +50,13 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSet>
 #include <QSettings>
 #include <QComboBox>
+#include <QSignalBlocker>
 #include <QBitmap>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QClipboard>
 #include <qmath.h>
+#include <algorithm>
 
 /////////////////////////////////
 
@@ -67,8 +70,6 @@ bool numberValueLessThan(QString v1, QString v2)
 	return NumberMatcherValues.value(v1, 0) < NumberMatcherValues.value(v2, 0);
 }
 
-static QSvgRenderer MoveLockRenderer;
-static QSvgRenderer StickyRenderer;
 
 /////////////////////////////////
 
@@ -111,13 +112,15 @@ ItemBase::ItemBase( ModelPart* modelPart, ViewLayer::ViewID viewID, const ViewGe
 	  m_viewGeometry(viewGeometry),
 	  m_modelPart(modelPart),
 	  m_viewID(viewID),
-	  m_itemMenu(itemMenu)
+	  m_itemMenu(itemMenu),
+	  m_decorations(this),
+	  m_bugAnnotation(this)
 {
 	//DebugDialog::debug(QString("itembase %1 %2").arg(id).arg((long) static_cast<QGraphicsItem *>(this), 0, 16));
 	if (m_modelPart != nullptr) {
 		m_modelPart->addViewItem(this);
 	}
-	setCursor(*CursorMaster::MoveCursor);
+	setCursor(Qt::SizeAllCursor);
 
 	setAcceptHoverEvents ( true );
 }
@@ -255,7 +258,10 @@ void ItemBase::initNames() {
 		TranslatedPropertyNames.insert("sheet", tr("sheet"));
 		TranslatedPropertyNames.insert("project", tr("project"));
 		TranslatedPropertyNames.insert("banded", tr("banded", "wire color bands, for example red/white or green/white"));
+		//: Standalone side designator; also substituted into DRC messages
+		//: ("Too close to a border (%1 layer)"). Keep it a bare word, no article.
 		TranslatedPropertyNames.insert("top", tr("top", "placed on the top side of the board"));
+		//: Standalone side designator; also substituted into DRC messages. Keep it a bare word, no article.
 		TranslatedPropertyNames.insert("bottom", tr("bottom", "placed on the bottom side of the board"));
 		TranslatedPropertyNames.insert("copper bottom", tr("copper bottom", "bottom copper PCB layer"));
 		TranslatedPropertyNames.insert("copper top", tr("copper top", "top copper PCB layer"));
@@ -263,6 +269,7 @@ void ItemBase::initNames() {
 		TranslatedPropertyNames.insert("silkscreen top", tr("silkscreen top"));
 		TranslatedPropertyNames.insert("mn", tr("mn", "Manufacturer Number"));
 		TranslatedPropertyNames.insert("mpn", tr("mpn", "Manufacturer Parts Number"));
+		TranslatedPropertyNames.insert("style", tr("style", "net label rendering style"));
 
 		// TODO: translate more known property names from fzp files and resource xml files
 
@@ -273,15 +280,13 @@ void ItemBase::initNames() {
 	QSettings settings;
 	QString colorName = settings.value("ConnectedColor").toString();
 	if (!colorName.isEmpty()) {
-		QColor color;
-		color.setNamedColor(colorName);
+		QColor color = QColor::fromString(colorName);
 		setConnectedColor(color);
 	}
 
 	colorName = settings.value("UnconnectedColor").toString();
 	if (!colorName.isEmpty()) {
-		QColor color;
-		color.setNamedColor(colorName);
+		QColor color = QColor::fromString(colorName);
 		setUnconnectedColor(color);
 	}
 
@@ -791,6 +796,12 @@ void ItemBase::mousePressEvent(QGraphicsSceneMouseEvent *event) {
 		return;
 	}
 
+	if (layerKinChief()->moveLock()) {
+		// locked: let the press fall through to items beneath or to the scene background
+		event->ignore();
+		return;
+	}
+
 	//scene()->setItemIndexMethod(QGraphicsScene::NoIndex);
 	//setCacheMode(QGraphicsItem::DeviceCoordinateCache);
 	QGraphicsSvgItem::mousePressEvent(event);
@@ -860,30 +871,7 @@ void ItemBase::setLocalSticky(bool s)
 
 	modelPart()->setLocalProp("sticky", s ? "true" : "false");
 
-	if (s) {
-		if (m_stickyItem == nullptr) {
-			if (!StickyRenderer.isValid()) {
-				QString fn(":resources/images/part_sticky.svg");
-				/* bool success = */ (void)StickyRenderer.load(fn);
-				//DebugDialog::debug(QString("sticky load success %1").arg(success));
-			}
-
-			m_stickyItem = new QGraphicsSvgItem();
-			m_stickyItem->setAcceptHoverEvents(false);
-			m_stickyItem->setAcceptedMouseButtons(Qt::NoButton);
-			m_stickyItem->setSharedRenderer(&StickyRenderer);
-			m_stickyItem->setPos(m_moveLockItem == nullptr ? 0 : m_moveLockItem->boundingRect().width() + 1, 0);
-			m_stickyItem->setZValue(-99999);
-			m_stickyItem->setParentItem(this);
-			m_stickyItem->setVisible(true);
-		}
-	}
-	else {
-		if (m_stickyItem != nullptr) {
-			delete m_stickyItem;
-			m_stickyItem = nullptr;
-		}
-	}
+	m_decorations.setStickyVisible(s);
 
 	update();
 }
@@ -1060,12 +1048,16 @@ bool ItemBase::hasNonConnectors() {
 }
 
 bool ItemBase::canFlip(Qt::Orientations orientations) {
+	// go through the accessors, not the raw m_canFlip* members, so a locked part is
+	// reported unflippable here too (canFlipHorizontal/Vertical fold in !m_moveLock).
+	// Otherwise a right-click selects the locked part and flipX would flip it, because
+	// the context menu can be shown before updateTransformationActions disables flip.
 	bool result = true;
 	if (orientations & Qt::Horizontal) {
-		result = result && m_canFlipHorizontal;
+		result = result && canFlipHorizontal();
 	}
 	if (orientations & Qt::Vertical) {
-		result = result && m_canFlipVertical;
+		result = result && canFlipVertical();
 	}
 	return result;
 }
@@ -1212,6 +1204,8 @@ void ItemBase::ensureUniqueTitle(const QString & title, bool force) {
 
 QVariant ItemBase::itemChange(QGraphicsItem::GraphicsItemChange change, const QVariant & value)
 {
+	if (change == QGraphicsItem::ItemSelectedChange && moveLockBlocksSelection(value.toBool())) return false;
+
 	if (change == QGraphicsItem::ItemSelectedChange) {
 		if (m_partLabel) {
 			m_partLabel->ownerSelected(value.toBool());
@@ -1299,6 +1293,7 @@ void ItemBase::transformItem(const QTransform & currTransf, bool includeRatsnest
 	//trns = getViewGeometry().transform();
 	//debugInfo("\t" + TextUtils::svgMatrix(trns));
 
+	m_decorations.reorientLockSymbol();		// a visible lock (e.g. on a board) stays upright through rotation/flip
 	update();
 }
 
@@ -1629,9 +1624,71 @@ bool ItemBase::isObsolete() {
 	return modelPart()->isObsolete();
 }
 
+void ItemBase::showBug(const QString & source, const QStringList & errors)
+{
+	m_bugAnnotation.show(source, errors);
+}
+
+void ItemBase::clearBug(const QString & source)
+{
+	m_bugAnnotation.clear(source);
+}
+
+void ItemBase::repositionBug()
+{
+	m_bugAnnotation.reposition();
+}
+
+bool ItemBase::hasBug() const
+{
+	return m_bugAnnotation.isActive();
+}
+
+QString ItemBase::bugText() const
+{
+	return m_bugAnnotation.text();
+}
+
+void ItemBase::updateObsoleteAnnotation()
+{
+	// Show the "outdated part" badge on obsolete parts, unless the user has silenced this
+	// instance ("optional" parts store a silencedDate when silenced). The badge doubles as a
+	// clickable shortcut to the Part Migration dialog (see bugAnnotationClicked()).
+	bool silenced = (modelPart() != nullptr) && !modelPart()->localProp("silencedDate").toString().isEmpty();
+	if (isObsolete() && !silenced) {
+		showBug(QStringLiteral("obsolete"),
+				QStringList() << tr("This part is outdated. Click to update it."));
+	}
+	else {
+		clearBug(QStringLiteral("obsolete"));
+	}
+}
+
+bool ItemBase::bugAnnotationClicked()
+{
+	// The obsolete badge doubles as an "update me" button: route this one part to the Part
+	// Migration dialog (the same flow as the Inspector's obsolete link). Returns true if handled.
+	if (!isObsolete()) return false;
+	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(this);
+	if (infoGraphicsView == nullptr) return false;
+	infoGraphicsView->requestObsoleteMigration(this);
+	return true;
+}
+
 bool ItemBase::collectExtraInfo(QWidget * parent, const QString & family, const QString & prop, const QString & value, bool swappingEnabled, QString & returnProp, QString & returnValue, QWidget * & returnWidget, bool & hide)
 {
 	Q_UNUSED(hide);                 // assume this is set by the caller (HtmlInfoView)
+	// HtmlInfoView::displayProps seeds returnWidget with the plugin widget this row held before
+	// the inspector refresh; returning that same pointer keeps the widget alive instead of
+	// destroying and recreating it. Reuse our combo when it matches this family and property, so
+	// the widget — and the keyboard focus it holds right after the user picked a value — survives
+	// the refresh. Losing that focus left the application without a focus widget, breaking
+	// shortcuts like undo/redo.
+	auto * reuseComboBox = qobject_cast<FamilyPropertyComboBox *>(returnWidget);
+	if ((reuseComboBox != nullptr)
+			&& (reuseComboBox->family() != family || reuseComboBox->prop() != prop)) {
+		reuseComboBox = nullptr;
+	}
 	returnWidget = nullptr;
 	returnProp = ItemBase::translatePropertyName(prop);
 	returnValue = value;
@@ -1684,19 +1741,34 @@ bool ItemBase::collectExtraInfo(QWidget * parent, const QString & family, const 
 	}
 
 	if (collection.count() > 1) {
-		auto *comboBox = new FamilyPropertyComboBox(family, prop, parent);
-		comboBox->setObjectName("infoViewComboBox");
+		FamilyPropertyComboBox * comboBox = reuseComboBox;
+		if (comboBox != nullptr) {
+			// The previous fill connected the combo to swapEntry of a possibly different item;
+			// drop that connection before retargeting it below.
+			disconnect(comboBox, &QComboBox::currentIndexChanged, nullptr, nullptr);
+		}
+		else {
+			comboBox = new FamilyPropertyComboBox(family, prop, parent);
+			comboBox->setObjectName("infoViewComboBox");
+			// Tag with the property so test probes can target this specific editor
+			// (many inspector editors share the objectName "infoViewComboBox").
+			comboBox->setProperty("fProbeProperty", prop);
+		}
 
 		int currentIndex = collection.count() - 1;
-		for (const auto &kv : collection) {
-			comboBox->addItem(kv.second, kv.first);
-			if (kv.first.isEmpty() && kv.second == tempValue) {
-				currentIndex = comboBox->count() - 1;
-			} else if (!kv.first.isEmpty() && kv.first == tempValue) {
-				currentIndex = comboBox->count() - 1;
+		{
+			QSignalBlocker blocker(comboBox);   // repopulating must not fire swapEntry
+			comboBox->clear();
+			for (const auto &kv : collection) {
+				comboBox->addItem(kv.second, kv.first);
+				if (kv.first.isEmpty() && kv.second == tempValue) {
+					currentIndex = comboBox->count() - 1;
+				} else if (!kv.first.isEmpty() && kv.first == tempValue) {
+					currentIndex = comboBox->count() - 1;
+				}
 			}
+			comboBox->setCurrentIndex(currentIndex);
 		}
-		comboBox->setCurrentIndex(currentIndex);
 		comboBox->setEnabled(swappingEnabled);
 		comboBox->setSizeAdjustPolicy(QComboBox::AdjustToContents);
 
@@ -1786,12 +1858,18 @@ QList<QPair<QString, QString>> ItemBase::collectPartsOfFamilyWithProp(const QStr
 	return collection;
 }
 
-QStringList ItemBase::collectValues(const QString & family, const QString & prop, QString & /* value */) {
+QStringList ItemBase::collectValues(const QString & family, const QString & prop, QString & value) {
 
 	if (TheReferenceModel == nullptr) return ___emptyStringList___;
 
 	QStringList values = CachedValues.value(family + prop, QStringList());
-	if (values.count() > 0) return values;
+	if (values.count() > 0) {
+		QStringList result = values;
+		if (!value.isEmpty() && !result.contains(value)) {
+			result.append(value);
+		}
+		return result;
+	}
 
 	values = TheReferenceModel->propValues(family, prop, true);
 
@@ -1817,7 +1895,13 @@ QStringList ItemBase::collectValues(const QString & family, const QString & prop
 	//foreach(QString v, values) {
 	//    DebugDialog::debug("\t" + v);
 	//}
-	return values;
+
+	QStringList result = values;
+	if (!value.isEmpty() && !result.contains(value)) {
+		result.append(value);
+	}
+
+	return result;
 }
 
 void ItemBase::resetValues(const QString & family, const QString & prop) {
@@ -1826,6 +1910,10 @@ void ItemBase::resetValues(const QString & family, const QString & prop) {
 
 bool ItemBase::hasPartLabel() {
 	return true;
+}
+
+bool ItemBase::inspectorRefreshOnTransform() {
+	return false;
 }
 
 const QString & ItemBase::filename() {
@@ -1957,37 +2045,50 @@ bool ItemBase::moveLock() {
 void ItemBase::setMoveLock(bool moveLock)
 {
 	m_moveLock = moveLock;
-	if (moveLock) {
-		if (m_moveLockItem == nullptr) {
-			if (!MoveLockRenderer.isValid()) {
-				QString fn(":resources/images/part_lock.svg");
-				bool success = MoveLockRenderer.load(fn);
-				DebugDialog::debug(QString("movelock load success %1").arg(static_cast<int>(success)));
-			}
+	if (moveLock && isSelected()) {
+		// locked items are not selectable: drop a selection acquired before locking,
+		// which also stops the part label from being movable
+		setSelected(false);
+	}
+	updateLockSymbol();
+}
 
-			m_moveLockItem = new QGraphicsSvgItem();
-			m_moveLockItem->setAcceptHoverEvents(false);
-			m_moveLockItem->setAcceptedMouseButtons(Qt::NoButton);
-			m_moveLockItem->setSharedRenderer(&MoveLockRenderer);
-			m_moveLockItem->setPos(0,0);
-			m_moveLockItem->setZValue(-99999);
-			m_moveLockItem->setParentItem(this);
-			m_moveLockItem->setVisible(true);
-		}
+bool ItemBase::moveLockBlocksSelection(bool becomingSelected)
+{
+	// deselection is never vetoed; programmatic selection (context menu, Select All,
+	// undo replay) proceeds because the physical left button is not down then
+	if (!becomingSelected) return false;
 
+	ItemBase * chief = layerKinChief();
+	return (chief != nullptr) && chief->moveLock()
+	       && ((QGuiApplication::mouseButtons() & Qt::LeftButton) != 0);
+}
+
+bool ItemBase::lockSymbolAlwaysVisible()
+{
+	return false;
+}
+
+void ItemBase::updateLockSymbol()
+{
+	m_decorations.updateLockSymbol();
+}
+
+void ItemBase::flashLockSymbol()
+{
+	m_decorations.flashLockSymbol();
+}
+
+void ItemBase::toggleMoveLockFromSymbol()
+{
+	InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(this);
+	if (igv != nullptr) {
+		// undoable; the command path also keeps the Inspector in sync
+		igv->changeMoveLock(this, !moveLock());
 	}
 	else {
-		if (m_moveLockItem != nullptr) {
-			delete m_moveLockItem;
-			m_moveLockItem = nullptr;
-		}
+		setMoveLock(!moveLock());
 	}
-
-	if (m_stickyItem != nullptr) {
-		m_stickyItem->setPos(m_moveLockItem == nullptr ? 0 : m_moveLockItem->boundingRect().width() + 1, 0);
-	}
-
-	update();
 }
 
 void ItemBase::debugInfo(const QString & msg) const
@@ -2032,11 +2133,79 @@ void ItemBase::addedToScene(bool temporary) {
 			setLocalSticky(true);
 		}
 	}
+	if (!temporary) {
+		updateObsoleteAnnotation();
+		// boards show their open-lock symbol as soon as they exist in a view
+		updateLockSymbol();
+	}
 }
 
 bool ItemBase::hasPartNumberProperty()
 {
 	return true;
+}
+
+bool ItemBase::isBomItem()
+{
+	return itemType() == ModelPart::Part;
+}
+
+QString ItemBase::electricalValue()
+{
+	if (m_modelPart == nullptr) return "";
+
+	static const QString OhmSymbol = QString(QChar(0x03A9));
+	// Properties checked in this order; non-empty ones are concatenated, so
+	// single-value parts (resistor, cap, inductor, crystal) get one string and
+	// multi-value parts (LED with color+current) get both. List order also
+	// defines display order. Resistors store bare numbers and need the Ω
+	// appended; caps/inductors/crystals store their units inline ("10µF",
+	// "100mH", "16 MHz") so we leave them as-is.
+	static const QStringList valueProperties = {
+		"frequency", "resistance", "capacitance", "inductance",
+		"color", "current"
+	};
+
+	// Source the actual key set from the part's fzp definition. PropertyDefMaster
+	// pre-seeds localProps with the default of every variant whose suffix matches
+	// the moduleID (e.g. a 5mm pp cap ends up with localProp("capacitance")="100nF"
+	// even though that variant isn't in its fzp), so we can't trust localProp keys.
+	const QHash<QString, QString> & fzpProps = m_modelPart->properties();
+
+	QStringList parts;
+	for (const QString & baseName : valueProperties) {
+		QString actualName;
+		if (fzpProps.contains(baseName)) {
+			actualName = baseName;
+		} else if (baseName == "capacitance") {
+			// pp capacitors carry package-specific keys (capacitance5mm,
+			// capacitance7.5mm, capacitance10mm, ...). Use whichever variant
+			// the fzp actually defines.
+			const auto keys = fzpProps.keys();
+			for (const QString & key : keys) {
+				if (key.startsWith("capacitance")
+				    && key.length() > baseName.length()
+				    && key.at(baseName.length()).isDigit()) {
+					actualName = key;
+					break;
+				}
+			}
+		}
+		if (actualName.isEmpty()) continue;
+
+		QString value = m_modelPart->localProp(actualName).toString();
+		if (value.isEmpty()) {
+			value = fzpProps.value(actualName, "");
+		}
+		if (value.isEmpty()) continue;
+
+		if (baseName == "resistance" && !value.endsWith(OhmSymbol)) {
+			value += OhmSymbol;
+		}
+		parts << value;
+	}
+
+	return parts.join(", ");
 }
 
 void ItemBase::collectPropsMap(QString & family, QMap<QString, QString> & propsMap) {
@@ -2124,7 +2293,8 @@ QPainterPath ItemBase::hoverShape() const
 
 const QCursor * ItemBase::getCursor(Qt::KeyboardModifiers)
 {
-	return CursorMaster::MoveCursor;
+	static QCursor moveCursor(Qt::SizeAllCursor);
+	return &moveCursor;
 }
 
 PartLabel * ItemBase::partLabel() {
@@ -2136,10 +2306,6 @@ void ItemBase::doneLoading() {
 
 QString ItemBase::family() {
 	return modelPart()->family();
-}
-
-QPixmap * ItemBase::getPixmap(QSize size) {
-	return FSvgRenderer::getPixmap(renderer(), size);
 }
 
 FSvgRenderer * ItemBase::fsvgRenderer() const {
@@ -2203,67 +2369,6 @@ bool ItemBase::resetRenderer(const QString & svg, QString & newSvg) {
 		delete newRenderer;
 	}
 	return result;
-}
-
-void ItemBase::getPixmaps(QPixmap * & pixmap1, QPixmap * & pixmap2, QPixmap * & pixmap3, bool swappingEnabled, QSize size)
-{
-	pixmap1 = getPixmap(ViewLayer::BreadboardView, swappingEnabled, size);
-	pixmap2 = getPixmap(ViewLayer::SchematicView, swappingEnabled, size);
-	pixmap3 = getPixmap(ViewLayer::PCBView, swappingEnabled, size);
-}
-
-QPixmap * ItemBase::getPixmap(ViewLayer::ViewID vid, bool swappingEnabled, QSize size)
-{
-	ItemBase * vItemBase = nullptr;
-
-	if (viewID() == vid) {
-		if (!isEverVisible()) return nullptr;
-	}
-	else {
-		vItemBase = modelPart()->viewItem(vid);
-		if ((vItemBase != nullptr) && !vItemBase->isEverVisible()) return nullptr;
-	}
-
-	vid = useViewIDForPixmap(vid, swappingEnabled);
-	if (vid == ViewLayer::UnknownView) return nullptr;
-
-	if (viewID() == vid) {
-		return getPixmap(size);
-	}
-
-	if (vItemBase != nullptr) {
-		return vItemBase->getPixmap(size);
-	}
-
-
-	if (!modelPart()->hasViewFor(vid)) return nullptr;
-
-	QString baseName = modelPart()->hasBaseNameFor(vid);
-	if (baseName.isEmpty()) return nullptr;
-
-	QString filename = PartFactory::getSvgFilename(modelPart(), baseName, true, true);
-	if (filename.isEmpty()) {
-		return nullptr;
-	}
-
-	QSvgRenderer renderer(filename);
-
-	auto * pixmap = new QPixmap(size);
-	pixmap->fill(Qt::transparent);
-	QPainter painter(pixmap);
-	// preserve aspect ratio
-	QSize def = renderer.defaultSize();
-	double newW = size.width();
-	double newH = newW * def.height() / def.width();
-	if (newH > size.height()) {
-		newH = size.height();
-		newW = newH * def.width() / def.height();
-	}
-	QRectF bounds((size.width() - newW) / 2.0, (size.height() - newH) / 2.0, newW, newH);
-	renderer.render(&painter, bounds);
-	painter.end();
-
-	return pixmap;
 }
 
 ViewLayer::ViewID ItemBase::useViewIDForPixmap(ViewLayer::ViewID vid, bool)
@@ -2412,11 +2517,9 @@ void ItemBase::createShape(LayerAttributes & layerAttributes) {
 
 	if (!isEverVisible()) return;
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(layerAttributes.loaded(), &errorStr, &errorLine, &errorColumn)) {
+	QDomDocument::ParseResult parseResult = doc.setContent(layerAttributes.loaded());
+	if (!parseResult) {
 		return;
 	}
 

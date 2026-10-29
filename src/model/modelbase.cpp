@@ -25,10 +25,16 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../utils/textutils.h"
 #include "../utils/folderutils.h"
 #include "../utils/fmessagebox.h"
+#include "../utils/misc.h"
 #include "../version/version.h"
 #include "../viewgeometry.h"
 
+#include <QFileDevice>
 #include <QMessageBox>
+#include <quazip/quazipfile.h>
+
+#include <cerrno>
+#include <cstring>
 
 QList<QString> ModelBase::CoreList;
 
@@ -73,37 +79,35 @@ bool ModelBase::loadFromFile(const QString & fileName, ModelBase * referenceMode
 	QFileInfo fileInfo(file);
 	QString onlyFileName = fileInfo.fileName();
 	if (!file.open(QFile::ReadOnly | QFile::Text)) {
-		FMessageBox::warning(nullptr, QObject::tr("Fritzing"),
+		FMessageBox::warning(nullptr, QObject::tr("Fritzing", "dialog title"),
 		                     QObject::tr("Cannot read file %1:\n%2.")
 		                     .arg(fileName)
 		                     .arg(file.errorString()));
 		return false;
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument domDocument;
 
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"),
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!parseResult) {
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"),
 		                         QObject::tr("Parse error (1) at line %1, column %2:\n%3\n%4")
-		                         .arg(errorLine)
-		                         .arg(errorColumn)
-								 .arg(errorStr, fileName));
+		                         .arg(parseResult.errorLine)
+		                         .arg(parseResult.errorColumn)
+								 .arg(parseResult.errorMessage, fileName));
 		return false;
 	}
 
 	QDomElement root = domDocument.documentElement();
 	if (root.isNull()) {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"), QObject::tr("The file %1 is not a Fritzing file (2).").arg(fileName));
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"), QObject::tr("The file %1 is not a Fritzing file (2).").arg(fileName));
 		return false;
 	}
 
 	Q_EMIT loadedRoot(fileName, this, root);
 
 	if (root.tagName() != "module") {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"), QObject::tr("The file %1 is not a Fritzing file (4).").arg(fileName));
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"), QObject::tr("The file %1 is not a Fritzing file (4).").arg(fileName));
 		return false;
 	}
 
@@ -219,7 +223,7 @@ bool ModelBase::loadFromFile(const QString & fileName, ModelBase * referenceMode
 
 	QDomElement instances = root.firstChildElement("instances");
 	if (instances.isNull()) {
-		FMessageBox::information(nullptr, QObject::tr("Fritzing"), QObject::tr("The file %1 is not a Fritzing file (3).").arg(fileName));
+		FMessageBox::information(nullptr, QObject::tr("Fritzing", "dialog title"), QObject::tr("The file %1 is not a Fritzing file (3).").arg(fileName));
 		return false;
 	}
 
@@ -431,7 +435,7 @@ bool ModelBase::loadInstances(QDomDocument & domDocument, QDomElement & instance
 		}
 
 		FMessageBox* msgBox = FMessageBox::createCustom(nullptr, QMessageBox::Warning,
-		                                                QObject::tr("Fritzing"), mainMessage);
+		                                                QObject::tr("Fritzing", "dialog title"), mainMessage);
 		msgBox->setDetailedText(detailedInfo);
 		msgBox->enableClipboardButton(true);
 		msgBox->exec();
@@ -488,7 +492,7 @@ bool ModelBase::save(const QString & fileName, bool asPart) {
 	QString temp = dir.absoluteFilePath("temp.xml");
 	QFile file1(temp);
 	if (!file1.open(QFile::WriteOnly | QFile::Text)) {
-		FMessageBox::warning(nullptr, QObject::tr("Fritzing"),
+		FMessageBox::warning(nullptr, QObject::tr("Fritzing", "dialog title"),
 				     QObject::tr("Cannot write temp file. Save aborted. \n\nerror: %1\n\ntemp file: %2\n\ntarget file: %3.")
 				     .arg(file1.errorString())
 				     .arg(temp)
@@ -501,7 +505,7 @@ bool ModelBase::save(const QString & fileName, bool asPart) {
 	save(fileName, streamWriter, asPart);
 	file1.flush();
 	if (streamWriter.hasError() || file1.error() != QFile::NoError) {
-		FMessageBox::warning(nullptr, QObject::tr("Fritzing"),
+		FMessageBox::warning(nullptr, QObject::tr("Fritzing", "dialog title"),
 				     QObject::tr("Error while writing temp file. Save aborted. \n\nerror: %1\n\ntemp file: %2\n\ntarget file: %3.")
 				     .arg(file1.errorString())
 				     .arg(temp)
@@ -524,7 +528,17 @@ bool ModelBase::save(const QString & fileName, bool asPart) {
 		);
 		return false;
 	}
-	file1.rename(fileName);
+	if (!file1.rename(fileName)) {
+		FMessageBox::warning(
+		    nullptr,
+		    tr("File save failed!"),
+		    tr("Couldn't move the saved content into place at '%1'.\nReason: %2 (errcode %3)")
+		    .arg(fileName)
+		    .arg(file1.errorString())
+		    .arg(file1.error())
+		);
+		return false;
+	}
 	return true;
 }
 
@@ -537,16 +551,72 @@ void ModelBase::save(const QString & fileName, QXmlStreamWriter & streamWriter, 
 	}
 }
 
+static QString getIoDeviceError(QuaZip *zip) {
+	QIODevice *dev = zip->getIoDevice();
+	if (!dev) return QString();
+	auto *fd = qobject_cast<QFileDevice *>(dev);
+	if (fd && fd->error() != QFileDevice::NoError) {
+		return fd->errorString();
+	}
+	// Fallback: QSaveFile may not report write errors that went through
+	// zlib buffering. Check errno directly — it's still valid right after
+	// the failing close/flush call.
+	if (errno != 0) {
+		return QString::fromLocal8Bit(strerror(errno));
+	}
+	return QString();
+}
+
+bool ModelBase::saveToZip(QuaZip *zip, const QString &fileName, bool asPart, QString *errorOut) {
+	QuaZipFile zipFile(zip);
+	QString entryName = QFileInfo(fileName).completeBaseName() + FritzingSketchExtension;
+	if (!zipFile.open(QIODevice::WriteOnly, QuaZipNewInfo(entryName))) {
+		QString devError = getIoDeviceError(zip);
+		QString msg = devError.isEmpty()
+			? QString("saveToZip: failed to open zip entry '%1', error %2")
+				.arg(entryName).arg(zipFile.getZipError())
+			: devError;
+		DebugDialog::debug(QString("saveToZip: failed to open zip entry '%1', error %2")
+			.arg(entryName).arg(zipFile.getZipError()));
+		if (errorOut) *errorOut = msg;
+		return false;
+	}
+
+	QXmlStreamWriter streamWriter(&zipFile);
+	save(fileName, streamWriter, asPart);
+
+	if (streamWriter.hasError()) {
+		QString devError = getIoDeviceError(zip);
+		QString msg = devError.isEmpty()
+			? QString("saveToZip: XML write error for '%1'").arg(entryName)
+			: devError;
+		DebugDialog::debug(QString("saveToZip: XML write error for '%1'").arg(entryName));
+		if (errorOut) *errorOut = msg;
+		zipFile.close();
+		return false;
+	}
+
+	zipFile.close();
+	if (zipFile.getZipError() != UNZ_OK) {
+		QString devError = getIoDeviceError(zip);
+		QString msg = devError.isEmpty()
+			? QString("saveToZip: zip entry close error %1").arg(zipFile.getZipError())
+			: devError;
+		DebugDialog::debug(QString("saveToZip: zip entry close error %1").arg(zipFile.getZipError()));
+		if (errorOut) *errorOut = msg;
+		return false;
+	}
+
+	return true;
+}
+
 bool ModelBase::paste(ModelBase * referenceModel, QByteArray & data, QList<ModelPart *> & modelParts, QHash<QString, QRectF> & boundingRects, bool preserveIndex)
 {
 	m_referenceModel = referenceModel;
 
 	QDomDocument domDocument;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument.setContent(data, &errorStr, &errorLine, &errorColumn);
-	if (!result) return false;
+	QDomDocument::ParseResult parseResult = domDocument.setContent(data);
+	if (!parseResult) return false;
 
 	QDomElement el = domDocument.documentElement();
 	if (el.isNull()) {

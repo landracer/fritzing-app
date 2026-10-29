@@ -23,7 +23,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "nonconnectoritem.h"
 #include "connector.h"
-#include "utils/cursormaster.h"
+#include "utils/svgcursorbuilder.h"
 #include "utils/bezier.h"
 
 #include <QThread>
@@ -68,6 +68,7 @@ public:
 	QPointF terminalPoint();
 	QPointF adjustedTerminalPoint();
 	QPointF sceneAdjustedTerminalPoint(ConnectorItem * anchor);
+	QPointF scenePinPoint();
 	bool connectedTo(ConnectorItem *);
 	const QList< QPointer<ConnectorItem> > & connectedToItems();
 	void setHidden(bool hidden);

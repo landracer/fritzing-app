@@ -22,6 +22,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../debugdialog.h"
 #include "../viewgeometry.h"
 #include "../sketch/infographicsview.h"
+#include "hole.h"
 #include "layerkinpaletteitem.h"
 #include "../fsvgrenderer.h"
 #include "partlabel.h"
@@ -247,6 +248,8 @@ void PaletteItem::syncKinSelection(bool selected, PaletteItemBase * originator) 
 
 QVariant PaletteItem::itemChange(GraphicsItemChange change, const QVariant &value)
 {
+	if (change == ItemSelectedChange && moveLockBlocksSelection(value.toBool())) return false;
+
 	//DebugDialog::debug(QString("chief item change %1 %2").arg(this->id()).arg(change));
 	if (m_layerKin.count() > 0) {
 		if (change == ItemSelectedChange) {
@@ -617,7 +620,7 @@ void PaletteItem::openPinLabelDialog() {
 	if (infoGraphicsView == nullptr) {
 		QMessageBox::warning(
 		    nullptr,
-		    tr("Fritzing"),
+		    tr("Fritzing", "dialog title"),
 		    tr("Unable to proceed; unable to find top level view.")
 		);
 		return;
@@ -628,7 +631,7 @@ void PaletteItem::openPinLabelDialog() {
 	if (sortedConnectors.count() == 0) {
 		QMessageBox::warning(
 		    nullptr,
-		    tr("Fritzing"),
+		    tr("Fritzing", "dialog title"),
 		    tr("Unable to proceed; part connectors do no have standard IDs.")
 		);
 		return;
@@ -652,7 +655,7 @@ void PaletteItem::openPinLabelDialog() {
 	if (newLabels.count() != sortedConnectors.count()) {
 		QMessageBox::warning(
 		    nullptr,
-		    tr("Fritzing"),
+		    tr("Fritzing", "dialog title"),
 		    tr("Label mismatch.  Nothing was saved.")
 		);
 		return;
@@ -825,6 +828,33 @@ bool PaletteItem::collectHoleSizeInfo(const QString & defaultHoleSizeValue, QWid
 	}
 	QWidget * frame = createHoleSettings(parent, m_holeSettings, swappingEnabled, returnValue, true);
 
+	// Hole group mode: if several holes are selected with differing values, blank the
+	// affected controls so a stale single value isn't shown for the whole group. Done
+	// before connecting signals so setting the combo to -1 doesn't fire changeHoleSize().
+	{
+		auto * hole = dynamic_cast<Hole *>(this);
+		InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(this);
+		QList<Hole *> holes;
+		if ((hole != nullptr) && (igv != nullptr) && igv->collectSelectedHoles(holes) > 1 && holes.contains(hole)) {
+			bool mixedDiameter = false, mixedThickness = false, first = true;
+			QString d0, t0;
+			Q_FOREACH (Hole * h, holes) {
+				QStringList dt = h->holeSize().split(",");
+				if (dt.count() != 2) continue;
+				if (first) { d0 = dt.at(0); t0 = dt.at(1); first = false; }
+				else {
+					if (dt.at(0) != d0) mixedDiameter = true;
+					if (dt.at(1) != t0) mixedThickness = true;
+				}
+			}
+			if (mixedDiameter && (m_holeSettings.diameterEdit != nullptr)) m_holeSettings.diameterEdit->setText("");
+			if (mixedThickness && (m_holeSettings.thicknessEdit != nullptr)) m_holeSettings.thicknessEdit->setText("");
+			if ((mixedDiameter || mixedThickness) && (m_holeSettings.sizesComboBox != nullptr)) {
+				m_holeSettings.sizesComboBox->setCurrentIndex(-1);
+			}
+		}
+	}
+
 	connect(m_holeSettings.sizesComboBox, SIGNAL(currentIndexChanged(int)), this, SLOT(changeHoleSize(int)));
 	connect(m_holeSettings.mmRadioButton, SIGNAL(toggled(bool)), this, SLOT(changeUnits(bool)));
 	connect(m_holeSettings.inRadioButton, SIGNAL(toggled(bool)), this, SLOT(changeUnits(bool)));
@@ -867,13 +897,10 @@ void PaletteItem::setUpHoleSizesAux(HoleClassThing & holeThing, const QString & 
 		DebugDialog::debug("Unable to open :/resources/vias.xml");
 	}
 
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-
 	QDomDocument domDocument;
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("failed loading properties %1 line:%2 col:%3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!parseResult) {
+		DebugDialog::debug(QString("failed loading properties %1 line:%2 col:%3").arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn));
 		return;
 	}
 
@@ -1146,6 +1173,33 @@ bool PaletteItem::setHoleSize(QString & holeSize, bool force, HoleSettings & hol
 	return true;
 }
 
+static QString clampHoleDim(const QString & valueStr, const QPointF & rangeInches)
+{
+	bool ok;
+	double inches = TextUtils::convertToInches(valueStr, &ok, false);
+	if (!ok) return valueStr;
+	double clamped = inches;
+	double lo = rangeInches.x();
+	double hi = rangeInches.y();
+	if (lo > 0 && clamped < lo) clamped = lo;
+	if (hi > 0 && clamped > hi) clamped = hi;
+	if (clamped == inches) return valueStr;
+	bool mm = valueStr.contains("mm", Qt::CaseInsensitive);
+	double out = mm ? clamped * 25.4 : clamped;
+	return QString::number(out) + (mm ? "mm" : "in");
+}
+
+QString PaletteItem::clampHoleSize(const QString & holeSizeStr)
+{
+	if (m_holeSettings.holeThing == nullptr) return holeSizeStr;
+	QString s = holeSizeStr;
+	QStringList sizes = getSizes(s, m_holeSettings);   // resolves a preset name to "diameter,thickness"
+	if (sizes.count() != 2) return holeSizeStr;
+	QString diameter = clampHoleDim(sizes.at(0), m_holeSettings.holeThing->holeDiameterRange);
+	QString ringThickness = clampHoleDim(sizes.at(1), m_holeSettings.holeThing->ringThicknessRange);
+	return diameter + "," + ringThickness;
+}
+
 QStringList PaletteItem::getSizes(QString & holeSize, HoleSettings & holeSettings)
 {
 	QStringList sizes;
@@ -1164,6 +1218,12 @@ void PaletteItem::changeHoleSize(int index) {
 	auto * comboBox = qobject_cast<QComboBox *>(sender());
 	if (comboBox == nullptr) return;
 	QString newSize = comboBox->itemText(index);
+
+	// In hole group mode, apply the preset's diameter+thickness pair to all selected holes.
+	QString resolved = newSize;
+	QStringList dt = getSizes(resolved, m_holeSettings);
+	if (dt.count() == 2 && applyHoleSizeToSelectionIfGroup(dt.at(0), dt.at(1))) return;
+
 	changeHoleSize(newSize);
 }
 
@@ -1210,12 +1270,9 @@ void PaletteItem::changeHoleSize(const QString & newSize) {
 
 QString PaletteItem::hackFzpHoleSize(const QString & fzp, const QString & moduleid, int hsix)
 {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument document;
-	bool result = document.setContent(fzp, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	QDomDocument::ParseResult parseResult = document.setContent(fzp);
+	if (!parseResult) {
 		DebugDialog::debug(QString("bad fzp in %1:%2").arg(moduleid).arg(fzp));
 	}
 	QStringList strings = moduleid.mid(hsix).split("_");
@@ -1228,13 +1285,10 @@ QString PaletteItem::hackFzpHoleSize(const QString & newModuleID, const QString 
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(modelPart()->path()));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument document;
-	bool result = document.setContent(&file, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
-		DebugDialog::debug(QString("bad doc fzp in %1:%2 %3 %4").arg(newModuleID).arg(errorStr).arg(errorLine).arg(errorColumn));
+	QDomDocument::ParseResult parseResult = document.setContent(&file);
+	if (!parseResult) {
+		DebugDialog::debug(QString("bad doc fzp in %1:%2 %3 %4").arg(newModuleID).arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn));
 	}
 
 	return hackFzpHoleSize(document, newModuleID, pcbFilename, newSize);
@@ -1289,13 +1343,11 @@ QString PaletteItem::hackSvgHoleSize(const QString & holeDiameter, const QString
 	if (!file.open(QIODevice::ReadOnly)) {
 		DebugDialog::debug(QString("Unable to open :%1").arg(filename()));
 	}
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 
 	QDomDocument domDocument;
-	if (!domDocument.setContent(&file, true, &errorStr, &errorLine, &errorColumn)) {
-		DebugDialog::debug(QString("unable to parse pcb svg xml: %1 %2 %3").arg(errorStr).arg(errorLine).arg(errorColumn));
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if (!parseResult) {
+		DebugDialog::debug(QString("unable to parse pcb svg xml: %1 %2 %3").arg(parseResult.errorMessage).arg(parseResult.errorLine).arg(parseResult.errorColumn));
 		return "";
 	}
 
@@ -1450,11 +1502,28 @@ QString PaletteItem::changeUnits(HoleSettings & holeSettings)
 	return newVal;
 }
 
+bool PaletteItem::applyHoleSizeToSelectionIfGroup(const QString & diameter, const QString & ringThickness)
+{
+	auto * hole = dynamic_cast<Hole *>(this);
+	if (hole == nullptr) return false;
+
+	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(this);
+	if (infoGraphicsView == nullptr) return false;
+
+	QList<Hole *> holes;
+	if (infoGraphicsView->collectSelectedHoles(holes) <= 1 || !holes.contains(hole)) return false;
+
+	infoGraphicsView->setHoleSizeForSelection(diameter, ringThickness);
+	return true;
+}
+
 void PaletteItem::changeThickness()
 {
 	if (changeThickness(m_holeSettings, sender())) {
 		auto * edit = qobject_cast<QLineEdit *>(sender());
-		changeHoleSize(m_holeSettings.holeDiameter + "," + QString::number(TextUtils::getLocale().toDouble(edit->text())) + m_holeSettings.currentUnits());
+		QString newThickness = QString::number(TextUtils::getLocale().toDouble(edit->text())) + m_holeSettings.currentUnits();
+		if (applyHoleSizeToSelectionIfGroup(QString(), newThickness)) return;
+		changeHoleSize(m_holeSettings.holeDiameter + "," + newThickness);
 	}
 }
 
@@ -1474,8 +1543,9 @@ void PaletteItem::changeDiameter()
 {
 	if (changeDiameter(m_holeSettings, sender())) {
 		auto * edit = qobject_cast<QLineEdit *>(sender());
-		changeHoleSize(QString::number(TextUtils::getLocale().toDouble(edit->text())) + m_holeSettings.currentUnits() + "," + m_holeSettings.ringThickness);
-
+		QString newDiameter = QString::number(TextUtils::getLocale().toDouble(edit->text())) + m_holeSettings.currentUnits();
+		if (applyHoleSizeToSelectionIfGroup(newDiameter, QString())) return;
+		changeHoleSize(newDiameter + "," + m_holeSettings.ringThickness);
 	}
 }
 

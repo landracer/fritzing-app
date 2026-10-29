@@ -71,10 +71,8 @@ static const QString fontFamilyQuotesPattern = R"x(font-family(?:="|:)('[^']*')"
 static const QRegularExpression HexExpr("&#x[0-9a-fA-F];");   // &#x9; &#xa; &#xd;
 static const QRegularExpression Xmlns("xmlns=([\"|'])[^\"']*\\1");
 
-const char16_t TextUtils::MicroSymbolCode = 181;
-const QString TextUtils::MicroSymbol = QString::fromUtf16(&MicroSymbolCode, 1);
-const char16_t TextUtils::AltMicroSymbolCode = 956;
-const QString TextUtils::AltMicroSymbol = QString::fromUtf16(&AltMicroSymbolCode, 1);
+const QString TextUtils::MicroSymbol = QString(QChar(MicroSymbolCode));
+const QString TextUtils::AltMicroSymbol = QString(QChar(AltMicroSymbolCode));
 
 const QString TextUtils::AdobeIllustratorIdentifier = "Generator: Adobe Illustrator";
 
@@ -348,11 +346,9 @@ bool TextUtils::squashElement(QDomDocument & doc, const QString & elementName, c
 }
 
 QString TextUtils::replaceTextElement(const QString & svg, const QString & id, const QString & newValue) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) return svg;
+	QDomDocument::ParseResult parseResult = doc.setContent(svg);
+	if (!parseResult) return svg;
 
 	QDomElement root = doc.documentElement();
 	QDomNodeList domNodeList = root.elementsByTagName("text");
@@ -370,11 +366,9 @@ QString TextUtils::replaceTextElement(const QString & svg, const QString & id, c
 }
 
 QByteArray TextUtils::replaceTextElement(const QByteArray & svg, const QString & id, const QString & newValue) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) return svg;
+	QDomDocument::ParseResult parseResult = doc.setContent(svg);
+	if (!parseResult) return svg;
 
 	QDomElement root = doc.documentElement();
 	QDomNodeList domNodeList = root.elementsByTagName("text");
@@ -392,11 +386,9 @@ QByteArray TextUtils::replaceTextElement(const QByteArray & svg, const QString &
 }
 
 QString TextUtils::replaceTextElements(const QString & svg, const QHash<QString, QString> & hash) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QDomDocument doc;
-	if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) return svg;
+	QDomDocument::ParseResult parseResult = doc.setContent(svg);
+	if (!parseResult) return svg;
 
 	bool changed = false;
 	QDomElement root = doc.documentElement();
@@ -447,15 +439,14 @@ void TextUtils::replaceChildText(QDomNode & node, const QString & text) {
 
 bool TextUtils::mergeSvg(QDomDocument & doc1, const QString & svg, const QString & id)
 {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	if (doc1.isNull()) {
-		return doc1.setContent(svg, &errorStr, &errorLine, &errorColumn);
+		QDomDocument::ParseResult parseResult = doc1.setContent(svg);
+		return parseResult.operator bool();
 	}
 
 	QDomDocument doc2;
-	if (!doc2.setContent(svg, &errorStr, &errorLine, &errorColumn)) return false;
+	QDomDocument::ParseResult parseResult = doc2.setContent(svg);
+	if (!parseResult) return false;
 
 	QDomElement root1 = doc1.documentElement();
 	if (root1.tagName() != "svg") return false;
@@ -587,34 +578,13 @@ bool TextUtils::cleanSodipodi(QString &content)
 		return true;
 	}
 	return false;
-
-
-	/*
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	QDomDocument doc;
-	bool result = doc.setContent(bytes, &errorStr, &errorLine, &errorColumn);
-	m_svgXml.clear();
-	if (!result) {
-		return false;
-	}
-
-	SvgFlattener flattener;
-	QDomElement root = doc.documentElement();
-	flattener.flattenChildren(root);
-	SvgFileSplitter::fixStyleAttributeRecurse(root);
-	return doc.toByteArray();
-	*/
 }
 
 bool TextUtils::fixPixelDimensionsIn(QString &fileContent) {
 	QDomDocument svgDom;
 
-	QString errorMsg;
-	int errorLine;
-	int errorCol;
-	if(!svgDom.setContent(fileContent, true, &errorMsg, &errorLine, &errorCol)) {
+	QDomDocument::ParseResult parseResult = svgDom.setContent(fileContent, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if(!parseResult) {
 		return false;
 	}
 
@@ -808,13 +778,10 @@ QString TextUtils::stripNonValidXMLCharacters(const QString & str)
 }
 
 bool TextUtils::addCopper1(const QString & filename, QDomDocument & domDocument, const QString & srcAtt, const QString & destAtt) {
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
 	QFile file(filename);
 	file.open(QIODevice::ReadOnly);
-	bool result = domDocument.setContent(&file, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	QDomDocument::ParseResult parseResult = domDocument.setContent(&file);
+	if (!parseResult) {
 		domDocument.clear();			// probably redundant
 		return false;
 	}
@@ -834,7 +801,7 @@ bool TextUtils::addCopper1(const QString & filename, QDomDocument & domDocument,
 		}
 	}
 
-	result = false;
+	bool result = false;
 	for (int i = 0; i < elements.count(); i++) {
 		QDomElement node = elements.at(i);
 		if (node.isNull()) continue;
@@ -862,12 +829,39 @@ bool TextUtils::addCopper1(const QString & filename, QDomDocument & domDocument,
 }
 
 QString TextUtils::convertToPowerPrefix(double q, char format, int precision) {
+	return convertToPowerPrefix(q, 100, format, precision);
+}
+
+QString TextUtils::convertToPowerPrefixByThousands(double q, char format, int precision) {
+	initPowerPrefixes();
+
+	if (q == 0) return QString::number(q, format, precision);
+
+	// Like convertToPowerPrefix, but keeps the mantissa in [1, 1000) so farad
+	// values avoid decimal prefixes. The range test is made against the rounded,
+	// to-be-displayed mantissa instead of a (1000 * PowerPrefixValues[i]) product:
+	// 1000 * 1e-9 evaluates to 1.0000000000000002e-6, which is greater than 1e-6,
+	// so a clean 1µF fell into the nano bucket and its mantissa rounded up to a
+	// spurious "1000n" (1µF was shown as 1000nF). Testing the displayed mantissa
+	// instead rolls such a value over to the next prefix, and is self-consistent
+	// because it can never emit a "1000" mantissa.
+	for (int i = 0; i < PowerPrefixes.count(); i++) {
+		QString mantissa = QString::number(q / PowerPrefixValues[i], format, precision);
+		if (qAbs(mantissa.toDouble()) < 1000.0) {
+			return mantissa + PowerPrefixes[i];
+		}
+	}
+
+	return QString::number(q, format, precision);
+}
+
+QString TextUtils::convertToPowerPrefix(double q, double prefixThreshold, char format, int precision) {
 	initPowerPrefixes();
 
 	if (q == 0) return QString::number(q, format, precision);
 
 	for (int i = 0; i < PowerPrefixes.count(); i++) {
-		if (abs(q) < 100 * PowerPrefixValues[i]) {
+		if (abs(q) < prefixThreshold * PowerPrefixValues[i]) {
 			q /= PowerPrefixValues[i];
 			return QString::number(q, format, precision) + PowerPrefixes[i];
 		}
@@ -888,6 +882,7 @@ double TextUtils::convertFromPowerPrefix(const QString & val, const QString & sy
 
 	double multiplier = 1;
 	QString temp = val;
+	temp.replace(',', '.');   // accept comma as a decimal separator (e.g. de_DE locale)
 	if (temp.endsWith(symbol)) {
 		temp.chop(symbol.length());
 	}
@@ -1089,10 +1084,8 @@ bool TextUtils::fixMuch(QString &svg, bool fixStrokeWidthFlag)
 	result |= fixInternalUnits(svg);
 
 	QDomDocument svgDom;
-	QString errorMsg;
-	int errorLine;
-	int errorCol;
-	if(!svgDom.setContent(svg, true, &errorMsg, &errorLine, &errorCol)) {
+	QDomDocument::ParseResult parseResult = svgDom.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+	if(!parseResult) {
 		return result;
 	}
 
@@ -1604,9 +1597,33 @@ bool TextUtils::noUseAux(QDomDocument & svgDom)
 		QString refid = use.attribute("href");
 		QString id = use.attribute("id");
 
+		// honour <use> x/y as a supplemental translate (SVG semantics), appended to any transform
+		QString x = use.attribute("x");
+		QString y = use.attribute("y");
+		if (!x.isEmpty() || !y.isEmpty()) {
+			transform += QString(" translate(%1,%2)").arg(x.isEmpty() ? QString("0") : x, y.isEmpty() ? QString("0") : y);
+		}
+
+		// preserve faction markers (e.g. faction="lock") onto the <g> so a later DOM pass can
+		// still find them after flattening; capture the attribute handle before the node is detached
+		bool isFaction = use.hasAttribute("faction");
+		QDomNamedNodeMap useAttributes = use.attributes();
+
 		QDomElement g = svgDom.createElement("g");
 		use.parentNode().replaceChild(g, use);
 		g.setAttribute("transform", transform);
+
+		for (int a = 0; a < useAttributes.count(); a++) {
+			QDomAttr attr = useAttributes.item(a).toAttr();
+			if (!attr.isNull() && (attr.name() == "faction" || attr.name().startsWith("faction-"))) {
+				g.setAttribute(attr.name(), attr.value());
+			}
+		}
+		// a faction marker keeps its id on the <g> (not the clone, to avoid a duplicate id), since
+		// it is matched and removed by the renderer rather than rendered
+		if (isFaction) {
+			g.setAttribute("id", id);
+		}
 
 		if (refid.startsWith("#")) {
 			refid.remove(0, 1);
@@ -1618,7 +1635,9 @@ bool TextUtils::noUseAux(QDomDocument & svgDom)
 
 		QDomElement copy = toCopy.cloneNode(true).toElement();
 		g.appendChild(copy);
-		copy.setAttribute("id", id);
+		if (!isFaction) {
+			copy.setAttribute("id", id);
+		}
 	}
 
 	return true;
@@ -1964,11 +1983,8 @@ QString TextUtils::getMacAddress()
 QString TextUtils::expandAndFill(const QString & svg, const QString & color, double expandBy)
 {
 	QDomDocument domDocument;
-	QString errorStr;
-	int errorLine;
-	int errorColumn;
-	bool result = domDocument.setContent(svg, &errorStr, &errorLine, &errorColumn);
-	if (!result) {
+	QDomDocument::ParseResult parseResult = domDocument.setContent(svg);
+	if (!parseResult) {
 		return "";
 	}
 
@@ -2447,4 +2463,3 @@ QFont TextUtils::textMetrics(const QDomElement & element) {
 	TextMetrics tm(element);
 	return tm.getFont();
 }
-

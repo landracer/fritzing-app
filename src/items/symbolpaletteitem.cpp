@@ -36,6 +36,13 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QLineEdit>
 #include <QMultiHash>
 #include <QMessageBox>
+#include <QComboBox>
+#include <QSettings>
+#include <QPixmap>
+#include <QPainter>
+#include <QSvgRenderer>
+#include <QFontMetricsF>
+#include <QIcon>
 
 #include <cmath>
 
@@ -47,6 +54,30 @@ static QMultiHash<QString, QPointer<ConnectorItem> > LocalNetLabels;
 static QList< QPointer<ConnectorItem> > LocalGrounds;
 static QList<double> Voltages;
 double SymbolPaletteItem::DefaultVoltage = 5;
+
+// A net label's "style" localProp stores the actual text alignment in the label's own
+// (unflipped) frame: which box edge the text hugs. Flipping the label mirrors it on screen.
+static const QString NetLabelAlignLeft("left");
+static const QString NetLabelAlignRight("right");
+static const QString NetLabelStyleLegacy("legacy");
+// The Schematic preferences default uses an orientation-independent vocabulary instead
+// (outside = away from the connector, connector = at the connector); it only picks the
+// initial alignment for a new (right-pointing) net label.
+static const QString NetLabelStyleOutside("outside");
+static const QString NetLabelStyleConnector("connector");
+
+// Cached default net label style, read lazily from QSettings (the "schemNetLabelStyle"
+// key, set in the Schematic preferences tab). makeSvg/effectiveAlign run on every render,
+// so we avoid constructing a QSettings object each time.
+static QString NetLabelDefaultStyle;
+static bool NetLabelDefaultStyleLoaded = false;
+
+// Leading and trailing whitespace in a net label is purely cosmetic (it is used to
+// align the box sizes of several net labels), so it must be ignored when grouping
+// net labels into sub-nets. Inner whitespace is kept significant.
+static QString netLabelKey(const QString & label) {
+	return label.trimmed();
+}
 
 /////////////////////////////////////////////////////
 
@@ -144,9 +175,9 @@ void SymbolPaletteItem::removeMeFromBus(double v) {
 	Q_FOREACH (ConnectorItem * connectorItem, cachedConnectorItems()) {
 		if (m_isNetLabel) {
 			if (m_voltageReference) {
-				LocalNetLabels.remove(getLabel(), connectorItem);
+				LocalNetLabels.remove(netLabelKey(getLabel()), connectorItem);
 			} else {
-				LocalNetLabels.remove(m_label, connectorItem);
+				LocalNetLabels.remove(netLabelKey(m_label), connectorItem);
 			}
 		}
 		else {
@@ -196,7 +227,7 @@ ConnectorItem* SymbolPaletteItem::newConnectorItem(Connector *connector)
 	}
 
 	if (m_isNetLabel) {
-		LocalNetLabels.insert(getLabel(), connectorItem);
+		LocalNetLabels.insert(netLabelKey(getLabel()), connectorItem);
 	}
 	else if (connectorItem->isGrounded()) {
 		LocalGrounds.append(connectorItem);
@@ -221,7 +252,7 @@ bool SymbolPaletteItem::busConnectorItems(ConnectorItem * fromConnectorItem, QLi
 
 	QList< QPointer<ConnectorItem> > mitems;
 	if (m_isNetLabel) {
-		mitems.append(LocalNetLabels.values(getLabel()));
+		mitems.append(LocalNetLabels.values(netLabelKey(getLabel())));
 	}
 	else if (bus->id().compare("groundbus", Qt::CaseInsensitive) == 0) {
 		mitems.append(LocalGrounds);
@@ -253,6 +284,10 @@ void SymbolPaletteItem::setProp(const QString & prop, const QString & value) {
 		setLabel(value);
 		return;
 	}
+	if (prop.compare("style", Qt::CaseInsensitive) == 0 && m_isNetLabel) {
+		setStyle(value);
+		return;
+	}
 
 	PaletteItem::setProp(prop, value);
 }
@@ -264,10 +299,95 @@ void SymbolPaletteItem::setLabel(const QString & label) {
 
 	//Add the conectors of the item to the new net label
 	Q_FOREACH (ConnectorItem * connectorItem, cachedConnectorItems()) {
-		LocalNetLabels.insert(label, connectorItem);
+		LocalNetLabels.insert(netLabelKey(label), connectorItem);
 	}
 
 	QTransform  transform = untransform();
+
+	QString svg = makeSvg(this->viewLayerID());
+	resetRenderer(svg);
+	resetLayerKin();
+	resetConnectors(nullptr, nullptr);
+
+	retransform(transform);
+}
+
+QString SymbolPaletteItem::defaultNetLabelStyle() {
+	if (!NetLabelDefaultStyleLoaded) {
+		QSettings settings;
+		QString value = settings.value("schemNetLabelStyle", NetLabelStyleOutside).toString();
+		// Legacy is only ever the initial state of old parts, never a configurable default.
+		NetLabelDefaultStyle = (value == NetLabelStyleConnector) ? NetLabelStyleConnector : NetLabelStyleOutside;
+		NetLabelDefaultStyleLoaded = true;
+	}
+	return NetLabelDefaultStyle;
+}
+
+void SymbolPaletteItem::refreshDefaultNetLabelStyle() {
+	NetLabelDefaultStyleLoaded = false;
+}
+
+QString SymbolPaletteItem::effectiveAlign() {
+	// Old (v4 and earlier) net labels render in the legacy Droid Sans style. Switching a
+	// label between legacy and the modern aligned styles is a part swap (v4 <-> v5), so the
+	// part version -- not a local prop -- is the source of truth for legacy-ness.
+	if (modelPart()->modelPartShared()->version().toInt() <= 4) {
+		return NetLabelStyleLegacy;
+	}
+	QString s = modelPart()->localProp("style").toString();
+	// Normalize the orientation-independent policy values to a concrete alignment. New
+	// net labels point right (connector on the right), so outside = left edge / connector
+	// = right edge. This also covers sketches saved with the earlier outside/connector
+	// values before storage switched to left/right.
+	if (s == NetLabelStyleOutside) return NetLabelAlignLeft;
+	if (s == NetLabelStyleConnector) return NetLabelAlignRight;
+	if (s == NetLabelAlignLeft || s == NetLabelAlignRight || s == NetLabelStyleLegacy) {
+		return s;
+	}
+	// Empty or unknown: fall back to the configured default policy.
+	return (defaultNetLabelStyle() == NetLabelStyleOutside) ? NetLabelAlignLeft : NetLabelAlignRight;
+}
+
+QString SymbolPaletteItem::alignForPolicy(const QString & policy, bool goLeft) {
+	// The connector is on the local-left edge when goLeft. "outside" puts the text on the
+	// non-connector edge, "connector" on the connector edge.
+	if (policy == NetLabelStyleConnector) {
+		return goLeft ? NetLabelAlignLeft : NetLabelAlignRight;
+	}
+	return goLeft ? NetLabelAlignRight : NetLabelAlignLeft;   // outside
+}
+
+QString SymbolPaletteItem::policyForAlign(const QString & align, bool goLeft) {
+	// Inverse of alignForPolicy: the text is at the connector when its edge matches the
+	// connector's (local-left when goLeft).
+	bool textLeft = (align == NetLabelAlignLeft);
+	return (textLeft == goLeft) ? NetLabelStyleConnector : NetLabelStyleOutside;
+}
+
+void SymbolPaletteItem::setStyle(const QString & style) {
+	m_modelPart->setLocalProp("style", style);
+
+	// Only the text alignment within the box changes (the connector/box geometry is
+	// identical across styles), but re-render via the same proven path as setLabel().
+	QTransform transform = untransform();
+
+	QString svg = makeSvg(this->viewLayerID());
+	resetRenderer(svg);
+	resetLayerKin();
+	resetConnectors(nullptr, nullptr);
+
+	retransform(transform);
+}
+
+void SymbolPaletteItem::refreshNetLabelStyleFromDefault() {
+	// Re-render a net label that follows the configurable default style (used when the
+	// default changes in the preferences). Labels with an explicit style, and legacy
+	// (v4) labels, are unaffected.
+	if (!m_isNetLabel) return;
+	if (modelPart()->modelPartShared()->version().toInt() <= 4) return;
+	if (!modelPart()->localProp("style").toString().isEmpty()) return;
+
+	QTransform transform = untransform();
 
 	QString svg = makeSvg(this->viewLayerID());
 	resetRenderer(svg);
@@ -349,6 +469,9 @@ QString SymbolPaletteItem::getProperty(const QString & key) {
 	if (key.compare("voltage", Qt::CaseInsensitive) == 0) {
 		return QString::number(m_voltage);
 	}
+	if (key.compare("style", Qt::CaseInsensitive) == 0 && m_isNetLabel) {
+		return effectiveAlign();
+	}
 
 	return PaletteItem::getProperty(key);
 }
@@ -429,18 +552,78 @@ bool SymbolPaletteItem::collectExtraInfo(QWidget * parent, const QString & famil
 		return true;
 	}
 
+	// When several net labels are selected, the inspector switches to a group mode: the
+	// per-label text field is hidden, and the alignment is expressed with the orientation-
+	// independent outside/connector policy applied to the whole selection.
+	bool groupMode = false;
+	QList<SymbolPaletteItem *> selectedNetLabels;
+	if (isOnlyNetLabel()) {
+		InfoGraphicsView * igv = InfoGraphicsView::getInfoGraphicsView(this);
+		if ((igv != nullptr) && igv->collectSelectedNetLabels(selectedNetLabels) > 1
+		        && selectedNetLabels.contains(this)) {
+			groupMode = true;
+		}
+	}
+
 	if (prop.compare("label", Qt::CaseInsensitive) == 0 && m_isNetLabel)
 	{
-		auto * edit = new QLineEdit(parent);
+		// The net label name is edited via the inspector's title field, so this duplicate
+		// property row is always hidden (single and group).
+		hide = true;
+		return true;
+	}
+
+	if (prop.compare("style", Qt::CaseInsensitive) == 0 && m_isNetLabel)
+	{
+		auto * edit = new FocusOutComboBox(parent);
 		edit->setEnabled(swappingEnabled);
-		edit->setText(getLabel());
-		edit->setObjectName("infoViewLineEdit");
+		edit->setObjectName("infoViewComboBox");
+		returnProp = tr("style");
 
-		connect(edit, SIGNAL(editingFinished()), this, SLOT(labelEntry()));
+		if (groupMode) {
+			// Orientation-independent policy applied to the whole selection.
+			edit->addItem(tr("Outside aligned"), NetLabelStyleOutside);
+			edit->addItem(tr("Connector aligned"), NetLabelStyleConnector);
+
+			QString common;
+			bool first = true, mixed = false;
+			Q_FOREACH (SymbolPaletteItem * netLabel, selectedNetLabels) {
+				QString a = netLabel->effectiveAlign();
+				if (a == NetLabelStyleLegacy) { mixed = true; break; }
+				QString p = policyForAlign(a, netLabel->getDirection() == "left");
+				if (first) { common = p; first = false; }
+				else if (p != common) { mixed = true; break; }
+			}
+			edit->setCurrentIndex(mixed ? -1 : edit->findData(common));
+
+			connect(edit, SIGNAL(currentIndexChanged(int)), this, SLOT(groupStyleEntry(int)));
+			returnWidget = edit;
+			returnValue = mixed ? QString() : common;
+			return true;
+		}
+
+		// Single item: show the ACTUAL on-screen text alignment with standard left/right
+		// align icons (+ legacy). The stored value is in the label's local frame, so the
+		// actual side differs from it whenever the transform mirrors the x-axis (horizontal
+		// flip OR 180° rotation, i.e. m11 < 0).
+		QString align = effectiveAlign();
+		edit->addItem(QIcon(":/resources/images/icons/align_left.svg"), tr("Left aligned"), NetLabelAlignLeft);
+		edit->addItem(QIcon(":/resources/images/icons/align_right.svg"), tr("Right aligned"), NetLabelAlignRight);
+		edit->addItem(tr("Legacy"), NetLabelStyleLegacy);
+
+		QString shown = align;
+		if (align != NetLabelStyleLegacy) {
+			bool reversed = (this->transform().m11() < -0.5);   // m11 ≈ -1: horizontal flip or 180°
+			bool actualLeft = (align == NetLabelAlignLeft) != reversed;   // XOR
+			shown = actualLeft ? NetLabelAlignLeft : NetLabelAlignRight;
+		}
+
+		int ix = edit->findData(shown);
+		edit->setCurrentIndex(ix >= 0 ? ix : 0);
+
+		connect(edit, SIGNAL(currentIndexChanged(int)), this, SLOT(styleEntry(int)));
 		returnWidget = edit;
-
-		returnValue = getLabel();
-		returnProp = tr("label");
+		returnValue = shown;
 		return true;
 	}
 
@@ -466,7 +649,7 @@ void SymbolPaletteItem::labelEntry() {
 	if (edit->text().compare(current) == 0) return;
 
 	if (edit->text().isEmpty()) {
-		QMessageBox::warning(nullptr, tr("Net labels"), tr("Net labels cannot be blank"));
+		QMessageBox::warning(nullptr, tr("Net labels", "dialog title"), tr("Net labels cannot be blank"));
 		return;
 	}
 
@@ -474,6 +657,69 @@ void SymbolPaletteItem::labelEntry() {
 	if (infoGraphicsView != nullptr) {
 		infoGraphicsView->setProp(this, "label", ItemBase::TranslatedPropertyNames.value("label"), current, edit->text(), true);
 	}
+}
+
+void SymbolPaletteItem::styleEntry(int index) {
+	auto * comboBox = qobject_cast<QComboBox *>(sender());
+	if (comboBox == nullptr) return;
+	// Single-item combo values: NetLabelAlignLeft / NetLabelAlignRight / NetLabelStyleLegacy.
+	requestNetLabelStyle(comboBox->itemData(index).toString());
+}
+
+void SymbolPaletteItem::groupStyleEntry(int index) {
+	auto * comboBox = qobject_cast<QComboBox *>(sender());
+	if (comboBox == nullptr) return;
+	// Group combo values: NetLabelStyleOutside / NetLabelStyleConnector.
+	requestNetLabelStyle(comboBox->itemData(index).toString());
+}
+
+void SymbolPaletteItem::requestNetLabelStyle(const QString & picked) {
+	if (picked.isEmpty()) return;
+
+	// Every net-label style change routes through the swap machinery. Crossing the legacy
+	// boundary swaps the part (v4 <-> v5); staying within the modern styles only changes the
+	// alignment. MainWindow::swapSelectedMap dispatches "net label"/"style" to
+	// swapNetLabelStyleForSelection, which applies the choice to every selected net label in
+	// one undo (resolving each item's target via resolveStyleSwap).
+	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(this);
+	if (infoGraphicsView == nullptr) return;
+	QMap<QString, QString> propsMap;
+	propsMap.insert("style", picked);
+	infoGraphicsView->swap(modelPart()->family(), "style", propsMap, this);
+}
+
+QString SymbolPaletteItem::resolveStyleSwap(ItemBase * item, const QString & picked, QString & newStyle) {
+	// Decide what a net label should become when `picked` is chosen in the Inspector. Returns
+	// the moduleID to swap to (empty => no swap, just apply newStyle to the item) and sets
+	// newStyle to the alignment local-prop for the result.
+	newStyle.clear();
+	if ((item == nullptr) || (item->modelPart() == nullptr) || (item->modelPart()->modelPartShared() == nullptr)) {
+		return QString();
+	}
+
+	bool isV4 = item->modelPart()->modelPartShared()->version().toInt() <= 4;
+
+	if (picked == NetLabelStyleLegacy) {
+		// Modern -> legacy: swap back to the v4 part (which renders legacy). Orientation is
+		// carried over by the swap (preserved transform + the transferred direction prop).
+		return isV4 ? QString() : ModuleIDNames::NetLabelModuleIDName;
+	}
+
+	// Modern target: resolve the concrete left/right alignment in the label's own frame.
+	if (picked == NetLabelStyleOutside || picked == NetLabelStyleConnector) {
+		// Group policy: depends on which way this label faces.
+		bool goLeft = (item->modelPart()->localProp("direction").toString() == "left");
+		newStyle = alignForPolicy(picked, goLeft);
+	}
+	else {
+		// Single item: `picked` is the actual on-screen side; translate to the local frame,
+		// accounting for an x-axis mirror (horizontal flip or 180° rotation, m11 < 0).
+		bool reversed = (item->transform().m11() < -0.5);
+		bool wantLeft = (picked == NetLabelAlignLeft);
+		newStyle = (wantLeft != reversed) ? NetLabelAlignLeft : NetLabelAlignRight;
+	}
+	// Legacy (v4) -> modern is a swap to v5; an existing v5 just changes its alignment.
+	return isV4 ? ModuleIDNames::V5NetLabelModuleIDName : QString();
 }
 
 ItemBase::PluralType SymbolPaletteItem::isPlural() {
@@ -500,6 +746,12 @@ bool SymbolPaletteItem::hasPartLabel() {
 
 bool SymbolPaletteItem::isOnlyNetLabel() {
 	return false;
+}
+
+bool SymbolPaletteItem::inspectorRefreshOnTransform() {
+	// A net label's inspector shows its actual on-screen text alignment, which depends on
+	// the flip/rotation, so the inspector must rebuild when the transform changes.
+	return m_isNetLabel;
 }
 
 QString SymbolPaletteItem::getLabel() {
@@ -571,7 +823,8 @@ QString NetLabel::getVersion()
 
 QString NetLabel::makeSvg(ViewLayer::ViewLayerID viewLayerID)
 {
-	bool useOldVersion = this->getVersion().toInt() <= 4;  // v4 is used in Fritzing 1.0.4 and earlier
+	QString align = effectiveAlign();
+	bool useOldVersion = (align == "legacy");  // "legacy" == old Droid Sans rendering (v4 and earlier)
 	double divisor = moduleID().contains(PartFactory::OldSchematicPrefix) ? 1 : 3;  // Fritzing before ~0.7.0
 
 	double labelFontSize = 200 / divisor;
@@ -582,9 +835,13 @@ QString NetLabel::makeSvg(ViewLayer::ViewLayerID viewLayerID)
 	double labelBaseLine = (useOldVersion ? 220 : 228) / divisor;
 
 	QString fontName = useOldVersion ? "Droid Sans" : "Noto Sans";
+#ifdef Q_OS_MAC
+	QFont font(fontName, labelFontSize, QFont::Normal);
+#else
 	QFont font(useOldVersion ?
 				   QFont("Droid Sans", labelFontSize * 72 / GraphicsUtils::StandardFritzingDPI, QFont::Normal) :
 				   QFont("Noto Sans", labelFontSize, QFont::Normal));
+#endif
 	QFontMetricsF fm(font);
 
 #ifdef Q_OS_MAC
@@ -639,21 +896,32 @@ QString NetLabel::makeSvg(ViewLayer::ViewLayerID viewLayerID)
 
 	if (viewLayerID == ViewLayer::SchematicText) {
 		double xPosition;
+		QString textAnchor = "start";
 		if (useOldVersion) {
 			double labelOffset = 20 / divisor;
 			xPosition = labelOffset + offset;
 		} else {
+			// The text hugs the left or right edge of the box per the stored alignment.
+			// The arrow/connector occupies arrowWidth on the left when goLeft, otherwise on
+			// the right; the rest of the box (minus the two labelPaddings) is the text band,
+			// and the 50-unit width-rounding slack falls on whichever side the text does not
+			// hug. Flipping the label mirrors this on screen.
 			double labelPadding = 50 / divisor;
-			xPosition = labelPadding + offset;
+			double bandLeft = labelPadding + (goLeft ? arrowWidth : 0);
+			double bandRight = totalWidth - labelPadding - (goLeft ? 0 : arrowWidth);
+			bool startAtLeft = (align == "left");
+			xPosition = startAtLeft ? bandLeft : bandRight;
+			textAnchor = startAtLeft ? "start" : "end";
 		}
 
 		svg += QString("<text id='label' x='%1' y='%2' fill='#000000' font-family='%5' font-weight='400' "
-					   "font-size='%3'>%4</text>\n")
+					   "text-anchor='%6' font-size='%3'>%4</text>\n")
 				   .arg(xPosition)
 				   .arg(labelBaseLine)
 				   .arg(labelFontSize)
 				   .arg(getLabel(),
-						fontName);
+						fontName)
+				   .arg(textAnchor);
 	} else {
 		QString pin = QString("<rect id='connector0pin' x='%1' y='%2' width='%3' height='%4' "
 							  "fill='none' stroke='none' stroke-width='0' />\n");
@@ -695,6 +963,81 @@ QString NetLabel::makeSvg(ViewLayer::ViewLayerID viewLayerID)
 	}
 
 	return svg;
+}
+
+QPixmap NetLabel::stylePreviewPixmap(const QString & policy, bool goLeft, const QSize & size)
+{
+	// A faithful miniature of a net label (arrow + a short sample label) rendered for the
+	// given settings policy and orientation. Mirrors the non-legacy geometry of makeSvg,
+	// but combines the arrow and text into one SVG so the whole symbol shows in one image.
+	const double divisor = 3;
+	const double labelFontSize = 200 / divisor;
+	const double totalHeight = 300 / divisor;
+	const double arrowWidth = totalHeight / 2;
+	const double strokeWidth = 10 / divisor;
+	const double halfStrokeWidth = strokeWidth / 2;
+	const double labelBaseLine = 228 / divisor;
+	const double labelPadding = 50 / divisor;
+
+	const QString sample("A1");
+
+#if defined(Q_OS_WIN)
+	const double TextWidthScalingFactor = 0.755;
+#else
+	const double TextWidthScalingFactor = 0.77;
+#endif
+	QFont font("Noto Sans", labelFontSize, QFont::Normal);
+	QFontMetricsF fm(font);
+	double textWidth = fm.horizontalAdvance(sample) * TextWidthScalingFactor;
+
+	double widthStep = 50;
+	double roundedWidth = ceil((textWidth - labelPadding) / widthStep) * widthStep;
+	double totalWidth = roundedWidth + arrowWidth + labelPadding * 2;
+
+	QString points = QString("%1,%2 %3,%4 %5,%4 %5,%6 %3,%6");
+	if (goLeft) {
+		points = points.arg(halfStrokeWidth).arg(totalHeight / 2).arg(arrowWidth)
+		             .arg(halfStrokeWidth).arg(totalWidth - halfStrokeWidth).arg(totalHeight - halfStrokeWidth);
+	} else {
+		points = points.arg(totalWidth - halfStrokeWidth).arg(totalHeight / 2).arg(totalWidth - arrowWidth)
+		             .arg(halfStrokeWidth).arg(halfStrokeWidth).arg(totalHeight - halfStrokeWidth);
+	}
+
+	// "outside" = text away from the connector; "connector" = text at the connector. The
+	// connector sits on the left when goLeft, otherwise on the right.
+	bool outside = (policy == NetLabelStyleOutside);
+	bool hugLeft = goLeft ? !outside : outside;
+	double bandLeft = labelPadding + (goLeft ? arrowWidth : 0);
+	double bandRight = totalWidth - labelPadding - (goLeft ? 0 : arrowWidth);
+	double xPosition = hugLeft ? bandLeft : bandRight;
+	QString anchor = hugLeft ? "start" : "end";
+
+	QString svg = QString(
+	        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 %1 %2' >\n"
+	        "<polygon fill='white' stroke='#000000' stroke-width='%3' points='%4' />\n"
+	        "<text x='%5' y='%6' fill='#000000' font-family='Noto Sans' font-weight='400' "
+	        "text-anchor='%7' font-size='%8'>%9</text>\n"
+	        "</svg>\n")
+	        .arg(totalWidth).arg(totalHeight).arg(strokeWidth).arg(points)
+	        .arg(xPosition).arg(labelBaseLine).arg(anchor).arg(labelFontSize).arg(sample);
+
+	QPixmap pixmap(size);
+	pixmap.fill(Qt::transparent);
+	QSvgRenderer renderer(svg.toUtf8());
+	QPainter painter(&pixmap);
+	painter.setRenderHint(QPainter::Antialiasing, true);
+	// Fit while preserving aspect ratio, centered.
+	QSizeF def = renderer.defaultSize();
+	double newW = size.width();
+	double newH = (def.width() > 0) ? newW * def.height() / def.width() : size.height();
+	if (newH > size.height()) {
+		newH = size.height();
+		newW = (def.height() > 0) ? newH * def.width() / def.height() : size.width();
+	}
+	QRectF bounds((size.width() - newW) / 2.0, (size.height() - newH) / 2.0, newW, newH);
+	renderer.render(&painter, bounds);
+	painter.end();
+	return pixmap;
 }
 
 void NetLabel::addedToScene(bool temporary)

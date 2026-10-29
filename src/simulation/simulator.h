@@ -25,6 +25,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../items/itembase.h"
 #include "../simulation/ngspice_simulator.h"
 #include <QElapsedTimer>
+#include <QPointer>
 
 enum TransistorLeg { BASE, COLLECTOR, EMITER };
 
@@ -51,6 +52,7 @@ public slots:
 	void stopSimulation();
 	void startSimulation();
 	void showSimulationResults();
+	std::vector<double> voltageVector(ConnectorItem *);
 
 
 signals:
@@ -58,7 +60,7 @@ signals:
 	void simulationEnabled(bool enabled);
 
 protected:
-	void updateParts(QSet<ItemBase *>, int);
+	void updateParts(QList<QPointer<ItemBase>>, int);
 	void drawSmoke(ItemBase* part);
 	void updateMultimeterScreen(ItemBase *, QString);
 	void updateLabPowerSupplyScreen(ItemBase *, double, double);
@@ -74,7 +76,6 @@ protected:
 	QString getSymbol(ItemBase*, QString);
 	double getVectorValueOrDefault(unsigned long timeStep, const std::string & vecName,  double defaultValue);
 	double calculateVoltage(unsigned long, ConnectorItem *, ConnectorItem *);
-	std::vector<double> voltageVector(ConnectorItem *);
 	QString generateSvgPath(std::vector<double>, std::vector<double>, int, QString, double, double, double, double, double, double, double, double, QString, QString);
 	double getCurrent(unsigned long, ItemBase*, QString subpartName="");
 	double getTransistorCurrent(unsigned long timeStep, QString spicePartName, TransistorLeg leg);
@@ -97,13 +98,17 @@ protected:
 	std::shared_ptr<NgSpiceSimulator> m_simulator;
 	QPointer<class BreadboardSketchWidget> m_breadboardGraphicsView;
 	QPointer<class SchematicSketchWidget> m_schematicGraphicsView;
-	double m_simStartTime, m_simStepTime, m_simEndTime, m_simNumberOfSteps;
+	double m_simStartTime, m_simStepTime, m_simEndTime;
+	unsigned long m_interactionStep = 0, m_previousInteractionStep = 0, m_simNumberOfSteps;
+	QHash<QString, std::vector<double>> m_previousVoltages;
 
 	bool m_enabled = false;
 	bool m_transientSimulationEnabled = false;
+	bool m_transitorySimRunning = false;
+	unsigned long m_previousSimTime = 0;
 	bool m_debugSimResult = false;
 
-	QSet<ItemBase *> itemBases;
+	QList<QPointer<ItemBase>> m_itemBases;
 	QHash<ItemBase *, ItemBase *> m_sch2bbItemHash;
 	QHash<ConnectorItem *, int> m_connector2netHash;
 
@@ -112,6 +117,8 @@ protected:
 	double m_showResultsTimerInterval;
 	QElapsedTimer m_elapsedAnimationTimer;
 	QElapsedTimer m_elapsedSimTotalTimer;
+
+	QString m_spiceNetlist;
 
 	static constexpr int SimDelay = 200;
 	static constexpr double HarmfulNegativeVoltage = -0.5;

@@ -296,6 +296,11 @@ bool Pad::hasPartNumberProperty()
 	return false;
 }
 
+bool Pad::isBomItem()
+{
+	return false;
+}
+
 void Pad::setInitialSize() {
 	double w = m_modelPart->localProp("width").toDouble();
 	if (w == 0) {
@@ -309,6 +314,23 @@ void Pad::setInitialSize() {
 void Pad::resizeMMAux(double mmW, double mmH) {
 	ResizableBoard::resizeMMAux(mmW, mmH);
 	resetConnectors(nullptr, nullptr);
+}
+
+void Pad::resizePixels(double w, double h, const LayerHash & viewLayers) {
+	// The mouse-resize path (ResizableBoard::mouseMoveEvent) sizes from m_size,
+	// which for a Pad is the SVG canvas = copper + TheOffset. That margin is
+	// deliberate: it keeps the resize handles (ResizableBoard::findCorner) clear
+	// of the connector terminal, which fills the whole copper. But the canvas-
+	// sized value was then written back as the *copper* size (m_resizeStartSize is
+	// the canvas, not the logical size), so every gesture inflated the pad by
+	// TheOffset. Strip the margin here so the copper grows by exactly the dragged
+	// amount; makeLayerSvg re-adds it, leaving m_size (the canvas) consistent. The
+	// inspector path goes straight to resizeMMAux with logical mm and is unaffected.
+	ResizableBoard::resizePixels(qMax(w - sizeOffset(), 1.0), qMax(h - sizeOffset(), 1.0), viewLayers);
+}
+
+double Pad::sizeOffset() const {
+	return TheOffset;
 }
 
 void Pad::addedToScene(bool temporary)
@@ -342,7 +364,7 @@ ResizableBoard::Corner Pad::findCorner(QPointF scenePos, Qt::KeyboardModifiers m
 
 	if (modifiers & altOrMetaModifier()) {
 		// free rotate
-		setCursor(*CursorMaster::RotateCursor);
+		setCursor(*SvgCursorBuilder::RotateCursor);
 		return ResizableBoard::NO_CORNER;
 	}
 

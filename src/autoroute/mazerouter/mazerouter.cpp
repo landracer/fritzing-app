@@ -871,8 +871,6 @@ void MazeRouter::start()
 	m_sketchWidget->pushCommand(parentCommand, this);
 	m_sketchWidget->blockUI(false);
 	m_sketchWidget->repaint();
-	DebugDialog::debug("\n\n\nautorouting complete\n\n\n");
-
 }
 
 int MazeRouter::findPinsWithin(QList<ConnectorItem *> * net) {
@@ -959,10 +957,8 @@ bool MazeRouter::makeMasters(QString & message) {
 		auto * masterDoc = new QDomDocument();
 		m_masterDocs.insert(viewLayerPlacement, masterDoc);
 
-		QString errorStr;
-		int errorLine = 0;
-		int errorColumn = 0;
-		if (!masterDoc->setContent(master, &errorStr, &errorLine, &errorColumn)) {
+		QDomDocument::ParseResult parseResult = masterDoc->setContent(master);
+		if (!parseResult) {
 			message = tr("Unexpected SVG rendering failure--contact fritzing.org");
 			return false;
 		}
@@ -2248,8 +2244,6 @@ void MazeRouter::createTraces(NetList & netList, Score & bestScore, QUndoCommand
 		modelPart->setParent(nullptr);
 		delete modelPart;
 	}
-
-	DebugDialog::debug("create traces complete");
 }
 
 void MazeRouter::createTrace(Trace & trace, QList<GridPoint> & gridPoints, TraceThing & traceThing, ConnectionThing & connectionThing, Net * net)

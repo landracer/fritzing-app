@@ -135,7 +135,7 @@ DRCResultsDialog::DRCResultsDialog(const QString & message, const QStringList & 
 	m_displayImage = displayImage;
 	m_collidingThings = collidingThings;
 
-	this->setWindowTitle(tr("DRC Results"));
+	this->setWindowTitle(tr("DRC Results", "dialog title"));
 
 	auto * vLayout = new QVBoxLayout(this);
 
@@ -281,7 +281,7 @@ QStringList DRC::start(bool showOkMessage, double keepoutMils) {
 
 	if (showOkMessage) {
 		if (messages.count() == 0) {
-			QMessageBox::information(m_sketchWidget->window(), tr("Fritzing"), message);
+			QMessageBox::information(m_sketchWidget->window(), tr("Fritzing", "dialog title"), message);
 		}
 		else {
 			auto * dialog = new DRCResultsDialog(message, messages, collidingThings, m_displayItem, m_displayImage, m_sketchWidget, m_sketchWidget->window());
@@ -410,10 +410,8 @@ bool DRC::startAux(QString & message, QStringList & messages, QList<CollidingThi
 		auto * masterDoc = new QDomDocument();
 		m_masterDocs.insert(viewLayerPlacement, masterDoc);
 
-		QString errorStr;
-		int errorLine;
-		int errorColumn;
-		if (!masterDoc->setContent(master, &errorStr, &errorLine, &errorColumn)) {
+		QDomDocument::ParseResult parseResult = masterDoc->setContent(master);
+		if (!parseResult) {
 			message = tr("Unexpected SVG rendering failure--contact fritzing.org");
 			return false;
 		}
@@ -438,6 +436,9 @@ bool DRC::startAux(QString & message, QStringList & messages, QList<CollidingThi
 		QList<QPointF> atPixels;
 		if (pixelsCollide(m_plusImage, m_minusImage, m_displayImage, 0, 0, imgSize.width(), imgSize.height(), 1 /* 0x80ff0000 */, atPixels)) {
 			CollidingThing * collidingThing = findItemsAt(atPixels, m_board, viewLayerIDs, keepoutMils, dpi, true, nullptr);
+			//: %1 is the translated word for "top"/"bottom" (an adverb-like value).
+			//: Append it rather than building a compound word, e.g. "copper layer %1".
+			// TODO: split into two distinct source strings (top/bottom) so locales can use declined forms.
 			QString msg = tr("Too close to a border (%1 layer)")
 						  .arg(viewLayerPlacement == ViewLayer::NewTop ? ItemBase::TranslatedPropertyNames.value("top") : ItemBase::TranslatedPropertyNames.value("bottom"))
 						  ;
@@ -548,6 +549,9 @@ bool DRC::startAux(QString & message, QStringList & messages, QList<CollidingThi
 					CollidingThing * collidingThing = findItemsAt(atPixels, m_board, viewLayerIDs, keepoutMils, dpi, false, equ);
 					QStringList names = getNames(collidingThing);
 					QString name0 = names.at(0);
+					//: %1 = part name; %2 = translated word for "top"/"bottom" (adverb-like).
+					//: Append %2 rather than building a compound word, e.g. "copper layer %2".
+					// TODO: split into two distinct source strings (top/bottom) so locales can use declined forms.
 					QString msg = tr("%1 is overlapping (%2 layer)")
 								  .arg(name0)
 								  .arg(viewLayerPlacement == ViewLayer::NewTop ? ItemBase::TranslatedPropertyNames.value("top") : ItemBase::TranslatedPropertyNames.value("bottom"))
@@ -1074,11 +1078,13 @@ void DRC::checkCopperBoth(QStringList & messages, QList<CollidingThing *> & coll
 		file2.close();
 
 		QDomDocument doc;
-		QString errorStr;
-		auto errorLine = 0;
-		auto errorColumn = 0;
-		if (!doc.setContent(svg, &errorStr, &errorLine, &errorColumn)) {
-			DebugDialog::debug(QString("itembase svg xml failure %1 %2 %3 %4").arg(itemBase->id()).arg(errorStr).arg(errorLine).arg(errorColumn));
+		QDomDocument::ParseResult parseResult = doc.setContent(svg);
+		if (!parseResult) {
+			DebugDialog::debug(QString("itembase svg xml failure %1 %2 %3 %4")
+				.arg(itemBase->id())
+				.arg(parseResult.errorMessage)
+				.arg(parseResult.errorLine)
+				.arg(parseResult.errorColumn));
 			continue;
 		}
 
