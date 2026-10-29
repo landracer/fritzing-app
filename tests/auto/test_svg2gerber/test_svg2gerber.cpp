@@ -57,19 +57,22 @@ when the SVG viewBox is rescaled during gerber export.
 */
 BOOST_AUTO_TEST_CASE( normalize_image_element )
 {
+	// splitString() always resolves its target by id (there is no "whole document"
+	// branch like normalize()'s empty-id case), so give the <image> an id and pass
+	// that id -- exactly how production code calls splitString(svg, xmlName).
 	QString svg =
 		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
 		"<svg xmlns=\"http://www.w3.org/2000/svg\" "
 		"xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
 		"width=\"1in\" height=\"1in\" viewBox=\"0 0 100 100\">"
-		"<image x=\"10\" y=\"20\" width=\"80\" height=\"60\" "
+		"<image id=\"theImage\" x=\"10\" y=\"20\" width=\"80\" height=\"60\" "
 		"xlink:href=\"data:image/png;base64,"
 		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
 		"DUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\"/>"
 		"</svg>";
 
 	SvgFileSplitter splitter;
-	bool loadResult = splitter.splitString(svg, "");
+	bool loadResult = splitter.splitString(svg, "theImage");
 	BOOST_CHECK(loadResult);
 
 	double factor;
