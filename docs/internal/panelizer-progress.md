@@ -6,6 +6,38 @@
 
 ---
 
+
+## 2026-10-29 — Session 11 (Part Migration dialog: readability + "New" is now a real, terminal action)
+
+Two defects in the *Part Migration* dialog (the obsolete-part swap feature that came in with the
+upstream merge), both root-caised from source and fixed in `src/sketch/migrationhandler.cpp` only.
+Full feature reference: `docs/design/part-migration.md`.
+
+- **Style (grey-on-grey / black history box).** The app stylesheet (`fritzing.qss`) is applied
+  **per-MainWindow**, so it cascades by widget type/parent. The dialog's counter/title/reason labels are
+  direct `QDialog` children (match no rule) and the change-history label sits in a `QScrollArea`'s plain
+  `QWidget` viewport (matches nothing) → under a dark system palette they fell back to light-on-dark.
+  **Fix:** the dialog now sets its own scoped `setStyleSheet(...)` (object-name rules, parent-independent).
+  The dead `QPalette`/`notePalette` hack + `#include <QPalette>` were removed. `fritzing.qss` was left at
+  develop — the fix is localized. Proven with a standalone offscreen Qt probe (forced dark palette): all
+  labels resolve to `rgb(51,51,51)`, scroll bg `#ffffff`.
+- **Function (New "did nothing", file re-asked forever).** `onVersionChosen` set `info.decided = true`
+  then called only `updateDialogForCurrentMigration()` — it re-rendered the *same* panel and never
+  advanced/closed. For a single recommended part (keep-radio hidden → only **Close** visible) clicking
+  **New** looked inert and the file re-prompted every open. **Fix:** after recording the decision, call
+  **`processNextMigration()`** (advance to next undecided part, else close) — exactly how "Update all"
+  and the multi-part path already terminate. So choosing a radio is now a *terminal* action: it applies
+  the swap and closes. Confirmed by the user's own smoke test: click New → part swaps + dialog dismisses;
+  Close → prompts to save; saving persists it (recommended parts aren't silenceable by design — saving
+  the sketch is what stops the re-flag).
+
+Verification: app builds/links clean; all 10 auto suites green (8 boost "no errors", panelizer 6/0,
+gerberpreview 8/0). No automated test drives the dialog (manual + `-ftesting` probe only).
+
+Commit: this fix + its docs landed as the tip of `integrate-upstream-sweep` and merged into `develop`.
+
+---
+
 ## 2026-10-29 — Session 10 (Upstream sweep: integrate origin/develop)
 
 Goal was to close the ~304-commit lag against upstream `origin/develop` (which

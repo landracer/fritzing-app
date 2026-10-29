@@ -42,7 +42,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QTimer>
 #include <QGraphicsScene>
 #include <QFont>
-#include <QPalette>
 #include <QScrollArea>
 #include <QAction>
 #include <QUndoStack>
@@ -364,6 +363,21 @@ void MigrationHandler::createMigrationDialog()
 	m_dialog->setModal(false);
 	m_dialog->resize(500, 400);
 	m_dialog->setAttribute(Qt::WA_DeleteOnClose);
+	// Style this dialog explicitly rather than relying on the per-MainWindow app stylesheet to
+	// cascade in. The change-history label lives inside a QScrollArea's plain QWidget viewport, so
+	// it matched none of the generic label color rules and fell back to the system palette -- light
+	// text on a dark Base (grey-on-grey text, a black history box). These rules are object-name scoped
+	// to this dialog, so they override the inherited palette regardless of the current theme.
+	m_dialog->setStyleSheet(QStringLiteral(
+		"#partMigrationDialog { background-color:#d9d9d9; color:#333333; }"
+		"#partMigrationDialog QLabel { color:#333333; background:transparent; }"
+		"#partMigrationDialog QRadioButton { color:#333333; }"
+		"#partMigrationDialog QGroupBox { color:#333333; }"
+		"#partMigrationDialog QScrollArea { background:#ffffff; border:1px solid #b1b1b1; }"
+		"#partMigrationDialog QScrollArea > QWidget > QWidget { background:#ffffff; color:#333333; }"
+		"#migrationCounterLabel, #migrationTitleLabel, #migrationReasonLabel, #migrationHistoryLabel { color:#333333; }"
+		"#migrationKeepNote { color:#808080; }"));
+
 	// Closing by any means (ESC, window close, or completion) runs cleanup. m_dialog is a
 	// QPointer, so it auto-nulls when the dialog is deleted — no dangling reuse on the next open.
 	connect(m_dialog, &QDialog::finished, this, &MigrationHandler::onDialogClosed);
@@ -448,14 +462,13 @@ void MigrationHandler::createMigrationDialog()
 
 	// QRadioButton doesn't word-wrap, so the keep option's explanatory sentence lives in a separate
 	// wrapped, indented note beneath it (the radio carries the short "Keep … and don't ask again.").
+	// Its dimmed grey text color is styled by the app stylesheet (#migrationKeepNote), not a palette:
+	// a stylesheet `color` rule (QDialog QLabel) overrides QPalette, so styling here would be ignored.
 	m_keepNote = new QLabel(versionBox);
 	m_keepNote->setObjectName("migrationKeepNote");
 	m_keepNote->setWordWrap(true);
 	m_keepNote->setText(tr("The part can still be migrated via the Inspector later."));
 	m_keepNote->setContentsMargins(24, 0, 0, 0);
-	QPalette notePalette = m_keepNote->palette();
-	notePalette.setColor(QPalette::WindowText, notePalette.color(QPalette::Disabled, QPalette::WindowText));
-	m_keepNote->setPalette(notePalette);
 
 	versionLayout->addWidget(m_oldRadio);
 	versionLayout->addWidget(m_keepRadio);
@@ -726,7 +739,13 @@ void MigrationHandler::onVersionChosen(QAbstractButton* button)
 	info.decided = true;
 	m_applyingChange = false;
 
-	updateDialogForCurrentMigration();
+	// A version radio is a decision, not a live preview toggle: once the user picks one for this
+	// part, that part is done. Complete the migration by advancing to the next part the user hasn't
+	// decided yet, or — when this was the last one (the common single-part case) — close the dialog.
+	// Previously this only re-rendered the same panel, so a single recommended part (whose "keep /
+	// don't-ask" radio is hidden, leaving only Close as an obvious control) looked unchanged after a
+	// click — New "did nothing" and the file kept re-prompting on every open.
+	processNextMigration();
 }
 
 void MigrationHandler::swapToNew(MigrationInfo& info)
