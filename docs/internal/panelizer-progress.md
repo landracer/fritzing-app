@@ -6,6 +6,38 @@
 
 ---
 
+## 2026-10-29 — Session 10 (Upstream sweep: integrate origin/develop)
+
+Goal was to close the ~304-commit lag against upstream `origin/develop` (which
+already carries a mature parts-editor + part-migration + inspector line we want
+to build *on top of*, not rebuild) BEFORE starting new feature work. Strategy
+chosen: full merge, **ours-priority on every conflict** — ours wins by default,
+upstream kept only where it strictly complements/improves.
+
+- Branch `integrate-upstream-sweep`, merge commit `0fa8cd57` (+ test fix `a93e1149`).
+- 14 conflicted files, all resolved to our side (see merge message). Notably:
+  our WelcomeView landed (upstream's competing blog-feed WelcomeView NOT taken);
+  our gerber export chooser + thumbnail hooks kept; our single-parse loadAux.
+- **Retired `07a00c49`** (gate connector-error red-canvas behind a pref): upstream
+  `347bc9e4` replaced the whole red-screen mechanism with a per-part "routing" bug
+  icon (+ crash guard `0c5c7021`, + trailing-edge debounce `168b29c3`). Our patch
+  only muted a mechanism upstream deleted, so we adopted upstream's design and
+  removed our obsolete pref wiring (checkbox + mainwindow + fapplication handlers).
+- **env fix:** kept our nested `Clipper1/6.4.2` layout (this machine), not upstream's
+  dashed `Clipper1-6.4.2` path.
+- **test fix:** `test_svg2gerber::normalize_image_element` (inherited from upstream)
+  called `splitString(svg, "")` with no matching id and could never pass; gave the
+  `<image>` an id and passed it so it exercises the real rasterized-image path.
+
+Verification: app builds/links clean; all 10 auto suites green (8 boost "no errors",
+panelizer 6/0, gerberpreview 8/0). Next: reshape the now-integrated parts editor to
+the fork's own vision.
+
+---
+
+
+---
+
 ## 2026-10-28 — Session 9 (Welcome landing page: live board preview + open-into-reused-window)
 
 This whole arc (commits `fc30078c`..`9cc5ef19`) is the landing-page / preview
