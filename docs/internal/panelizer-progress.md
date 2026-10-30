@@ -7,6 +7,25 @@
 ---
 
 
+## 2026-10-30 — Session 17 (P2: node-edit model operation editPathAnchor, pure)
+
+Completed the *editing* half of P2 as a **pure model operation** (no widget yet). `PEElement::editPathAnchor
+(segmentIndex, anchor)` (`src/partseditor/pedocument.cpp`): if the element is a `<path>`, decode its `d`
+via `PEPath::fromD`, walk segments recomputing the running cursor, replace segment `segmentIndex`'s anchor
+(absolute → literal coords; relative → delta off the cursor at that point), and return the re-serialized
+`d`. `PEPath::fromSegments` added so the edited segment list can be re-serialized.
+
+- Still behavior-neutral for the live app: nothing calls it yet. It is the exact operation the live
+  per-node mouse grip will call; the `QUndoCommand` wrapper + `PEGraphicsItem` grip is the remaining P2 wiring.
+- Golden tests: absolute edit (anchor replaced in place), relative edit (delta encoded), non-path → empty.
+- Suite is now 11 tests, all green.
+
+**Verified:** full app `phoenix.pro` build + fresh clean aggregate build of all 12 suites green (see commit).
+Local commits only on `feature/vector-editor` (not pushed yet).
+
+Next: wire the live per-node grip (select path → grips from `anchors()`; drag → `editPathAnchor` → command).
+
+
 ## 2026-10-30 — Session 16 (P2: typed path model 'd' <-> segment list, round-trip stable)
 
 Landed the **data half** of P2 (node editing). `src/partseditor/pepath.{h,cpp}`:

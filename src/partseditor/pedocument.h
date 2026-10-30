@@ -66,6 +66,12 @@ struct PEElement {
     bool isConnectorTerminal() const;
     // "connectorNpin" -> the integer N; returns -1 if not a pin.
     int connectorIndex() const;
+
+    // P2 node editing (pure, no widget): if this element is a <path>, decode its 'd',
+    // replace the anchor of segment 'segmentIndex' with 'anchor' (in user units), and
+    // return the re-serialized 'd'. Returns an empty string if this element is not a
+    // path, the segment index is out of range, or parsing fails.
+    QString editPathAnchor(int segmentIndex, QPointF anchor) const;
 };
 
 // The typed view + round-trip contract. Owns nothing: it borrows the QDomDocument

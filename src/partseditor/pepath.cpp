@@ -123,6 +123,13 @@ PEPath PEPath::fromD(const QString & d) {
     return path;
 }
 
+PEPath PEPath::fromSegments(const QVector<PEPathSegment> & segments) {
+    PEPath path;
+    path.m_segments = segments;
+    path.m_ok = true;
+    return path;
+}
+
 QString PEPath::serialize() const {
     QString out;
     for (const PEPathSegment & s : m_segments) {

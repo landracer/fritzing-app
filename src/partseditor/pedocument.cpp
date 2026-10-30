@@ -23,6 +23,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QDomDocument>
 #include <cstring>   // strlen for the "connector" prefix length
 
+#include "pepath.h"
+
 // Map an SVG tag name to a modelled kind.
 static PEElementKind kindForTag(const QString & tag) {
     if (tag == QLatin1String("g"))        return PEElementKind::Group;
@@ -59,6 +61,35 @@ int PEElement::connectorIndex() const {
     bool ok = false;
     int n = rest.left(cut).toInt(&ok);
     return ok ? n : -1;
+}
+
+QString PEElement::editPathAnchor(int segmentIndex, QPointF anchor) const {
+    if (kind != PEElementKind::Path) return QString();
+    const QString d = element.attribute(QStringLiteral("d"));
+    if (d.isEmpty()) return QString();
+
+    PEPath path = PEPath::fromD(d);
+    if (!path.ok()) return QString();
+
+    // Rebuild the segment list, recomputing the running cursor so we know the absolute
+    // position that segment's anchor encodes, then encode 'anchor' in the same convention.
+    QVector<PEPathSegment> segs = path.segments();
+    if (segmentIndex < 0 || segmentIndex >= segs.count()) return QString();
+
+    QVector<PEPathSegment> out;
+    QPointF cursor(0, 0);
+    for (int i = 0; i < segs.count(); ++i) {
+        const PEPathSegment & s = segs.at(i);
+        PEPathSegment ns = s;
+        if (i == segmentIndex) {
+            if (s.relative) ns.args = { anchor.x() - cursor.x(), anchor.y() - cursor.y() };
+            else            ns.args = { anchor.x(), anchor.y() };
+        }
+        out.append(ns);
+        cursor = s.anchor(cursor);
+    }
+    PEPath edited = PEPath::fromSegments(out);
+    return edited.serialize();
 }
 
 void PEDocument::build(const QDomDocument & doc) {

@@ -64,6 +64,10 @@ public:
     // list. On parse failure returns a PEPath with ok() == false (segments empty).
     static PEPath fromD(const QString & d);
 
+    // Construct a (ok) PEPath directly from a segment list -- the editing path (the live
+    // editor edits segments, then re-serializes).
+    static PEPath fromSegments(const QVector<PEPathSegment> & segments);
+
     // Serialize the segment list back to a 'd' string. Stable: serializing a path decoded
     // from 'd' then re-decoding yields an equal segment list (the round-trip contract).
     QString serialize() const;

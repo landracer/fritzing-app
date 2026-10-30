@@ -230,4 +230,63 @@ BOOST_AUTO_TEST_CASE( path_invalid_is_not_ok )
     BOOST_CHECK_EQUAL(p.count(), 0);
 }
 
+// ---- P2 interactive: node-edit model op (edit an anchor -> new 'd') ----
+
+static QDomElement pathElement(QDomDocument & doc, const QString & d) {
+    QDomElement svg = doc.createElement("svg");
+    QDomElement path = doc.createElement("path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+    return path;
+}
+
+BOOST_AUTO_TEST_CASE( editPathAnchor_absolute_updates_anchor )
+{
+    QDomDocument doc;
+    QDomElement path = pathElement(doc, "M 1 2 L 3 4");
+    PEElement pe;
+    pe.kind = PEElementKind::Path;
+    pe.element = path;
+
+    // absolute path: editing segment 1's anchor replaces its literal coords.
+    QString d2 = pe.editPathAnchor(1, QPointF(10, 11));
+    BOOST_CHECK(d2.contains("10"));
+    BOOST_CHECK(d2.contains("11"));
+    // re-decoding the edited 'd' yields a path whose segment 1 anchor is (10,11).
+    PEPath re = PEPath::fromD(d2);
+    BOOST_REQUIRE(re.ok());
+    QVector<QPointF> a = re.anchors();
+    BOOST_CHECK(a.at(0) == QPointF(1, 2));
+    BOOST_CHECK(a.at(1) == QPointF(10, 11));
+}
+
+BOOST_AUTO_TEST_CASE( editPathAnchor_relative_encodes_delta )
+{
+    QDomDocument doc;
+    QDomElement path = pathElement(doc, "M 1 2 l 3 4");
+    PEElement pe;
+    pe.kind = PEElementKind::Path;
+    pe.element = path;
+
+    // segment 1 is relative 'l'; moving its absolute anchor to (20,22) must store the
+    // delta relative to the cursor after segment 0 (1,2): (19,20).
+    QString d2 = pe.editPathAnchor(1, QPointF(20, 22));
+    PEPath re = PEPath::fromD(d2);
+    BOOST_REQUIRE(re.ok());
+    QVector<QPointF> a = re.anchors();
+    BOOST_CHECK(a.at(1) == QPointF(20, 22));
+}
+
+BOOST_AUTO_TEST_CASE( editPathAnchor_non_path_returns_empty )
+{
+    QDomDocument doc;
+    QDomElement rect = doc.createElement("rect");
+    rect.setAttribute("x", "0");
+    PEElement pe;
+    pe.kind = PEElementKind::Rect;
+    pe.element = rect;
+    BOOST_CHECK(pe.editPathAnchor(0, QPointF(1, 1)).isEmpty());
+}
+
+
 
