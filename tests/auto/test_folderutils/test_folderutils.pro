@@ -21,11 +21,13 @@ include($$absolute_path(../../../pri/boostdetect.pri))
 
 QT += core
 
-HEADERS += $$files(*.h)
-SOURCES += $$files(*.cpp)
-
+# Note: list sources explicitly (no $$files() glob of this dir), matching test_gerber.pro and the
+# other suites: a relative self-glob mixed with absolute src/... entries can make qmake emit
+# duplicate/mis-keyed moc_<x>.o rules in the aggregate build. Explicit, single-sourced absolute
+# entries produce exactly one rule per source.
 INCLUDEPATH += $$absolute_path(../../../src)
 INCLUDEPATH += $$absolute_path(../../../src/utils)
 
-HEADERS += $$files(../../../src/utils/sanitizeforpath.h)
-SOURCES += $$files(../../../src/utils/sanitizeforpath.cpp)
+HEADERS += $$absolute_path(../../../src/utils/sanitizeforpath.h)
+SOURCES += $$absolute_path(test_folderutils.cpp)
+SOURCES += $$absolute_path(../../../src/utils/sanitizeforpath.cpp)

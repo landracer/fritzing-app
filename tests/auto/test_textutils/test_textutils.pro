@@ -26,16 +26,18 @@ equals(QT_MAJOR_VERSION, 6) {
 }
 #concurrent core gui network printsupport serialport sql svg widgets xml
 
-HEADERS += $$files(*.h)
-SOURCES += $$files(*.cpp)
-
+# Note: list sources explicitly (no $$files() glob of this dir). A relative $$files(*.h)
+# self-glob mixed with absolute src/... entries makes qmake emit duplicate/mis-keyed moc_<x>.o
+# rules (Q_OBJECT meta-object TU compiles empty in the aggregate build => "undefined reference to
+# main"). Explicit, single-sourced absolute entries (like test_gerber.pro) produce one rule each.
 INCLUDEPATH += $$absolute_path(../../../src)
 #INCLUDEPATH += $$top_srcdir
 
-HEADERS += $$files(../../../src/utils/textutils.h)
-HEADERS += $$files(../../../src/utils/textmetrics.h)
-SOURCES += $$files(../../../src/utils/textutils.cpp)
-SOURCES += $$files(../../../src/utils/textmetrics.cpp)
+HEADERS += $$absolute_path(../../../src/utils/textutils.h)
+HEADERS += $$absolute_path(../../../src/utils/textmetrics.h)
+SOURCES += $$absolute_path(test_textutils.cpp)
+SOURCES += $$absolute_path(../../../src/utils/textutils.cpp)
+SOURCES += $$absolute_path(../../../src/utils/textmetrics.cpp)
 INCLUDEPATH += $$absolute_path(../../../src/utils)
 # FLIBS += textutils
 

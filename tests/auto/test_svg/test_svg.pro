@@ -25,23 +25,30 @@ equals(QT_MAJOR_VERSION, 6) {
   QT += core5compat svgwidgets
 }
 
-HEADERS += $$files(*.h)
-SOURCES += $$files(*.cpp)
-
+# Note: list sources explicitly (no $$files() glob of this dir). Mixing a relative
+# $$files(*.h) self-glob with absolute src/... entries made qmake emit BOTH a relative- and an
+# absolute-path-keyed rule for each moc_<x>.o => the Q_OBJECT meta-object TU compiles to an empty
+# object in the aggregate build => "undefined reference to main". Explicit, single-sourced absolute
+# entries (matching tests/auto/test_gerber/test_gerber.pro) produce exactly one rule per source.
 INCLUDEPATH += $$absolute_path(../../../src)
 
-HEADERS += $$files(../../../src/svg/svgtext.h)
-HEADERS += $$files(../../../src/svg/svgpathlexer.h)
-HEADERS += $$files(../../../src/utils/textutils.h)
-HEADERS += $$files(../../../src/utils/textmetrics.h)
-HEADERS += $$files(../../../src/svg/svgpathgrammar_p.h)
-HEADERS += $$files(../../../src/svg/svgpathparser.h)
+HEADERS += $$absolute_path(../../../src/svg/svgtext.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathlexer.h)
+HEADERS += $$absolute_path(../../../src/utils/textutils.h)
+HEADERS += $$absolute_path(../../../src/utils/textmetrics.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathgrammar_p.h)
+HEADERS += $$absolute_path(../../../src/svg/svgpathparser.h)
 
-SOURCES += $$files(../../../src/svg/svgtext.cpp)
-SOURCES += $$files(../../../src/svg/svgpathlexer.cpp)
-SOURCES += $$files(../../../src/svg/svgpathparser.cpp)
-SOURCES += $$files(../../../src/svg/svgpathgrammar.cpp)
-SOURCES += $$files(../../../src/utils/textutils.cpp)
-SOURCES += $$files(../../../src/utils/textmetrics.cpp)
+SOURCES += $$absolute_path(test_mfinder.cpp)
+SOURCES += $$absolute_path(test_pathlexer_protected.cpp)
+SOURCES += $$absolute_path(test_pathlexer_public.cpp)
+SOURCES += $$absolute_path(test_pathparse.cpp)
+SOURCES += $$absolute_path(test_svgtext.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgtext.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathlexer.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathparser.cpp)
+SOURCES += $$absolute_path(../../../src/svg/svgpathgrammar.cpp)
+SOURCES += $$absolute_path(../../../src/utils/textutils.cpp)
+SOURCES += $$absolute_path(../../../src/utils/textmetrics.cpp)
 #INCLUDEPATH += $$top_srcdir
 # unix:QMAKE_POST_LINK = $$PWD/generated/test_svg

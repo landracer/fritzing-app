@@ -151,6 +151,7 @@ make -j"$(nproc)"
 ./test_project_properties/test_project_properties
 ./test_breadboard_routing_score/test_breadboard_routing_score
 ./test_breadboard_route_graph/test_breadboard_route_graph
+./test_folderutils/test_folderutils
 # QtTest suites (headless): print "Totals: N passed, 0 failed"
 ./test_panelizer/test_panelizer         -platform offscreen
 ./test_gerberpreview/test_gerberpreview -platform offscreen

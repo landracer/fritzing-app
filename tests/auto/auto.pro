@@ -1,4 +1,4 @@
 TEMPLATE = subdirs
 
-SUBDIRS = test_gerber test_svg test_textutils test_svg2gerber test_ngspice_simulator test_project_properties test_panelizer test_gerberpreview test_breadboard_routing_score test_breadboard_route_graph
+SUBDIRS = test_gerber test_svg test_textutils test_svg2gerber test_ngspice_simulator test_project_properties test_panelizer test_gerberpreview test_breadboard_routing_score test_breadboard_route_graph test_folderutils
 

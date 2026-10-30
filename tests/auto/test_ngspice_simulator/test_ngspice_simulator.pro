@@ -22,15 +22,17 @@ include($$absolute_path(../../../pri/spicedetect.pri))
 
 QT += core xml svg widgets
 
-HEADERS += $$files(*.h)
-SOURCES += $$files(*.cpp)
-
+# Note: list sources explicitly (no $$files() glob of this dir). A relative $$files(*.h)
+# self-glob mixed with absolute src/... entries makes qmake emit duplicate/mis-keyed moc_<x>.o
+# rules (Q_OBJECT meta-object TU compiles empty in the aggregate build => "undefined reference to
+# main"). Explicit, single-sourced absolute entries (like test_gerber.pro) produce one rule each.
 INCLUDEPATH += $$absolute_path(../../../src)
 
-HEADERS += $$files(../../../src/simulation/ngspice_simulator.h)
-HEADERS += $$files(../../../src/debugdialog.h)
+HEADERS += $$absolute_path(../../../src/simulation/ngspice_simulator.h)
+HEADERS += $$absolute_path(../../../src/debugdialog.h)
 
-SOURCES += $$files(../../../src/simulation/ngspice_simulator.cpp)
-SOURCES += $$files(../../../src/debugdialog.cpp)
+SOURCES += $$absolute_path(test_ngspice_simulator.cpp)
+SOURCES += $$absolute_path(../../../src/simulation/ngspice_simulator.cpp)
+SOURCES += $$absolute_path(../../../src/debugdialog.cpp)
 #INCLUDEPATH += $$top_srcdir
 # unix:QMAKE_POST_LINK = $$PWD/generated/test_svg

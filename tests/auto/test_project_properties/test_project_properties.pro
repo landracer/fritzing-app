@@ -21,14 +21,16 @@ include($$absolute_path(../../../pri/boostdetect.pri))
 
 QT += core xml svg
 
-HEADERS += $$files(*.h)
-SOURCES += $$files(*.cpp)
-
+# Note: list sources explicitly (no $$files() glob of this dir). A relative $$files(*.h)
+# self-glob mixed with absolute src/... entries makes qmake emit duplicate/mis-keyed moc_<x>.o
+# rules (Q_OBJECT meta-object TU compiles empty in the aggregate build => "undefined reference to
+# main"). Explicit, single-sourced absolute entries (like test_gerber.pro) produce one rule each.
 INCLUDEPATH += $$absolute_path(../../../src)
 
-HEADERS += $$files(../../../src/project_properties.h)
-HEADERS += $$files(../../../src/utils/misc.h)
+HEADERS += $$absolute_path(../../../src/project_properties.h)
+HEADERS += $$absolute_path(../../../src/utils/misc.h)
 
-SOURCES += $$files(../../../src/project_properties.cpp)
+SOURCES += $$absolute_path(test_project_properties.cpp)
+SOURCES += $$absolute_path(../../../src/project_properties.cpp)
 #INCLUDEPATH += $$top_srcdir
 # unix:QMAKE_POST_LINK = $$PWD/generated/test_svg

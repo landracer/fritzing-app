@@ -24,7 +24,9 @@ State-of-record at the time of writing:
   right, and recents housekeeping (Remove / Purge-all). Opening a file loads into the *current* blank
   window (second file → new window). Full arc + learnings: `docs/internal/panelizer-progress.md`,
   Session 9.
-- **Tests:** all 8 suites build and pass on Qt 6.11.2 (see §5).
+- **Tests:** all wired test suites build and pass on Qt 6.11.2 (see §5). `test_folderutils` was wired
+  into `auto.pro` and the Boost-suite `.pro` files were converted to all-explicit `$$absolute_path()`
+  source/headers (the path-keying hazard that made the aggregate `-j` build fail nondeterministically).
 
 ## 2. How the project is laid out
 
@@ -96,6 +98,7 @@ make -j"$(nproc)"
 ./test_project_properties/test_project_properties
 ./test_breadboard_routing_score/test_breadboard_routing_score
 ./test_breadboard_route_graph/test_breadboard_route_graph
+./test_folderutils/test_folderutils
 # QtTest suites (headless):
 ./test_panelizer/test_panelizer         -platform offscreen
 ./test_gerberpreview/test_gerberpreview -platform offscreen
@@ -108,7 +111,14 @@ make -j"$(nproc)"
   rewrite it to assert behavior, not a machine-specific golden.
 - **qmake path-keying hazard:** in test `.pro` files use explicit `$$absolute_path()` entries for ALL
   sources/headers. Mixing `$$files(*.h)` globs (which key rules differently) with absolute entries emits
-  *duplicate* moc object rules and breaks the link.
+  *duplicate* moc object rules and breaks the link. Concretely: a relative `$$files(*.h)` self-glob of a
+  suite dir *plus* absolute `$$absolute_path(../../../src/…/x.h)` entries for Q_OBJECT headers (e.g.
+  `debugdialog.h`) makes qmake emit both a relative- and an absolute-keyed rule for each `moc_<x>.o`, so
+  the meta-object TU compiles to an **empty** object only under the aggregate `-j` build — link then fails
+  with `undefined reference to main` / missing `TextUtils::*` / `vtable for SvgFileSplitter`. Each suite
+  passes in isolation, which hides it. **Fix (now applied to every suite):** drop the `$$files(*.h)`/
+  `$$files(*.cpp)` self-globs and list each source with a single `$$absolute_path()` entry (name the
+  suite's own `test_*.cpp`(s) explicitly). Verify with a fresh clean `-j` aggregate build, not isolation.
 
 ## 6. Domain knowledge: copper "ground fill" (mass fill) & the DRC
 

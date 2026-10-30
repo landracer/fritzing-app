@@ -7,6 +7,33 @@
 ---
 
 
+## 2026-10-29 — Session 12 (Wire `test_folderutils` + kill the qmake path-keying hazard)
+
+Goal: land the `test_folderutils` suite (the `sanitizeForPath()` unit tests that rode in on the upstream
+merge but were never added to `auto.pro`) without letting it destabilize the aggregate build.
+
+- **Root cause found (not a race).** Wiring `test_folderutils` forced a *fresh* aggregate qmake, which
+  surfaced a latent, **deterministic** failure: every Boost suite still using the *mixed* `.pro` pattern
+  (`HEADERS += $$files(*.h)` relative self-glob **plus** absolute `$$files(../../../src/…/x.h)` entries for
+  Q_OBJECT headers like `debugdialog.h`) made qmake emit **two** rules — one relative-keyed, one
+  absolute-keyed — for each `moc_<x>.o`. Under the aggregate `-j` build the meta-object TU compiled to a
+  **0-byte object**, so the link died with `undefined reference to main`, missing `TextUtils::*`, and
+  `vtable for SvgFileSplitter`. Each suite passed *in isolation*, which is what hid it (the prior green
+  run predated a clean-dir re-qmake). `test_gerber.pro` already documented and avoided this; the others did not.
+- **Fix.** Converted every still-buggy suite `.pro` to all-explicit `$$absolute_path()` source/header entries
+  (drop the `$$files(*.h)`/`$$files(*.cpp)` self-globs; name each suite's own `test_*.cpp` explicitly):
+  `test_svg`, `test_svg2gerber`, `test_textutils`, `test_project_properties`, `test_ngspice_simulator`, and
+  `test_folderutils` itself. Then added `test_folderutils` to `auto.pro` `SUBDIRS`.
+- **Verified** with two *independent* clean `qmake6 auto.pro && make -j$(nproc)` builds: both `make` exit 0,
+  **0 zero-byte `.o`**, and all 11 suites green — Boost suites "No errors detected", `test_panelizer`
+  6/0, `test_gerberpreview` 8/0. `test_folderutils` (15 cases) green.
+
+Lesson recorded in `AGENTS.md` §5: verify test wiring with a **fresh clean aggregate `-j` build**, never a
+warm/old build dir and never suite-by-suite isolation — those mask this exact hazard.
+
+---
+
+
 ## 2026-10-29 — Session 11 (Part Migration dialog: readability + "New" is now a real, terminal action)
 
 Two defects in the *Part Migration* dialog (the obsolete-part swap feature that came in with the
