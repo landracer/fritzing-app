@@ -47,8 +47,9 @@ Top-level:
   - `docs/panelizer.md` — user-facing panelizer guide.
   - `docs/design/panelizer-v2.md`, `docs/design/gerbview-port-reference.md` — design references.
   - `docs/design/part-migration.md` — the obsolete-part swap feature.
-  - `docs/design/vector-editor.md` — spec for turning the parts editor into a real in-app vector
-    editor (port of svgedit's `core/` model into the Qt `pe*` editor; phased P0–P5).
+  - `docs/design/vector-editor.md` — spec for turning the parts editor into a de-facto parts/symbol
+    design editor (library-at-hand + in-app vector editing + SVG round-trip; svgedit/Inkscape are
+    references; phased P0–P7).
   - `docs/internal/panelizer-progress.md` — newest-first working log for the panelizer/gerber effort.
   - `docs/internal/issue-triage-log.md` — newest-first log of upstream issues we investigated and **shot
     down** (closed as FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION), with root cause

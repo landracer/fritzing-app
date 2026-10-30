@@ -7,6 +7,29 @@
 ---
 
 
+## 2026-10-29 — Session 13.1 (Re-scope: parts editor as de-facto A-to-Z design tool)
+
+User re-scoped the effort. **Not** "port svgedit/Inkscape" — those are **reference implementations**.
+Goal: make the live parts editor a de-facto-standard **schematic + parts design** editor covering the
+full A-to-Z flow:
+
+1. **Start from existing** — open any library part as the base (already half-built: PE extends
+   MainWindow and spawns a `BinManager` with `resources/bins/pe.fzb` at `pemainwindow.cpp:500`;
+   `setInitialItem` at `:698` already loads an existing `ModelPart`; enhance to browse/search the
+   full embedded `parts/` library inside the editor).
+2. **Edit the graphics** — real in-app vector editing (the core new layer; see §B of the doc).
+3. **Import/export SVG** — export already exists (`exportSvg`/`exportNormalizedSVG`/`fritzing2eagle`);
+   arbitrary-SVG import + normalize is the open half.
+4. **Save as part / create from blank** — persistence already works; add the blank-part path.
+
+The doc (`docs/design/vector-editor.md`) was rewritten to this A-to-Z framing with phases P0–P7
+(P0 typed DOM model + round-trip golden; P1 real item model; P2 node editing; P3 primitives;
+P4 connector semantics; P5 library-at-hand; P6 SVG import; P7 units/history/sanitize). No code yet;
+still spec-only. Still `feature/vector-editor`.
+
+---
+
+
 ## 2026-10-29 — Session 13 (Parts editor assessment → vector-editor plan)
 
 Deep read of the **live** parts editor (`src/partseditor/pemainwindow.cpp` + `pe*` views; the old

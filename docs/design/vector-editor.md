@@ -1,14 +1,38 @@
-# Parts Editor → real vector editor (port of svgedit's model into the Qt PE)
+# Parts Editor → de-facto parts/symbol design editor (A-to-Z)
 
-> Design reference. Newest decisions at top. This is the spec for turning the live parts
-> editor from a **metadata editor with a static SVG preview + per-element terminal-point
-> handle** into a **real in-app vector editor** (freehand + path-node editing + primitives +
-> text + layers + undo), eliminating the dependency on external Inkscape / the parametric
-> `fritzing-schematic` plugin for authoring part graphics.
+> Design reference. Newest decisions at top.
+>
+> **Re-scoped (Session 13.1).** The goal is *not* to port svgedit/Inkscape. Inkscape (C++) and
+> svgedit are **reference implementations only**. We are turning the live parts editor into a
+> de-facto-standard editor purpose-built for **schematic + parts design**: the user's whole existing
+> part library is at hand as a base, graphics are fully editable in-app, and SVG round-trips in/out.
+> The graphics-editing layer is *one* feature of a coherent parts-creation tool, not the whole spec.
 
----
+## A. The A-to-Z flow the editor must serve
 
-## 0. What exists today (ground truth)
+1. **Start from existing.** Open any existing part (symbol/footprint) from the library as the base.
+   — *already half-built:* the live PE inherits the bin/palette system (`pemainwindow.cpp:500` spins
+   up `BinManager` with `resources/bins/pe.fzb`; `setInitialItem` at `:698` already loads an existing
+   `ModelPart` as the base). Enhancement: browse/search the full library *inside* the editor, not just
+   the default `pe.fzb`.
+2. **Edit the graphics.** Real in-app vector editing (select, transform, node editing, primitives,
+   text, layers) on the part's SVG. — *this is the core missing capability* (today it is metadata +
+   static preview + one terminal-point handle; see §C).
+3. **Import / export SVG.** Easy SVG in and out. Export already exists (`exportSvg`,
+   `exportNormalizedSVG`, Eagle out via `fritzing2eagle`); **import of arbitrary SVG + make-the-editor
+   read/normalize it** is the open half.
+4. **Save as a part / create from blank.** Persist to `.fzp`+`.svg` (already works); also support a
+   **blank** new part when nothing in the library matches.
+
+## B. The graphics-editing capability (the core new layer)
+
+The single biggest gap: real in-app vector editing of the part's SVG. This is *one* (central) feature
+of the editor, framed as the editing surface behind the A-to-Z flow — not a port of an engine. We
+build a Fritzing-shaped editing layer that operates on the part's `QDomDocument`, with Inkscape's
+node/selection behavior and svgedit's `core/` (pathData ⇄ segment list, grips, command-undo, sanitize)
+as behavioral references.
+
+## C. Ground truth (what exists today)
 
 - The **live** parts editor is the `pe*` family: `src/partseditor/pemainwindow.cpp` (+
   `pemetadataview`, `peconnectorsview`, `pesvgview`, `petoolview`, `pegraphicsitem`,
@@ -29,61 +53,56 @@
 Consequence: today, to author *any* new part graphic you must leave the app (real Inkscape) or
 bake a symbol with the parametric `fritzing-schematic` plugin. That is the gap this work closes.
 
-## 1. The bridge (invariants we keep)
+## D. Editing model (reference behavior → Qt)
+
+Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-line JS):
+
+| capability | Inkscape / svgedit reference | Qt PE target |
+|---|---|---|
+| node/path editing (anchors + bezier handles) | Inkscape node-select; svgedit `path.js` + `path-method.js` segment list | `PEPathItem` segment list (QPainterPath) + `PENodeItem` grips |
+| in-place attribute edit of selected element | svgedit `selected-elem.js` | `PEItem::setAttribute` + command |
+| primitive creation | svgedit `draw.js` modes | `PEToolView` mode router → create element |
+| transforms / coordinate math | `2geom`; svgedit `math.js` transformPoint/getMatrix | QGraphicsItem mapToScene/mapFromScene |
+| layers | svgedit `layer.js` | `PEDocument` `<g>` layer groups |
+| undo | svgedit `history.js` ChangeElementCommand | existing `pecommands` (QUndoCommand) |
+| units | svgedit `units.js` | `PEUtils::convertUnitsStr` (already in `pesvgview.cpp`) |
+| sanitize | svgedit `sanitize.js` | keep hand-edited/imported SVG Fritzing-valid |
+| connector semantics | svgedit `ext-connector` side/marker | id-convention preserved as node-edit special case |
+
+## E. Invariants we keep
 
 1. **`QDomDocument` stays the source of truth.** The new model is a *typed view* over the existing
-   DOM (`m_breadboardDocument`/`m_schematicDocument`/`m_pcbDocument`/`m_iconDocument`), not a
-   parallel DOM. Edits mutate the same DOM nodes the rest of the app already consumes.
-2. **Connector semantics are a layer on top of generic primitives.** A "connector" remains an SVG
-   node whose `id` is `connectorXpin` (+ optional `connectorXterminal`). The current
-   terminal-point handle (`pegraphicsitem.cpp`, wired at `pemainwindow.cpp:1499`) becomes *one
-   special case* of node editing rather than the whole editing model.
-3. **Every edit is a command.** Extend `pecommands.*` (`QUndoCommand`) — mirrors svgedit
-   `history.js` `ChangeElementCommand`. No silent DOM mutation outside a command.
-4. **Logic is golden-tested**, not smoke-tested (AGENTS.md §4): `svg → model → svg` byte-stable,
-   plus geometry goldens. Verified by a fresh clean aggregate `-j` build (Session 12 lesson).
+   DOM (`m_breadboardDocument`/`m_schematicDocument`/`m_pcbDocument`/`m_iconDocument`). Edits mutate
+   the same DOM the rest of the app consumes.
+2. **Connector semantics are a layer on top of generic primitives.** A "connector" is still an SVG
+   node `connectorXpin` (+ optional `connectorXterminal`); the current terminal-point handle
+   (`pegraphicsitem.cpp`, wired at `pemainwindow.cpp:1499`) becomes one case of node editing.
+3. **Every edit is a command** (extend `pecommands.*`); no silent DOM mutation outside a command.
+4. **Golden-tested** logic (AGENTS.md §4): `svg → model → svg` byte-stable + geometry goldens,
+   verified by a fresh clean aggregate `-j` build (Session 12 lesson).
 
+## F. Phased slices (each: feature branch → PR into develop → green)
 
-## 2. Source of the model we are porting (svgedit `core/`)
-
-svgedit is the reference; its core is ~19k LOC JS. The faithful mapping (not ported line-by-line,
-re-implemented in Qt with the same *behavior*):
-
-| svgedit (`packages/svgcanvas/core`) | Qt PE target | note |
-|---|---|---|
-| `path-method.js` `TYPE_TO_CMD` = M,L,C,Q,A,S,T,Z (+rel) | `PEPathItem` segment list (QPainterPath / segment structs) | node = anchor + bezier handles |
-| `path.js` grips, `math.js` `transformPoint`/`getMatrix` | `PENodeItem` grips + scene<->item transform | replaces rect-overlay hit-test |
-| `selected-elem.js` (in-place attr edit) | `PEItem::setAttribute` + command | the live edit path |
-| `draw.js` (modes: rect/ellipse/line/path/freehand/text) | `PEToolView` mode router → create element | new capability |
-| `layer.js` | `PEDocument` layer groups | `<g>` per layer |
-| `history.js` (command-based undo) | `pecommands` | already command-shaped |
-| `units.js` | `PEUtils::convertUnitsStr` (already used in `pesvgview.cpp`) | unit-aware inputs |
-| `sanitize.js` | port | keeps hand-edited SVG Fritzing-valid |
-| `ext-connector` (side/marker, `#connector_rules`) | connector semantics layer | id-convention preserved |
-
-## 3. Phased slices (each: feature branch → PR into develop → green)
-
-- **P0 — model + contract (inert).** Introduce `PEDocument`/`PENode`/`PEElement` as a typed view
-  over the DOM; golden `svg→model→svg` round-trip on the 4 view SVGs. No UI change; app behavior
-  identical. This is the foundation; it must land first and green.
-- **P1 — real item model.** `PEPathItem`/`PERectItem`/`PEEllipseItem`/`PELineItem`/`PETextItem`
-  as true `QGraphics*Item`s replacing the `QGraphicsRectItem` overlay; reuse existing marquee/hover.
-- **P2 — node editing.** Path `d` ⇄ segment list; select a path → show anchor/handle grips;
-  drag edits `d` via a command. (This is the slice that, alone, removes the Inkscape dependency.)
+- **P0 — typed DOM model + round-trip contract (inert).** `PEDocument`/`PENode`/`PEElement` as a
+  typed view over the DOM; golden `svg→model→svg` on the 4 view SVGs. No UI change. Foundation.
+- **P1 — real item model.** `PEPathItem`/`PERectItem`/`PEEllipseItem`/`PELineItem`/`PETextItem` as
+  true `QGraphics*Item`s replacing the rect overlay; reuse existing marquee/hover.
+- **P2 — node editing.** `d` ⇄ segment list; select a path → anchor/handle grips; drag edits `d`
+  via a command. (Removes the external-graphics-editor dependency.)
 - **P3 — primitive creation.** Tool-driven rect/line/ellipse/path/freehand/text creation.
-- **P4 — connector semantics.** Port `ext-connector`; `connectorXpin`/`terminal` authored in-app;
-  existing terminal-point handle becomes a node-edit special case.
-- **P5 — units + history + sanitize hardening.** Unit-aware numeric inputs; command coverage;
-  sanitizer guarantees the output stays valid.
+- **P4 — connector semantics.** `connectorXpin`/`terminal` authored in-app; terminal handle becomes
+  a node-edit special case.
+- **P5 — library-at-hand.** Replace the fixed `pe.fzb` with full browse/search of the embedded
+  `parts/` library inside the editor so "use an existing part as base" is first-class.
+- **P6 — SVG import.** Import arbitrary SVG, normalize/sanitize into the model; create-from-blank path.
+- **P7 — units + history + sanitize hardening.** Unit-aware numeric inputs; full command coverage.
 
-## 4. Open design decisions to resolve per slice
-- Freehand capture: polyline-of-segments vs. auto-smooth — match svgedit (it stores freehand as
-  `L`-segment path until edited).
-- Whether `FSvgRenderer`/`QSvgRenderer` static rendering stays the *preview*, with the live-edit
-  canvas switching to real `QGraphicsPathItem`s (it must, for node editing).
-- Gorn (`generic:origin`/namespace) handling: current save does `removeGorn(...)`; the model must
-  round-trip it faithfully.
+## G. Open design decisions
+- Freehand capture: polyline-of-segments vs auto-smooth (match svgedit: store as `L`-segments until edited).
+- Static `QSvgRenderer` stays the *preview*; the live-edit canvas must use real `QGraphicsPathItem`s.
+- Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
-## 5. Status
-- **Now:** P0 spec'd, code not started. Branch `feature/vector-editor` off `develop`.
-- Next landable PR: **P0 model + round-trip golden test** (inert), then P1, etc.
+## H. Status
+- **Now:** spec only (re-scoped to A-to-Z parts editor). Branch `feature/vector-editor` off `develop`.
+- Next landable code PR: **P0 typed model + round-trip golden test** (inert).
+

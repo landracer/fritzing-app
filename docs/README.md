@@ -9,7 +9,7 @@ point and onboarding contract.
 - **`../AGENTS.md`** — onboarding + working conventions (read first).
 - **`panelizer.md`** — user-facing guide to the panelizer feature.
 - **`design/`** — design-time references and specs (panelizer-v2, gerbview port reference, part-migration,
-  vector-editor — the plan to make the parts editor a real in-app vector editor).
+  vector-editor — the A-to-Z plan to make the parts editor a de-facto parts/symbol design editor).
 - **`internal/`** — newest-first internal logs (append a dated entry at the end of each working session;
   keep newest at the top). Two logs:
   - **`internal/panelizer-progress.md`** — feature-development work log (panelizer / Gerber preview).
