@@ -7,6 +7,29 @@
 ---
 
 
+## 2026-10-30 — Session 16 (P2: typed path model 'd' <-> segment list, round-trip stable)
+
+Landed the **data half** of P2 (node editing). `src/partseditor/pepath.{h,cpp}`:
+
+- `PEPath::fromD(d)` decodes an SVG path `d` into an ordered `QVector<PEPathSegment>` (command char +
+  relative flag + args), reusing the app's existing `SVGPathLexer`/`SVGPathParser` (byte-for-byte
+  consistent parsing with how Fritzing renders/gerbers a path). `serialize()` rebuilds `d`; `anchors()`
+  and `PEPathSegment::anchor/points` resolve each segment's anchor + control points to absolute user
+  units against the running cursor (H/V fill the missing axis).
+- **Deliberate divergence from `SvgFileSplitter::simpleParsePath`:** we do NOT append the synthetic
+  `FakeClosePathChar` ('x') — the typed model carries only real segments. The leading `M` normalization
+  matches the app. Round-trip (`fromD` → `serialize` → `fromD`) is asserted stable.
+- Pure data; no live grip yet. Golden tests: decode commands/args, relative-awareness, round-trip
+  stability, invalid → not-ok. Wired into `pri/partseditor.pri`; `test_pedocument.pro` now also compiles
+  the `svgpath*`/`textutils`/`textmetrics` chain it needs.
+
+**Verified:** (running full app + aggregate build at commit time — see below). Local commits only on
+`feature/vector-editor` (not pushed yet).
+
+Next: finish P2 — interactive node grip (select path → grips; drag edits the segment; commit via
+`QUndoCommand`), reusing the existing PE selection/undo plumbing.
+
+
 ## 2026-10-30 — Session 15 (P1: typed model becomes the live editor's source of element order/kind)
 
 Wired the typed model into the **live** parts editor (still behavior-identical). `PEMainWindow::initSvgTree`

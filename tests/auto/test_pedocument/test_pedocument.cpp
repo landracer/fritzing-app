@@ -21,6 +21,7 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 #include <QString>
 
 #include "pedocument.h"
+#include "pepath.h"
 
 // Parse an SVG string into a QDomDocument (namespace processing, like the live editor).
 static void parseDoc(const QString & svg, QDomDocument & doc) {
@@ -169,4 +170,64 @@ BOOST_AUTO_TEST_CASE( order_matches_live_traverse )
     // modeled (non-Unknown) in document order: g1, g1a, r1, l1, g2, c1
     BOOST_CHECK_EQUAL(modelledIds.count(), 6);
 }
+
+// ---- P2: typed path model ('d' <-> segment list round-trip) ----
+
+BOOST_AUTO_TEST_CASE( path_decodes_commands_and_args )
+{
+    PEPath p = PEPath::fromD("M 1 2 L 3 4 Z");
+    BOOST_REQUIRE(p.ok());
+    // M, L, Z -> 3 segments
+    BOOST_CHECK_EQUAL(p.count(), 3);
+    BOOST_CHECK(p.segments().at(0).command == QChar('M'));
+    BOOST_CHECK(!p.segments().at(0).relative);
+    BOOST_CHECK_EQUAL(p.segments().at(0).args.count(), 2);
+    BOOST_CHECK_EQUAL(p.segments().at(0).args.at(0), 1.0);
+    BOOST_CHECK_EQUAL(p.segments().at(0).args.at(1), 2.0);
+    BOOST_CHECK(p.segments().at(1).command == QChar('L'));
+    BOOST_CHECK(p.segments().at(2).command == QChar('Z'));
+    BOOST_CHECK_EQUAL(p.segments().at(2).args.count(), 0);
+}
+
+BOOST_AUTO_TEST_CASE( path_is_relative_aware )
+{
+    PEPath p = PEPath::fromD("m 1 2 l 3 4");
+    BOOST_REQUIRE(p.ok());
+    BOOST_CHECK(p.segments().at(0).relative);   // m
+    BOOST_CHECK(p.segments().at(1).relative);   // l
+    // anchors: cursor starts 0,0; absolute after absolute is just the literal; relative adds.
+    QVector<QPointF> a = p.anchors();
+    BOOST_CHECK_EQUAL(a.count(), 2);
+    // first (absolute m) => (1,2); second (relative l +3,+4 off cursor 1,2) => (4,6)
+    BOOST_CHECK(a.at(0) == QPointF(1, 2));
+    BOOST_CHECK(a.at(1) == QPointF(4, 6));
+}
+
+// The round-trip contract: decode 'd' -> segments -> serialize -> decode again == same
+// segment list. This is what makes node editing lossless: edit a segment, write back 'd'.
+BOOST_AUTO_TEST_CASE( path_round_trip_is_stable )
+{
+    const QString d = "M 0 0 L 10 10 C 12 12 14 14 16 16 Z";
+    PEPath p1 = PEPath::fromD(d);
+    BOOST_REQUIRE(p1.ok());
+    QString d2 = p1.serialize();
+    PEPath p2 = PEPath::fromD(d2);
+    BOOST_REQUIRE(p2.ok());
+
+    BOOST_REQUIRE_EQUAL(p1.count(), p2.count());
+    for (int i = 0; i < p1.count(); ++i) {
+        BOOST_CHECK(p1.segments().at(i).command == p2.segments().at(i).command);
+        BOOST_CHECK_EQUAL(p1.segments().at(i).relative, p2.segments().at(i).relative);
+        BOOST_CHECK(p1.segments().at(i).args == p2.segments().at(i).args);
+    }
+}
+
+BOOST_AUTO_TEST_CASE( path_invalid_is_not_ok )
+{
+    // Empty / unparseable path data => ok() false, no segments.
+    PEPath p = PEPath::fromD("");
+    BOOST_CHECK(!p.ok());
+    BOOST_CHECK_EQUAL(p.count(), 0);
+}
+
 

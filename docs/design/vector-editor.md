@@ -93,8 +93,12 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   drives overlay-item creation off `PEDocument` (behavior-identical refactor). The *editable*
   `PEPathItem`/`PERectItem`/… `QGraphics*Item`s that *replace* the rect overlay are P2's job; P1
   makes the typed model load-bearing (order + kind gate) without changing what's on screen.
-- **P2 — node editing.** `d` ⇄ segment list; select a path → anchor/handle grips; drag edits `d`
-  via a command. (Removes the external-graphics-editor dependency.)
+- **P2 — node editing. ✅ LANDED (Session 16, data half only).** `PEPath`/`PEPathSegment`
+  (`src/partseditor/pepath.{h,cpp}`): decode an SVG `d` → an ordered typed segment list (command
+  char + relative + args), reusing the existing `SVGPathLexer`/`SVGPathParser`; `serialize()` →
+  back to `d`; `anchors()`/`points()` resolve each segment's anchor/handle in absolute user units
+  against the running cursor. Round-trip (`fromD` → `serialize` → `fromD`) is stable. The live
+  *interactive* grip (select a path → drag a node, commit via a command) is the remaining P2 half.
 - **P3 — primitive creation.** Tool-driven rect/line/ellipse/path/freehand/text creation.
 - **P4 — connector semantics.** `connectorXpin`/`terminal` authored in-app; terminal handle becomes
   a node-edit special case.
@@ -109,13 +113,13 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P1 landed** (Session 15) — the live `initSvgTree` now drives `PEGraphicsItem` creation off
-  `PEDocument` (behavior-identical refactor: same depth-first/document-order, same `QGraphicsRectItem`
-  overlays via `makePegi`, same terminal-point wiring). The typed model is now load-bearing: element order
-  + kind gate (`kind != Unknown` == the old `else continue`) come from it. A golden test locks the order
-  invariant (`order_matches_live_traverse`). Behavior unchanged; P2 builds node editing on top.
-- Prior: **P0 landed** (Session 14) — typed view + byte-stable round-trip golden. Branch `feature/vector-editor`
-  (local commits, not yet pushed per maintainer choice).
-- Next landable code PR: **P2 node editing** (`d` ⇄ segment list; anchor/handle grips; drag edits `d` via a command).
+- **Now:** **P2 landed (data half)** (Session 16) — `PEPath` typed path model (`d` ⇄ segment list,
+  anchors/points, stable round-trip) as pure data; the interactive node-grip is the remaining half.
+- Prior: **P1 landed** (Session 15) — live `initSvgTree` drives overlay-item creation off `PEDocument`
+  (behavior-identical). **P0** (Session 14) — typed view + byte-stable round-trip golden. Branch
+  `feature/vector-editor` (local commits, not yet pushed per maintainer choice).
+- Next landable code PR: finish **P2** (interactive node grip: select a path → anchor/handle grips;
+  drag edits the segment; commit via a `QUndoCommand`), then P3 (primitive creation).
+
 
 
