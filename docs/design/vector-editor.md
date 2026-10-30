@@ -83,8 +83,12 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 
 ## F. Phased slices (each: feature branch → PR into develop → green)
 
-- **P0 — typed DOM model + round-trip contract (inert).** `PEDocument`/`PENode`/`PEElement` as a
-  typed view over the DOM; golden `svg→model→svg` on the 4 view SVGs. No UI change. Foundation.
+- **P0 — typed DOM model + round-trip contract (inert). ✅ LANDED (Session 14).** `PEDocument`/`PEElement`
+  (in `src/partseditor/pedocument.{h,cpp}`) as a typed view over the DOM (`build(doc)` walks depth-first,
+  document-order; root `<svg>` + each `<g>` are modelled nodes, matching live `initSvgTree`); `toXml()` is
+  pure `QDomDocument::toString()` so `build`/`toXml` is byte-stable. Golden `svg→model→svg` round-trip +
+  kind/id/class/connectorIndex extraction + unknown-not-dropped, in `tests/auto/test_pedocument` (Boost,
+  all-explicit `.pro`), wired into `pri/partseditor.pri` + `auto.pro`. No UI change. Foundation.
 - **P1 — real item model.** `PEPathItem`/`PERectItem`/`PEEllipseItem`/`PELineItem`/`PETextItem` as
   true `QGraphics*Item`s replacing the rect overlay; reuse existing marquee/hover.
 - **P2 — node editing.** `d` ⇄ segment list; select a path → anchor/handle grips; drag edits `d`
@@ -103,6 +107,7 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** spec only (re-scoped to A-to-Z parts editor). Branch `feature/vector-editor` off `develop`.
-- Next landable code PR: **P0 typed model + round-trip golden test** (inert).
+- **Now:** **P0 landed** (Session 14) — `PEDocument`/`PEElement` typed view + byte-stable round-trip golden,
+  inert (no live wiring). Branch `feature/vector-editor` (local commits, not yet pushed per maintainer choice).
+- Next landable code PR: **P1 real item model** (editable `QGraphics*Item`s; wire `PEDocument` into `PEMainWindow::setInitialItem`).
 

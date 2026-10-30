@@ -7,6 +7,29 @@
 ---
 
 
+## 2026-10-29 — Session 14 (P0: typed DOM model + byte-stable round-trip golden)
+
+Started **P0** (docs/design/vector-editor.md section F phase 1). Built the **inert** typed view over a
+part's `QDomDocument` — no live wiring, app behavior unchanged — plus the **round-trip contract** golden.
+
+- `src/partseditor/pedocument.{h,cpp}` — `PEElement` (kind/id/class + rect-only attribute-read bounds)
+  and `PEDocument.build(doc)` walking the DOM **depth-first, document order** — exactly matching the live
+  `initSvgTree` traversal (root `<svg>` and each `<g>` **are** modelled nodes, mirroring the empty-but-present
+  `svg`/`g` branches that fall through in `pemainwindow.cpp:1459-1471`). `toXml()` is a pure `QDomDocument::toString()`
+  so a build/toXml cycle is byte-stable. `findById`/`byKind`/`connectorPins`/`connectorIndex` queries.
+- `tests/auto/test_pedocument/test_pedocument.cpp` (Boost, all-explicit `$$absolute_path()` `.pro`) —
+  round-trip byte-stable golden, kind/id/class extraction (`connector7pin` → index 7, class `pin`), and
+  "unknown tag not dropped" (polygon survives; Unknown for root svg).
+- Wired into `pri/partseditor.pri` (active `pe*` block) and `tests/auto/auto.pro` SUBDIRS.
+
+**Verified:** fresh clean aggregate `-j20` build of all **12** suites, **12 pass / 0 fail**, **no 0-byte `.o`**
+(the all-explicit `.pro` convention held — no path-keying regression). Still on `feature/vector-editor`;
+local commits only (per user: wait on pushing until the feature coheres).
+
+Next (P1): promote `PEElement` into editable `QGraphicsItem`s and wire `PEDocument` into `PEMainWindow::setInitialItem`
+so the live editor drives off the typed model.
+
+
 ## 2026-10-29 — Session 13.1 (Re-scope: parts editor as de-facto A-to-Z design tool)
 
 User re-scoped the effort. **Not** "port svgedit/Inkscape" — those are **reference implementations**.
