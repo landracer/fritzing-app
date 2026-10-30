@@ -22,6 +22,7 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 
 #include "pedocument.h"
 #include "pepath.h"
+#include "peprimitive.h"
 
 // Parse an SVG string into a QDomDocument (namespace processing, like the live editor).
 static void parseDoc(const QString & svg, QDomDocument & doc) {
@@ -287,6 +288,84 @@ BOOST_AUTO_TEST_CASE( editPathAnchor_non_path_returns_empty )
     pe.element = rect;
     BOOST_CHECK(pe.editPathAnchor(0, QPointF(1, 1)).isEmpty());
 }
+
+// ---- P3: primitive creation (build DOM element -> PEDocument re-reads typed) ----
+
+BOOST_AUTO_TEST_CASE( primitive_create_rect_is_reread_typed )
+{
+    QDomDocument doc;
+    QDomElement svg = doc.createElement("svg");
+    doc.appendChild(svg);
+    // A rect primitive carries no path geometry in the convenience overload; use make for
+    // precise geometry then append, and confirm PEDocument reads it back typed.
+    QDomElement rect = PEPrimitive::make(doc, PEElementKind::Rect, "r1", "interior rect",
+                                          QRectF(5.23875, 0.15875, 27.6225, 12.3825),
+                                          QPointF(), QPointF(), QPointF(), 0.0, QPointF(), 0.0, 0.0,
+                                          QList<QPointF>(), QString(), QPointF(), QString());
+    BOOST_CHECK(rect.tagName().toStdString() == "rect");
+    BOOST_CHECK_EQUAL(rect.attribute("id").toStdString(), "r1");
+    svg.appendChild(rect);
+
+    PEDocument typed;
+    typed.build(doc);
+    PEElement readBack = typed.findById("r1");
+    BOOST_CHECK(readBack.kind == PEElementKind::Rect);
+    BOOST_CHECK(readBack.hasBounds);
+    BOOST_CHECK(readBack.bounds == QRectF(5.23875, 0.15875, 27.6225, 12.3825));
+    BOOST_CHECK_EQUAL(readBack.cssClass.toStdString(), "interior rect");
+}
+
+BOOST_AUTO_TEST_CASE( primitive_create_line_and_circle )
+{
+    QDomDocument doc;
+    QDomElement svg = doc.createElement("svg");
+    doc.appendChild(svg);
+    QDomElement line = PEPrimitive::make(doc, PEElementKind::Line, "l1", "pin",
+                                         QRectF(), QPointF(0, 0), QPointF(1, 1),
+                                         QPointF(), 0.0, QPointF(), 0.0, 0.0,
+                                         QList<QPointF>(), QString(), QPointF(), QString());
+    BOOST_CHECK(line.tagName().toStdString() == "line");
+    BOOST_CHECK_EQUAL(line.attribute("x1").toStdString(), "0");
+    svg.appendChild(line);
+    QDomElement circle = PEPrimitive::make(doc, PEElementKind::Circle, "c1", "other",
+                                           QRectF(), QPointF(), QPointF(), QPointF(1.397, 1.397), 1.27,
+                                           QPointF(), 0.0, 0.0, QList<QPointF>(), QString(), QPointF(), QString());
+    BOOST_CHECK_EQUAL(circle.attribute("r").toStdString(), "1.27");
+    svg.appendChild(circle);
+
+    PEDocument typed;
+    typed.build(doc);
+    BOOST_CHECK(typed.findById("l1").kind == PEElementKind::Line);
+    BOOST_CHECK(typed.findById("c1").kind == PEElementKind::Circle);
+}
+
+BOOST_AUTO_TEST_CASE( primitive_addTo_appends_and_roundtrips )
+{
+    QDomDocument doc;
+    QDomElement svg = doc.createElement("svg");
+    doc.appendChild(svg);
+    QDomElement rect = PEPrimitive::addTo(doc, svg, PEElementKind::Rect, "rect9", "", QRectF(1, 2, 3, 4));
+    BOOST_CHECK(rect.tagName().toStdString() == "rect");
+    BOOST_CHECK_EQUAL(rect.attribute("fill").toStdString(), "none");
+
+    PEDocument typed;
+    typed.build(doc);
+    PEElement re = typed.findById("rect9");
+    BOOST_CHECK(re.kind == PEElementKind::Rect);
+    BOOST_CHECK(re.bounds == QRectF(1, 2, 3, 4));
+
+    // The created element still serializes back cleanly (round-trip on the new subtree).
+    BOOST_CHECK_EQUAL(typed.toXml().toStdString(), doc.toString().toStdString());
+}
+
+BOOST_AUTO_TEST_CASE( primitive_non_creatable_returns_null_element )
+{
+    QDomDocument doc;
+    QDomElement e = PEPrimitive::make(doc, PEElementKind::Group, "g", "", QRectF(), QPointF(), QPointF(),
+                                       QPointF(), 0.0, QPointF(), 0.0, 0.0, QList<QPointF>(), QString(), QPointF(), QString());
+    BOOST_CHECK(e.isNull());
+}
+
 
 
 

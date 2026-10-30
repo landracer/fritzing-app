@@ -7,6 +7,30 @@
 ---
 
 
+## 2026-10-30 — Session 18 (P3: typed primitive-creation builder PEPrimitive)
+
+Landed the **primitive-creation model op** (pure). The **live** parts editor has *no* element-creation
+path at all — the old editor's `addRectToSvg`/etc. are parked in `src/partseditor/obsolete/`. `PEPrimitive`
+(`src/partseditor/peprimitive.{h,cpp}`):
+
+- `make(doc, kind, id, cssClass, geometry…)` builds the Fritzing-convention DOM `<rect>`/`<line>`/
+  `<circle>`/`<ellipse>`/`<polyline>`/`<polygon>`/`<path>`/`<text>` element with the right attributes
+  (rect/line carry `fill='none'` like the old editor; path carries `d`; text a text node). Group/Unknown
+  are not creatable → null element.
+- `addTo(doc, parent, …)` appends the built element to `parent` in document order so `PEDocument.build`
+  reads it back typed (P0/P1 model stays the source of order/kind).
+- Golden tests: create rect/line/circle → re-read typed (kind + bounds); `addTo` appends + round-trips;
+  non-creatable kind → null. Suite now 15 tests, all green.
+
+Pure data; nothing in the live app calls it yet — the tool-driven creation wiring is a later layer.
+
+**Verified:** (full app + aggregate build at commit time — see commit). Local commits only on
+`feature/vector-editor` (not pushed yet).
+
+Next: the live layer wiring (path grips → `editPathAnchor`; create-tool → `PEPrimitive::addTo`) + undo
+command, then P4 (connector semantics: `connectorXpin`/`terminal` authored in-app).
+
+
 ## 2026-10-30 — Session 17 (P2: node-edit model operation editPathAnchor, pure)
 
 Completed the *editing* half of P2 as a **pure model operation** (no widget yet). `PEElement::editPathAnchor

@@ -48,6 +48,7 @@ HEADERS += \
     src/partseditor/pemetadataview.h \
     src/partseditor/pedocument.h \
     src/partseditor/pepath.h \
+    src/partseditor/peprimitive.h \
     src/partseditor/pehistoryentrydialog.h \
     src/partseditor/pecommands.h \
     src/partseditor/peconnectorsview.h \
@@ -87,6 +88,7 @@ SOURCES += \
     src/partseditor/pemetadataview.cpp \
     src/partseditor/pedocument.cpp \
     src/partseditor/pepath.cpp \
+    src/partseditor/peprimitive.cpp \
     src/partseditor/pehistoryentrydialog.cpp \
     src/partseditor/pecommands.cpp \
     src/partseditor/peconnectorsview.cpp \

@@ -102,7 +102,11 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   it decodes the element's `d`, replaces that segment's anchor (encoding the point back in the
   segment's own absolute/relative convention), and returns the new `d`. Still pure (no widget);
   the live `PEGraphicsItem` per-node mouse grip + `QUndoCommand` wrapper is the remaining wiring.
-- **P3 — primitive creation.** Tool-driven rect/line/ellipse/path/freehand/text creation.
+- **P3 — primitive creation. ✅ LANDED (Session 18, model op).** The live editor has *no* creation
+  path (old `addRectToSvg` etc. parked in obsolete/). `PEPrimitive::make(doc, kind, id, class, geom…)`
+  (`src/partseditor/peprimitive.{h,cpp}`) builds the Fritzing-convention DOM element per kind (rect/
+  line/circle/ellipse/polyline/polygon/path/text); `addTo` appends it so `PEDocument.build` reads it
+  back typed. Pure data; the live tool-driven creation wiring is later.
 - **P4 — connector semantics.** `connectorXpin`/`terminal` authored in-app; terminal handle becomes
   a node-edit special case.
 - **P5 — library-at-hand.** Replace the fixed `pe.fzb` with full browse/search of the embedded
@@ -116,15 +120,16 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P2 landed (model op)** (Sessions 16–17) — `PEPath` typed path model (`d` ⇄ segment
-  list, anchors/points, stable round-trip) + `PEElement::editPathAnchor` (the node-edit operation:
-  replace a segment's anchor → new `d`). Both pure data; the live `PEGraphicsItem` per-node mouse
-  grip + `QUndoCommand` wrapper is the remaining P2 wiring.
+- **Now:** **P3 landed (model op)** (Session 18) — `PEPrimitive` typed primitive-creation builder
+  (rect/line/circle/ellipse/polyline/polygon/path/text → DOM element, `addTo` appends in document
+  order). **P2** (Sessions 16–17) — typed path model + `editPathAnchor` node-edit op. All pure data.
 - Prior: **P1 landed** (Session 15) — live `initSvgTree` drives overlay-item creation off `PEDocument`
   (behavior-identical). **P0** (Session 14) — typed view + byte-stable round-trip golden. Branch
   `feature/vector-editor` (local commits, not yet pushed per maintainer choice).
-- Next landable code PR: wire the **live per-node grip** (select a path → grips from `anchors()`;
-  drag → `editPathAnchor` → `QUndoCommand` → `ChangeSvgCommand`-style DOM writeback), then P3.
+- Next landable code PR: wire the **live** layer (select a path → grips from `anchors()` → drag →
+  `editPathAnchor` → `QUndoCommand`; select/create a primitive → `PEPrimitive::addTo` → insert),
+  then P4 (connector semantics).
+
 
 
 
