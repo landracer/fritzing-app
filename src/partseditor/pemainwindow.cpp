@@ -153,6 +153,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "petoolview.h"
 #include "pesvgview.h"
 #include "pegraphicsitem.h"
+#include "pedocument.h"
 #include "kicadmoduledialog.h"
 #include "../debugdialog.h"
 #include "../sketch/breadboardsketchwidget.h"
@@ -1438,52 +1439,26 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 	FSvgRenderer renderer;
 	renderer.loadSvg(svgDocument.toByteArray(), "", false);
 
+	// P1: drive the per-element overlay items off the typed model. PEDocument walks the
+	// DOM depth-first / document-order (same order the previous manual traverse produced);
+	// each modelled (non-Unknown) element becomes one PEGraphicsItem, keyed by id, exactly
+	// as before. Behavior (item set, z-order, positions, signals) is unchanged.
+	PEDocument typed;
+	typed.build(svgDocument);
+
 	QHash<QString, PEGraphicsItem *> pegiHash;
 
-	QList<QDomElement> traverse;
-	traverse << svgDocument.documentElement();
-	while (traverse.count() > 0) {
-		QDomElement element = traverse.takeFirst();
+	const QList<PEElement> & elements = typed.elements();
+	for (const PEElement & pe : elements) {
+		// An unmodelled tag (the old 'else continue') produces no overlay item.
+		if (pe.kind == PEElementKind::Unknown) continue;
 
-		// depth first
-		QList<QDomElement> next;
-		QDomElement child = element.firstChildElement();
-		while (!child.isNull()) {
-			next << child;
-			child = child.nextSiblingElement();
-		}
-		while (next.count() > 0) {
-			traverse.push_front(next.takeLast());
-		}
-
-		QString tagName = element.tagName();
-		if      (tagName.compare("rect") == 0);
-		else if (tagName.compare("g") == 0) {
-		}
-		else if (tagName.compare("svg") == 0) {
-		}
-		else if (tagName.compare("circle") == 0);
-		else if (tagName.compare("ellipse") == 0);
-		else if (tagName.compare("path") == 0);
-		else if (tagName.compare("line") == 0);
-		else if (tagName.compare("polyline") == 0);
-		else if (tagName.compare("polygon") == 0);
-		else if (tagName.compare("text") == 0);
-		else continue;
-
+		QDomElement element = pe.element;
 		QRectF bounds = getPixelBounds(renderer, element);
 		// known Qt bug: boundsOnElement returns zero width and height for text elements.
 		if (bounds.width() > 0 && bounds.height() > 0) {
 			PEGraphicsItem * pegi = makePegi(bounds.size(), bounds.topLeft(), itemBase, element, z++);
 			pegiHash.insert(element.attribute("id"), pegi);
-
-			/*
-			QString string;
-			QTextStream stream(&string);
-			element.save(stream, 0);
-			DebugDialog::debug("........");
-			DebugDialog::debug(string);
-			*/
 		}
 	}
 

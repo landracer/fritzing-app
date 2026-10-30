@@ -115,3 +115,58 @@ BOOST_AUTO_TEST_CASE( unknown_tag_is_not_dropped )
     BOOST_CHECK(foundPolygon);
     BOOST_CHECK_EQUAL(pe.toXml().toStdString(), doc.toString().toStdString());
 }
+
+// P1 invariant: the live editor (initSvgTree) now drives PEGraphicsItem creation off
+// PEDocument. That refactor is only behavior-preserving if PEDocument yields exactly the
+// same element sequence (depth-first, document order) as the previous inline traverse. This
+// test locks that invariant against a nested tree with a mix of modeled and unmodeled tags.
+static QStringList manualTraverseOrder(const QDomElement & root) {
+    QStringList ids;
+    QList<QDomElement> traverse;
+    traverse << root;
+    while (!traverse.isEmpty()) {
+        QDomElement element = traverse.takeFirst();
+        ids << element.attribute("id");
+        QList<QDomElement> next;
+        QDomElement child = element.firstChildElement();
+        while (!child.isNull()) {
+            next << child;
+            child = child.nextSiblingElement();
+        }
+        while (!next.isEmpty()) {
+            traverse.push_front(next.takeLast());
+        }
+    }
+    return ids;
+}
+
+BOOST_AUTO_TEST_CASE( order_matches_live_traverse )
+{
+    // Nesting + mix of modeled/unmodeled tags so any ordering discrepancy is observable.
+    const QString svg =
+        R"(<svg xmlns='http://www.w3.org/2000/svg' id='r'><g id='g1'><g id='g1a'><rect id='r1' x='0' y='0' width='1' height='1'/></g>)"
+        R"(<line id='l1' x1='0' y1='0' x2='1' y2='1'/></g><g id='g2'><circle id='c1' cx='0' cy='0' r='1'/><title id='t1'>x</title></g></svg>)";
+    QDomDocument doc;
+    parseDoc(svg, doc);
+
+    PEDocument pe;
+    pe.build(doc);
+
+    QStringList modelledIds;
+    for (const PEElement & e : pe.elements()) {
+        if (e.kind == PEElementKind::Unknown) continue;   // the live 'else continue' gate
+        modelledIds << e.id;
+    }
+
+    // Manual walk: drop unmodeled (svg root + title) tags, keep the rest in order.
+    QStringList expected;
+    for (const QString & id : manualTraverseOrder(doc.documentElement())) {
+        if (id == QLatin1String("r") || id == QLatin1String("t1")) continue; // svg + title not modeled
+        expected << id;
+    }
+
+    BOOST_CHECK_EQUAL(modelledIds.join(",").toStdString(), expected.join(",").toStdString());
+    // modeled (non-Unknown) in document order: g1, g1a, r1, l1, g2, c1
+    BOOST_CHECK_EQUAL(modelledIds.count(), 6);
+}
+

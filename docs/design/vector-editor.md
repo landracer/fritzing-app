@@ -89,8 +89,10 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   pure `QDomDocument::toString()` so `build`/`toXml` is byte-stable. Golden `svg→model→svg` round-trip +
   kind/id/class/connectorIndex extraction + unknown-not-dropped, in `tests/auto/test_pedocument` (Boost,
   all-explicit `.pro`), wired into `pri/partseditor.pri` + `auto.pro`. No UI change. Foundation.
-- **P1 — real item model.** `PEPathItem`/`PERectItem`/`PEEllipseItem`/`PELineItem`/`PETextItem` as
-  true `QGraphics*Item`s replacing the rect overlay; reuse existing marquee/hover.
+- **P1 — real item model. ✅ LANDED (Session 15, foundation only).** The live `initSvgTree` now
+  drives overlay-item creation off `PEDocument` (behavior-identical refactor). The *editable*
+  `PEPathItem`/`PERectItem`/… `QGraphics*Item`s that *replace* the rect overlay are P2's job; P1
+  makes the typed model load-bearing (order + kind gate) without changing what's on screen.
 - **P2 — node editing.** `d` ⇄ segment list; select a path → anchor/handle grips; drag edits `d`
   via a command. (Removes the external-graphics-editor dependency.)
 - **P3 — primitive creation.** Tool-driven rect/line/ellipse/path/freehand/text creation.
@@ -107,7 +109,13 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P0 landed** (Session 14) — `PEDocument`/`PEElement` typed view + byte-stable round-trip golden,
-  inert (no live wiring). Branch `feature/vector-editor` (local commits, not yet pushed per maintainer choice).
-- Next landable code PR: **P1 real item model** (editable `QGraphics*Item`s; wire `PEDocument` into `PEMainWindow::setInitialItem`).
+- **Now:** **P1 landed** (Session 15) — the live `initSvgTree` now drives `PEGraphicsItem` creation off
+  `PEDocument` (behavior-identical refactor: same depth-first/document-order, same `QGraphicsRectItem`
+  overlays via `makePegi`, same terminal-point wiring). The typed model is now load-bearing: element order
+  + kind gate (`kind != Unknown` == the old `else continue`) come from it. A golden test locks the order
+  invariant (`order_matches_live_traverse`). Behavior unchanged; P2 builds node editing on top.
+- Prior: **P0 landed** (Session 14) — typed view + byte-stable round-trip golden. Branch `feature/vector-editor`
+  (local commits, not yet pushed per maintainer choice).
+- Next landable code PR: **P2 node editing** (`d` ⇄ segment list; anchor/handle grips; drag edits `d` via a command).
+
 

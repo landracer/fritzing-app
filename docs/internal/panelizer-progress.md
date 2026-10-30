@@ -7,6 +7,27 @@
 ---
 
 
+## 2026-10-30 — Session 15 (P1: typed model becomes the live editor's source of element order/kind)
+
+Wired the typed model into the **live** parts editor (still behavior-identical). `PEMainWindow::initSvgTree`
+now builds a `PEDocument` from the (gorn-processed, renderer-cleaned) `svgDocument` and iterates
+`pe.elements()` to create each `PEGraphicsItem`, instead of re-walking the DOM inline.
+
+- The old inline depth-first `traverse` walk + the `if (tag rect) … else if (tag …) else continue;` tag
+  gate are gone; `kind != PEElementKind::Unknown` is now the gate (exactly equivalent: `kindForTag` returns
+  Unknown for any tag outside the same list). Same order, same `getPixelBounds`/`makePegi`, same z++ order,
+  same terminal-point wiring → **what's on screen is unchanged**.
+- New golden `order_matches_live_traverse`: `PEDocument` element sequence == a manual depth-first/document-order
+  walk over a nested tree mixing modeled/unmodeled tags — the invariant that makes the refactor safe.
+- `pedocument.cpp` now compiled into the app (added to `pri/partseditor.pri` in Session 14).
+
+**Verified:** full app `phoenix.pro` build green (`app make exit=0`, `Fritzing` binary, no `error:`); fresh
+clean aggregate `-j` build of all 12 suites → **12 pass / 0 fail, no 0-byte `.o`**. Local commits only on
+`feature/vector-editor` (not pushed yet).
+
+Next (P2): node editing — `d` ⇄ segment list, anchor/handle grips, drag edits `d` via a command.
+
+
 ## 2026-10-29 — Session 14 (P0: typed DOM model + byte-stable round-trip golden)
 
 Started **P0** (docs/design/vector-editor.md section F phase 1). Built the **inert** typed view over a
