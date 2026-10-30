@@ -7,6 +7,33 @@
 ---
 
 
+## 2026-10-29 — Session 13 (Parts editor assessment → vector-editor plan)
+
+Deep read of the **live** parts editor (`src/partseditor/pemainwindow.cpp` + `pe*` views; the old
+`partseditor*`/`svgview` editor is parked in `src/partseditor/obsolete/`, commented out in
+`pri/partseditor.pri`) plus the three reference repos the user pointed at:
+`fritzing/Fritzing-Schematic-an-Inkscape-Extension` (a 1,552-line Inkscape `EffectExtension`
+*generator* that bakes a conformant `#schematic`/`#symbol`/`connectorXpin`+`connectorXterminal`
+symbol), `inkscape` (the full upstream vector editor), and `svgedit` (a ~19k-LOC JS vector engine
+whose `core/` is the model we port, and which already ships an `ext-connector` mirroring Fritzing's
+connector side/marker model).
+
+**Finding:** the live parts editor is a *metadata* editor with a **static** SVG preview + one
+per-element terminal-point handle (`PEGraphicsItem` = a `QGraphicsRectItem` overlay built in
+`initSvgTree()`/`initConnectors()`). It has **never** had primitive creation or path/node editing —
+that is why part graphics require external Inkscape or the parametric plugin.
+
+**Direction chosen by the user:** full faithful port of svgedit's editing model (freehand +
+path-node editing with bezier handles + primitives + text + layers + undo) into the Qt `pe*` editor.
+
+**Spec:** `docs/design/vector-editor.md` — phased P0 (typed DOM model + golden round-trip, inert) →
+P1 (real `QGraphics*Item`s) → P2 (node editing — the slice that removes the Inkscape dependency) →
+P3 (primitive creation) → P4 (connector semantics) → P5 (units/history/sanitize). No code written
+yet; this session is the plan + doc only.
+
+---
+
+
 ## 2026-10-29 — Session 12 (Wire `test_folderutils` + kill the qmake path-keying hazard)
 
 Goal: land the `test_folderutils` suite (the `sanitizeForPath()` unit tests that rode in on the upstream
