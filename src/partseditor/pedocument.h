@@ -72,6 +72,11 @@ struct PEElement {
     // return the re-serialized 'd'. Returns an empty string if this element is not a
     // path, the segment index is out of range, or parsing fails.
     QString editPathAnchor(int segmentIndex, QPointF anchor) const;
+
+    // P2/P3 live wiring: the resolved absolute anchor points of this element if it is a
+    // path (the grips a node-edit drag would grab); empty list otherwise. Order matches
+    // segment index, so segmentIndex in editPathAnchor lines up with this list's index.
+    QList<QPointF> pathAnchors() const;
 };
 
 // The typed view + round-trip contract. Owns nothing: it borrows the QDomDocument

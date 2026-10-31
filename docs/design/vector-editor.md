@@ -100,13 +100,20 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   against the running cursor. Round-trip (`fromD` → `serialize` → `fromD`) is stable.
   `PEElement::editPathAnchor(segmentIndex, anchor)` (Session 17) is the **node-edit operation**:
   it decodes the element's `d`, replaces that segment's anchor (encoding the point back in the
-  segment's own absolute/relative convention), and returns the new `d`. Still pure (no widget);
-  the live `PEGraphicsItem` per-node mouse grip + `QUndoCommand` wrapper is the remaining wiring.
-- **P3 — primitive creation. ✅ LANDED (Session 18, model op).** The live editor has *no* creation
-  path (old `addRectToSvg` etc. parked in obsolete/). `PEPrimitive::make(doc, kind, id, class, geom…)`
-  (`src/partseditor/peprimitive.{h,cpp}`) builds the Fritzing-convention DOM element per kind (rect/
-  line/circle/ellipse/polyline/polygon/path/text); `addTo` appends it so `PEDocument.build` reads it
-  back typed. Pure data; the live tool-driven creation wiring is later.
+  segment's own absolute/relative convention), and returns the new `d`.
+- **P2 live grip. ✅ LANDED (Session 19).** `PEElement::pathAnchors()` returns the resolved segment
+  end-points; `PEGraphicsItem` (for a `path` element) paints one grip per anchor (mapped into item
+  pixel coords) and on mouse-press hit-tests the nearest grip, on drag maps pixel→document units and
+  emits `pathAnchorMoved`/`pathAnchorChanged`. `PEMainWindow::pathAnchorChangedAux` wraps the live
+  writeback in `EditPathAnchorCommand` (→ `PEMainWindow::editPathAnchor` → DOM `d` + re-render +
+  `updateChangeCount`), mirroring the `MoveTerminalPointCommand`/`moveTerminalPoint` pattern.
+- **P3 — primitive creation. ✅ LANDED (model op Session 18; live wiring Session 19).** The live
+  editor had *no* creation path (old `addRectToSvg` etc. parked in obsolete/). `PEPrimitive::make`
+  (`src/partseditor/peprimitive.{h,cpp}`) builds the Fritzing-convention DOM element per kind
+  (rect/line/circle/ellipse/polyline/polygon/path/text); `addTo` appends it so `PEDocument.build`
+  reads it back typed. `PEMainWindow::addPrimitive`/`removePrimitive` (driven by `AddPrimitiveCommand`/
+  `DeletePrimitiveCommand`) insert/remove the element in the view's DOM and re-init the overlay tree.
+
 - **P4 — connector semantics.** `connectorXpin`/`terminal` authored in-app; terminal handle becomes
   a node-edit special case.
 - **P5 — library-at-hand.** Replace the fixed `pe.fzb` with full browse/search of the embedded
@@ -120,15 +127,17 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P3 landed (model op)** (Session 18) — `PEPrimitive` typed primitive-creation builder
-  (rect/line/circle/ellipse/polyline/polygon/path/text → DOM element, `addTo` appends in document
-  order). **P2** (Sessions 16–17) — typed path model + `editPathAnchor` node-edit op. All pure data.
+- **Now:** **P2 + P3 live wiring landed** (Session 19) — path node grips (`PEElement::pathAnchors`
+  → `PEGraphicsItem` grip hit-test/drag → `EditPathAnchorCommand` → `PEMainWindow::editPathAnchor`) and
+  primitive create/delete (`PEMainWindow::addPrimitive`/`removePrimitive` via `AddPrimitiveCommand`/
+  `DeletePrimitiveCommand`). **P3 model op** (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions
+  16–17) — typed path model + `editPathAnchor` node-edit op.
 - Prior: **P1 landed** (Session 15) — live `initSvgTree` drives overlay-item creation off `PEDocument`
   (behavior-identical). **P0** (Session 14) — typed view + byte-stable round-trip golden. Branch
   `feature/vector-editor` (local commits, not yet pushed per maintainer choice).
-- Next landable code PR: wire the **live** layer (select a path → grips from `anchors()` → drag →
-  `editPathAnchor` → `QUndoCommand`; select/create a primitive → `PEPrimitive::addTo` → insert),
-  then P4 (connector semantics).
+- Next landable code PR: **P4** (connector semantics — `connectorXpin`/`terminal` authored in-app; the
+  terminal handle becomes a node-edit special case). Note: primitive creation's *tool trigger* (a toolbar
+  "add rect/line/…" action that calls `addPrimitive`) is still unwired — the command+writeback layer is in.
 
 
 

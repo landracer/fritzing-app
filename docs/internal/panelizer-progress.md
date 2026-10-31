@@ -7,6 +7,33 @@
 ---
 
 
+## 2026-10-30 — Session 19 (P2/P3 live wiring: path grips + primitive create/delete, live)
+
+Wired the live layer the P2/P3 model ops were built for (the "select → drag → undo" and "create →
+insert → undo" flows that were inert data ops before):
+
+- **Path node-edit live:** `PEElement::pathAnchors()` (new) returns resolved segment end-points.
+  `PEGraphicsItem` for a `path` element now paints one grip per anchor (doc→item pixel mapping via
+  `m_docBounds`), hit-tests the nearest grip on press, and on drag maps item-local pixel → document
+  units, emitting `pathAnchorMoved` (live feedback) / `pathAnchorChanged` (committed). `PEMainWindow`
+  slots `pegiPathAnchor*` → `pathAnchorChangedAux` → `EditPathAnchorCommand` → `editPathAnchor`
+  (DOM `d` rewrite + re-`initSvgTree`/re-render + `updateChangeCount`). Mirrors `MoveTerminalPointCommand`.
+- **Primitive create/delete live:** `AddPrimitiveCommand`/`DeletePrimitiveCommand` carry the element's
+  serialized XML + parent svg id; `PEMainWindow::addPrimitive` re-parses and `importNode`+`appendChild`s
+  it into the view's `QDomDocument`, `removePrimitive` removes by id, both re-`initSvgTree` + count.
+- Golden tests: `pathAnchors` returns segment end-points (absolute + relative-resolved) and empty for
+  non-path; suite now 18 tests, all green.
+
+**Note:** the primitive *tool trigger* (a toolbar action invoking `addPrimitive`) is still unwired —
+this landed the command + DOM-writeback layer the tool will call.
+
+**Verified:** full app build exit 0 (binary produced); aggregate build exit 0; all 12 suites pass; no
+0-byte objects. Local commits only on `feature/vector-editor` (not pushed yet).
+
+Next: P4 (connector semantics authored in-app; terminal handle as a node-edit special case), and wire
+the create-tool toolbar action to `addPrimitive`.
+
+
 ## 2026-10-30 — Session 18 (P3: typed primitive-creation builder PEPrimitive)
 
 Landed the **primitive-creation model op** (pure). The **live** parts editor has *no* element-creation

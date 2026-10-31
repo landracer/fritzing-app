@@ -92,6 +92,15 @@ QString PEElement::editPathAnchor(int segmentIndex, QPointF anchor) const {
     return edited.serialize();
 }
 
+QList<QPointF> PEElement::pathAnchors() const {
+    if (kind != PEElementKind::Path) return QList<QPointF>();
+    const QString d = element.attribute(QStringLiteral("d"));
+    if (d.isEmpty()) return QList<QPointF>();
+    PEPath path = PEPath::fromD(d);
+    if (!path.ok()) return QList<QPointF>();
+    return path.anchors().toList();
+}
+
 void PEDocument::build(const QDomDocument & doc) {
     m_elements.clear();
     m_dom = const_cast<QDomDocument *>(&doc);

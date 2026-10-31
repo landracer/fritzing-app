@@ -30,6 +30,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QPointer>
 #include <QTime>
 #include <QBrush>
+#include <QVector>
 
 class PEGraphicsItem : public QObject, public QGraphicsRectItem
 {
@@ -54,6 +55,15 @@ public:
 	bool showingTerminalPoint();
 	void showMarquee(bool);
 	bool showingMarquee();
+	// P3 live path editing: draggable anchor (node) grips if this element is a <path>.
+	int pathAnchorCount();
+	QVector<QPointF> pathAnchors();          // document user-unit anchors, segment order
+	void showPathAnchors(bool);
+	bool showingPathAnchors();
+	void setGrabbedAnchor(int);
+	int grabbedAnchor();
+	void setDocBounds(QRectF);
+	QRectF docBounds();
 	void setTerminalPoint(QPointF);
 	QPointF terminalPoint();
 	void setPendingTerminalPoint(QPointF);
@@ -69,6 +79,10 @@ Q_SIGNALS:
 	void mouseReleasedSignal(PEGraphicsItem *);
 	void terminalPointMoved(PEGraphicsItem *, QPointF);
 	void terminalPointChanged(PEGraphicsItem *, QPointF before, QPointF after);
+	// P3 live path editing: emitted while/after a path anchor (node) is dragged. 'anchor'
+	// is the document-unit anchor point (segmentIndex indexes pathAnchors()).
+	void pathAnchorMoved(PEGraphicsItem *, int segmentIndex, QPointF anchor);
+	void pathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
 
 protected Q_SLOTS:
 	void restoreColor();
@@ -85,6 +99,12 @@ protected:
 	bool m_dragTerminalPoint = false;
 	QPointF m_dragTerminalOrigin;
 	QPointF m_terminalPointOrigin;
+	bool m_showPathAnchors = false;
+	bool m_dragPathAnchor = false;
+	int m_grabbedAnchor = -1;
+	QPointF m_pathAnchorOrigin;     // document-unit anchor at drag start
+	QPointF m_dragPathAnchorOrigin; // item-local pixel point at drag start
+	QRectF m_docBounds;             // element bounds in document user units (for pixel<->doc mapping)
 	bool m_drawHighlight = false;
 	int m_wheelAccum = 0;
 	qreal m_savedOpacity = 0;

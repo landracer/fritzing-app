@@ -400,3 +400,95 @@ QString ChangeSMDCommand::getParamString() const {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+EditPathAnchorCommand::EditPathAnchorCommand(PEMainWindow * peMainWindow, SketchWidget * sketchWidget, const QString & svgID, int segmentIndex, QPointF before, QPointF after, QUndoCommand *parent)
+	: PEBaseCommand(peMainWindow, parent)
+{
+	m_sketchWidget = sketchWidget;
+	m_svgID = svgID;
+	m_segmentIndex = segmentIndex;
+	m_before = before;
+	m_after = after;
+}
+
+void EditPathAnchorCommand::undo()
+{
+	m_peMainWindow->editPathAnchor(m_sketchWidget, m_svgID, m_segmentIndex, m_before, -1);
+}
+
+void EditPathAnchorCommand::redo()
+{
+	m_peMainWindow->editPathAnchor(m_sketchWidget, m_svgID, m_segmentIndex, m_after, 1);
+}
+
+QString EditPathAnchorCommand::getParamString() const {
+	return "EditPathAnchorCommand " +
+	       QString(" vid:%1 svgid:%2 seg:%3 before:%4,%5 after:%6,%7")
+	       .arg(m_sketchWidget->viewID())
+	       .arg(m_svgID)
+	       .arg(m_segmentIndex)
+	       .arg(m_before.x()).arg(m_before.y())
+	       .arg(m_after.x()).arg(m_after.y())
+	       ;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+AddPrimitiveCommand::AddPrimitiveCommand(PEMainWindow * peMainWindow, SketchWidget * sketchWidget, const QString & parentSvgID, const QString & elementXml, QUndoCommand *parent)
+	: PEBaseCommand(peMainWindow, parent)
+{
+	m_sketchWidget = sketchWidget;
+	m_parentSvgID = parentSvgID;
+	m_elementXml = elementXml;
+}
+
+void AddPrimitiveCommand::undo()
+{
+	m_peMainWindow->removePrimitive(m_sketchWidget, m_elementXml, -1);
+}
+
+void AddPrimitiveCommand::redo()
+{
+	m_peMainWindow->addPrimitive(m_sketchWidget, m_parentSvgID, m_elementXml, 1);
+}
+
+QString AddPrimitiveCommand::getParamString() const {
+	return "AddPrimitiveCommand " +
+	       QString(" vid:%1 parent:%2 xml:%3")
+	       .arg(m_sketchWidget->viewID())
+	       .arg(m_parentSvgID)
+	       .arg(m_elementXml)
+	       ;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+DeletePrimitiveCommand::DeletePrimitiveCommand(PEMainWindow * peMainWindow, SketchWidget * sketchWidget, const QString & svgID, const QString & elementXml, QUndoCommand *parent)
+	: PEBaseCommand(peMainWindow, parent)
+{
+	m_sketchWidget = sketchWidget;
+	m_svgID = svgID;
+	m_elementXml = elementXml;
+}
+
+void DeletePrimitiveCommand::undo()
+{
+	m_peMainWindow->addPrimitive(m_sketchWidget, m_svgID, m_elementXml, -1);
+}
+
+void DeletePrimitiveCommand::redo()
+{
+	m_peMainWindow->removePrimitive(m_sketchWidget, m_elementXml, 1);
+}
+
+QString DeletePrimitiveCommand::getParamString() const {
+	return "DeletePrimitiveCommand " +
+	       QString(" vid:%1 svgid:%2 xml:%3")
+	       .arg(m_sketchWidget->viewID())
+	       .arg(m_svgID)
+	       .arg(m_elementXml)
+	       ;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+

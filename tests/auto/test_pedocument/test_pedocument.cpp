@@ -366,6 +366,67 @@ BOOST_AUTO_TEST_CASE( primitive_non_creatable_returns_null_element )
     BOOST_CHECK(e.isNull());
 }
 
+// ---- P3 live wiring: PEElement::pathAnchors() feeds the draggable node grips ----
+
+BOOST_AUTO_TEST_CASE( pathAnchors_returns_segment_end_points )
+{
+    QDomDocument doc;
+    QDomElement path = doc.createElement("path");
+    path.setAttribute("id", "p1");
+    path.setAttribute("d", "M 0 0 L 10 10 L 20 0 Z");
+    QDomElement svg = doc.createElement("svg");
+    svg.appendChild(path);
+    doc.appendChild(svg);
+
+    PEDocument typed;
+    typed.build(doc);
+    PEElement pe = typed.findById("p1");
+    QList<QPointF> a = pe.pathAnchors();
+    // M,L,L,Z -> 4 entries. Z has no args, so its resolved anchor is the unchanged cursor
+    // (the last point 20,0) -- the typed model carries no synthetic close anchor.
+    BOOST_CHECK_EQUAL(a.count(), 4);
+    BOOST_CHECK(a.at(0).x() == 0 && a.at(0).y() == 0);
+    BOOST_CHECK(a.at(1).x() == 10 && a.at(1).y() == 10);
+    BOOST_CHECK(a.at(2).x() == 20 && a.at(2).y() == 0);
+    BOOST_CHECK(a.at(3).x() == 20 && a.at(3).y() == 0);  // Z: anchor unchanged from cursor
+}
+
+BOOST_AUTO_TEST_CASE( pathAnchors_relative_resolved_to_absolute )
+{
+    QDomDocument doc;
+    QDomElement path = doc.createElement("path");
+    path.setAttribute("id", "p2");
+    path.setAttribute("d", "M 5 5 l 3 0 l 0 4");
+    QDomElement svg = doc.createElement("svg");
+    svg.appendChild(path);
+    doc.appendChild(svg);
+
+    PEDocument typed;
+    typed.build(doc);
+    PEElement pe = typed.findById("p2");
+    QList<QPointF> a = pe.pathAnchors();
+    BOOST_CHECK_EQUAL(a.count(), 3);
+    BOOST_CHECK(a.at(1).x() == 8 && a.at(1).y() == 5);   // 5+3
+    BOOST_CHECK(a.at(2).x() == 8 && a.at(2).y() == 9);   // 5+4
+}
+
+BOOST_AUTO_TEST_CASE( pathAnchors_non_path_returns_empty )
+{
+    QDomDocument doc;
+    QDomElement rect = doc.createElement("rect");
+    rect.setAttribute("id", "r1");
+    rect.setAttribute("x", "0");
+    QDomElement svg = doc.createElement("svg");
+    svg.appendChild(rect);
+    doc.appendChild(svg);
+
+    PEDocument typed;
+    typed.build(doc);
+    PEElement pe = typed.findById("r1");
+    BOOST_CHECK(pe.pathAnchors().isEmpty());
+}
+
+
 
 
 

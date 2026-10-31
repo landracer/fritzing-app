@@ -203,6 +203,67 @@ protected:
 
 /////////////////////////////////////////////
 
+// P3: node-edit on a <path>. Carries the svg element id, the segment index, and the
+// before/after anchor in document user units; redo/undo call PEMainWindow::editPathAnchor.
+class EditPathAnchorCommand : public PEBaseCommand
+{
+public:
+	EditPathAnchorCommand(class PEMainWindow *, SketchWidget *, const QString & svgID, int segmentIndex, QPointF before, QPointF after, QUndoCommand *parent);
+	void undo();
+	void redo();
+
+protected:
+	QString getParamString() const;
+
+protected:
+	SketchWidget * m_sketchWidget;
+	QString m_svgID;
+	int m_segmentIndex;
+	QPointF m_before;
+	QPointF m_after;
+};
+
+/////////////////////////////////////////////
+
+// P3: add (redo) / remove (undo) a primitive element to a view's svg. Carries the
+// serialized element fragment and the parent element's svg id (document order append).
+class AddPrimitiveCommand : public PEBaseCommand
+{
+public:
+	AddPrimitiveCommand(class PEMainWindow *, SketchWidget *, const QString & parentSvgID, const QString & elementXml, QUndoCommand *parent);
+	void undo();
+	void redo();
+
+protected:
+	QString getParamString() const;
+
+protected:
+	SketchWidget * m_sketchWidget;
+	QString m_parentSvgID;
+	QString m_elementXml;
+};
+
+/////////////////////////////////////////////
+
+// P3: remove (redo) / restore (undo) the primitive element identified by svg id.
+class DeletePrimitiveCommand : public PEBaseCommand
+{
+public:
+	DeletePrimitiveCommand(class PEMainWindow *, SketchWidget *, const QString & svgID, const QString & elementXml, QUndoCommand *parent);
+	void undo();
+	void redo();
+
+protected:
+	QString getParamString() const;
+
+protected:
+	SketchWidget * m_sketchWidget;
+	QString m_svgID;
+	QString m_elementXml;
+};
+
+/////////////////////////////////////////////
+
 class RemoveBusConnectorCommand : public PEBaseCommand
 {
 public:

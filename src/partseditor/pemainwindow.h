@@ -77,6 +77,10 @@ public:
 	void changeSvg(SketchWidget *, const QString & filename, int changeDirection);
 	void relocateConnectorSvg(SketchWidget *, const QString & id, const QString & terminalID, const QString & oldGorn, const QString & oldGornTerminal, const QString & newGorn, const QString & newGornTerminal, int changeDirection);
 	void moveTerminalPoint(SketchWidget *, const QString & id, QSizeF, QPointF, int changeDirection);
+	// P3 live wiring: path node-edit (anchor) and primitive add/remove DOM writeback + re-render.
+	void editPathAnchor(SketchWidget *, const QString & svgID, int segmentIndex, QPointF anchor, int changeDirection);
+	void addPrimitive(SketchWidget *, const QString & parentSvgID, const QString & elementXml, int changeDirection);
+	void removePrimitive(SketchWidget *, const QString & elementXml, int changeDirection);
 	void restoreFzp(const QString & filename);
 	bool editsModuleID(const QString &);
 	void addBusConnector(const QString & busID, const QString & connectorID);
@@ -100,6 +104,8 @@ public Q_SLOTS:
 	void pegiMouseReleased(PEGraphicsItem *);
 	void pegiTerminalPointMoved(PEGraphicsItem *, QPointF);
 	void pegiTerminalPointChanged(PEGraphicsItem *, QPointF before, QPointF after);
+	void pegiPathAnchorMoved(PEGraphicsItem *, int segmentIndex, QPointF anchor);
+	void pegiPathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
 	void switchedConnector(int);
 	void removedConnector(const QDomElement &);
 	void terminalPointChanged(const QString & how);
@@ -161,6 +167,7 @@ protected:
 	void updateChangeCount(SketchWidget * sketchWidget, int changeDirection);
 	PEGraphicsItem * findConnectorItem();
 	void terminalPointChangedAux(PEGraphicsItem * pegi, QPointF before, QPointF after);
+	void pathAnchorChangedAux(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after);
 	void showInOS(QWidget *parent, const QString &pathIn);
 	void switchedConnector(int, SketchWidget *);
 	PEGraphicsItem * makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z);

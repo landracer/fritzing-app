@@ -23,6 +23,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../debugdialog.h"
 #include "../sketch/infographicsview.h"
 #include "../items/itembase.h"
+#include "pedocument.h"   // PEElement/PEElementKind (typed path anchors)
 
 #include <QBrush>
 #include <QColor>
@@ -194,9 +195,32 @@ void PEGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *op
 		QTimer::singleShot(40, this, SLOT(restoreColor()));
 	}
 
-	bool save = m_showTerminalPoint || m_showMarquee;
+	bool save = m_showTerminalPoint || m_showMarquee || m_showPathAnchors;
 
 	if (save) painter->save();
+
+	if (m_showPathAnchors) {
+		QRectF r = rect();
+		QRectF db = m_docBounds;
+		if (db.width() > 0 && db.height() > 0) {
+			double sx = r.width() / db.width();
+			double sy = r.height() / db.height();
+			qreal side = qMin(r.width(), r.height()) / 10.0;
+			if (side <= 0) side = 4;
+			QVector<QPointF> anchors = pathAnchors();
+			for (int i = 0; i < anchors.count(); ++i) {
+				QPointF a = anchors.at(i);
+				// document units -> item-local pixel coords
+				qreal px = (a.x() - db.left()) * sx;
+				qreal py = (a.y() - db.top()) * sy;
+				QRectF grip(px - side / 2, py - side / 2, side, side);
+				painter->setOpacity(1.0);
+				painter->setPen(QPen(QColor(0, 0, 0), 0, Qt::SolidLine));
+				painter->setBrush(i == m_grabbedAnchor ? QColor(255, 0, 255) : Qt::NoBrush);
+				painter->drawRect(grip);
+			}
+		}
+	}
 
 	if (m_showTerminalPoint) {
 		QRectF r = rect();
@@ -266,6 +290,48 @@ bool PEGraphicsItem::showingMarquee() {
 	return m_showMarquee;
 }
 
+// ---- P3 live path editing ----
+
+int PEGraphicsItem::pathAnchorCount() {
+	return pathAnchors().count();
+}
+
+QVector<QPointF> PEGraphicsItem::pathAnchors() {
+	if (m_element.tagName().compare(QStringLiteral("path")) != 0) return QVector<QPointF>();
+	PEElement pe;
+	pe.kind = PEElementKind::Path;
+	pe.element = m_element;
+	QList<QPointF> anchors = pe.pathAnchors();
+	QVector<QPointF> out;
+	for (const QPointF & a : anchors) out.append(a);
+	return out;
+}
+
+void PEGraphicsItem::showPathAnchors(bool show) {
+	m_showPathAnchors = show;
+	update();
+}
+
+bool PEGraphicsItem::showingPathAnchors() {
+	return m_showPathAnchors;
+}
+
+void PEGraphicsItem::setGrabbedAnchor(int i) {
+	m_grabbedAnchor = i;
+}
+
+int PEGraphicsItem::grabbedAnchor() {
+	return m_grabbedAnchor;
+}
+
+void PEGraphicsItem::setDocBounds(QRectF r) {
+	m_docBounds = r;
+}
+
+QRectF PEGraphicsItem::docBounds() {
+	return m_docBounds;
+}
+
 void PEGraphicsItem::setTerminalPoint(QPointF p) {
 	m_pendingTerminalPoint = m_terminalPoint = p;
 }
@@ -317,6 +383,34 @@ void PEGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent * event) {
 			OriginalShiftPos = p;
 		}
 
+		// P3: a path element offers draggable anchors instead of a single terminal point.
+		QVector<QPointF> anchors = pathAnchors();
+		if (!anchors.isEmpty() && m_docBounds.width() > 0 && m_docBounds.height() > 0) {
+			double sx = rect().width() / m_docBounds.width();
+			double sy = rect().height() / m_docBounds.height();
+			qreal side = qMin(rect().width(), rect().height()) / 10.0;
+			if (side <= 0) side = 4;
+			int hit = -1;
+			qreal best = 1e30;
+			for (int i = 0; i < anchors.count(); ++i) {
+				QPointF a = anchors.at(i);
+				qreal px = (a.x() - m_docBounds.left()) * sx;
+				qreal py = (a.y() - m_docBounds.top()) * sy;
+				QRectF grip(px - side / 2, py - side / 2, side, side);
+				if (grip.adjusted(-2, -2, 2, 2).contains(p)) {
+					qreal d = QLineF(p, QPointF(px, py)).length();
+					if (d < best) { best = d; hit = i; }
+				}
+			}
+			if (hit >= 0) {
+				m_dragPathAnchor = true;
+				m_grabbedAnchor = hit;
+				m_pathAnchorOrigin = anchors.at(hit);
+				m_dragPathAnchorOrigin = p;
+				return;
+			}
+		}
+
 		if (qAbs(p.x() - m_terminalPoint.x()) <= MinMouseMove && qAbs(p.y() - m_terminalPoint.y()) <= MinMouseMove) {
 			m_dragTerminalPoint = true;
 			m_terminalPointOrigin = m_terminalPoint;
@@ -330,6 +424,19 @@ void PEGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent * event) {
 }
 
 void PEGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent * event) {
+	if (m_dragPathAnchor) {
+		if (m_docBounds.width() > 0 && m_docBounds.height() > 0) {
+			double sx = rect().width() / m_docBounds.width();
+			double sy = rect().height() / m_docBounds.height();
+			QPointF p = event->pos();
+			// item-local pixel -> document user units
+			QPointF docPoint(m_docBounds.left() + p.x() / sx, m_docBounds.top() + p.y() / sy);
+			Q_EMIT pathAnchorMoved(this, m_grabbedAnchor, docPoint);
+		}
+		update();
+		return;
+	}
+
 	if (!m_dragTerminalPoint) return;
 
 	if (ShiftDown && !(event->modifiers() & Qt::ShiftModifier)) {
@@ -375,6 +482,16 @@ void PEGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent * event) {
 
 
 void PEGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *) {
+	if (m_dragPathAnchor) {
+		m_dragPathAnchor = false;
+		QVector<QPointF> anchors = pathAnchors();
+		QPointF after = (m_grabbedAnchor >= 0 && m_grabbedAnchor < anchors.count()) ? anchors.at(m_grabbedAnchor) : QPointF();
+		if (m_pathAnchorOrigin != after) {
+			Q_EMIT pathAnchorChanged(this, m_grabbedAnchor, m_pathAnchorOrigin, after);
+		}
+		m_grabbedAnchor = -1;
+		return;
+	}
 	if (m_dragTerminalPoint) {
 		m_dragTerminalPoint = false;
 		if (m_terminalPointOrigin != m_terminalPoint) {

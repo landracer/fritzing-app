@@ -1458,6 +1458,11 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 		// known Qt bug: boundsOnElement returns zero width and height for text elements.
 		if (bounds.width() > 0 && bounds.height() > 0) {
 			PEGraphicsItem * pegi = makePegi(bounds.size(), bounds.topLeft(), itemBase, element, z++);
+			// P3: path elements expose draggable node grips (anchors in document units).
+			if (pe.kind == PEElementKind::Path) {
+				pegi->setDocBounds(pe.bounds);
+				pegi->showPathAnchors(true);
+			}
 			pegiHash.insert(element.attribute("id"), pegi);
 		}
 	}
@@ -2749,6 +2754,124 @@ void PEMainWindow::moveTerminalPoint(SketchWidget * sketchWidget, const QString 
 	m_peToolView->setTerminalPointCoords(p);
 }
 
+void PEMainWindow::editPathAnchor(SketchWidget * sketchWidget, const QString & svgID, int segmentIndex, QPointF anchor, int changeDirection)
+{
+	if (svgID.isEmpty()) return;
+	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
+	if (viewThing == nullptr || viewThing->document == nullptr) return;
+	QDomDocument * svgDoc = viewThing->document;
+	QDomElement svgRoot = svgDoc->documentElement();
+	QDomElement pathElement = TextUtils::findElementWithAttribute(svgRoot, "id", svgID);
+	if (pathElement.isNull()) {
+		DebugDialog::debug(QString("Unable to find svg path element %1").arg(svgID));
+		return;
+	}
+
+	PEElement pe;
+	pe.kind = PEElementKind::Path;
+	pe.element = pathElement;
+	QString newD = pe.editPathAnchor(segmentIndex, anchor);
+	if (newD.isEmpty()) return;
+	pathElement.setAttribute("d", newD);
+
+	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+	FolderUtils::ensureDirectoryExists(newPath);
+	QString svg = TextUtils::svgNSOnly(svgDoc->toString());
+	writeXml(newPath, removeGorn(svg), true);
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
+
+	updateChangeCount(sketchWidget, changeDirection);
+}
+
+void PEMainWindow::addPrimitive(SketchWidget * sketchWidget, const QString & parentSvgID, const QString & elementXml, int changeDirection)
+{
+	if (elementXml.isEmpty()) return;
+	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
+	if (viewThing == nullptr || viewThing->document == nullptr) return;
+	QDomDocument * svgDoc = viewThing->document;
+
+	QDomDocument frag;
+	if (!frag.setContent(elementXml)) return;
+	QDomElement newElement = frag.documentElement();
+	if (newElement.isNull()) return;
+	// importNode so it belongs to the target document
+	QDomNode imported = svgDoc->importNode(newElement, true);
+
+	QDomElement svgRoot = svgDoc->documentElement();
+	QDomElement parent = parentSvgID.isEmpty() ? svgRoot : TextUtils::findElementWithAttribute(svgRoot, "id", parentSvgID);
+	if (parent.isNull()) parent = svgRoot;
+	parent.appendChild(imported);
+
+	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+	FolderUtils::ensureDirectoryExists(newPath);
+	QString svg = TextUtils::svgNSOnly(svgDoc->toString());
+	writeXml(newPath, removeGorn(svg), true);
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
+
+	// Re-init the overlay items so the new element gets a PEGraphicsItem.
+	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
+
+	updateChangeCount(sketchWidget, changeDirection);
+}
+
+void PEMainWindow::removePrimitive(SketchWidget * sketchWidget, const QString & elementXml, int changeDirection)
+{
+	if (elementXml.isEmpty()) return;
+	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
+	if (viewThing == nullptr || viewThing->document == nullptr) return;
+	QDomDocument * svgDoc = viewThing->document;
+
+	QDomDocument frag;
+	if (!frag.setContent(elementXml)) return;
+	QString id = frag.documentElement().attribute("id");
+	if (id.isEmpty()) return;
+	QDomElement svgRoot = svgDoc->documentElement();
+	QDomElement existing = TextUtils::findElementWithAttribute(svgRoot, "id", id);
+	if (existing.isNull()) return;
+	QDomNode parent = existing.parentNode();
+	parent.removeChild(existing);
+
+	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+	FolderUtils::ensureDirectoryExists(newPath);
+	QString svg = TextUtils::svgNSOnly(svgDoc->toString());
+	writeXml(newPath, removeGorn(svg), true);
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
+
+	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
+
+	updateChangeCount(sketchWidget, changeDirection);
+}
+
+void PEMainWindow::pegiPathAnchorMoved(PEGraphicsItem * pegi, int segmentIndex, QPointF anchor)
+{
+	// live drag feedback: re-render the item so the grip tracks the cursor (no undo yet)
+	Q_UNUSED(segmentIndex);
+	Q_UNUSED(anchor);
+	if (pegi != nullptr) pegi->update();
+}
+
+void PEMainWindow::pegiPathAnchorChanged(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after)
+{
+	pathAnchorChangedAux(pegi, segmentIndex, before, after);
+}
+
+void PEMainWindow::pathAnchorChangedAux(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after)
+{
+	if (pegi == nullptr) return;
+	if (m_currentGraphicsView == nullptr) return;
+	QDomElement element = pegi->element();
+	QString svgID = element.attribute("id");
+	if (svgID.isEmpty()) return;
+	SketchWidget * sketchWidget = m_currentGraphicsView;
+
+	auto * command = new EditPathAnchorCommand(this, sketchWidget, svgID, segmentIndex, before, after, nullptr);
+	command->setText(tr("Move path anchor"));
+	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
+}
+
 void PEMainWindow::showInOS(QWidget *parent, const QString &pathIn)
 {
 	Q_UNUSED(parent);
@@ -2780,6 +2903,8 @@ PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase *
 	connect(pegiItem, SIGNAL(mousePressedSignal(PEGraphicsItem *, bool &)), this, SLOT(pegiMousePressed(PEGraphicsItem *, bool &)), Qt::DirectConnection);
 	connect(pegiItem, SIGNAL(terminalPointMoved(PEGraphicsItem *, QPointF)), this, SLOT(pegiTerminalPointMoved(PEGraphicsItem *, QPointF)));
 	connect(pegiItem, SIGNAL(terminalPointChanged(PEGraphicsItem *, QPointF, QPointF)), this, SLOT(pegiTerminalPointChanged(PEGraphicsItem *, QPointF, QPointF)));
+	connect(pegiItem, SIGNAL(pathAnchorMoved(PEGraphicsItem *, int, QPointF)), this, SLOT(pegiPathAnchorMoved(PEGraphicsItem *, int, QPointF)));
+	connect(pegiItem, SIGNAL(pathAnchorChanged(PEGraphicsItem *, int, QPointF, QPointF)), this, SLOT(pegiPathAnchorChanged(PEGraphicsItem *, int, QPointF, QPointF)));
 	return pegiItem;
 }
 
