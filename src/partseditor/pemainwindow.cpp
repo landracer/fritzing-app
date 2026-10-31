@@ -496,14 +496,21 @@ void PEMainWindow::initDock()
 {
 	m_layerPalette = new LayerPalette(this);
 
-	/*
+	// P5 (library-at-hand): the parts editor previously shipped with no part browser at all
+	// (this block was commented out), so "start from an existing part" was only reachable from the
+	// main app's own palette. Construct the full bin/palette system here so the whole library is
+	// browsable and searchable inside the editor itself.
 	m_infoView = new HtmlInfoView();
-	m_infoView->init(true);
+	m_infoView->init(false);
 
 	m_binManager = new BinManager(m_referenceModel, m_infoView, m_undoStack, this);
-	m_binManager->openBin(":/resources/bins/pe.fzb");
-	m_binManager->hideTabBar();
-	*/
+	// initStandardBins() loads every discoverable bin (core + contrib + user) *and* the Search bin,
+	// so the user can browse or search the entire library and pick any part as the base to edit.
+	// Picking "Edit Part" in that bin routes through MainWindow::getPartsEditorNewAnd (inherited),
+	// which qobject_casts the top-level to this PEMainWindow and calls setInitialItem() on it -- so
+	// "use an existing part as base" is now first-class inside the editor, with no extra routing.
+	m_binManager->initStandardBins();
+	m_binManager->hideTempPartsBin();
 }
 
 void PEMainWindow::moreInitDock()

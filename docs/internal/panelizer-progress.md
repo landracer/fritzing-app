@@ -7,7 +7,32 @@
 ---
 
 
+## 2026-10-31 — Session 21 (P5 library-at-hand: full browse/search of the library in-editor)
+
+Made "use an existing part as base" first-class inside the parts editor:
+
+- **Root gap:** `PEMainWindow::initDock()` had the whole `HtmlInfoView` + `BinManager` block *commented
+  out*, so the editor window had **no part browser at all**. Even the commented version only ever opened
+  the single fixed `:/resources/bins/pe.fzb` with `hideTabBar()`.
+- **Fix:** `initDock()` now constructs `m_infoView = new HtmlInfoView(); m_infoView->init(false)` and
+  `m_binManager = new BinManager(...)`, then calls **`initStandardBins()`** (every discoverable bin —
+  core + contrib + user — *and* the Search bin) and `hideTempPartsBin()`. `moreInitDock()` already docks
+  `m_binManager`/`m_infoView` when non-null, so they now appear as editor docks.
+- **No new routing needed:** selecting a library part and choosing "Edit Part (new parts editor)…" fires
+  `BinManager::editSelectedNew` → `getPartsEditorNewAnd` → `openNewPartsEditor`, which `qobject_cast`s
+  the top-level widget to this `PEMainWindow` and calls `setInitialItem()` on it — the base part swaps in
+  place. The inherited signal path was already correct; it just had no palette to fire from.
+
+**Verified:** full app build exit 0 (16 MB binary, 0-byte-object count 0); aggregate build exit 0; all
+12 suites green (`test_pedocument` 21 tests). Note: a fresh clean rebuild was required — the first
+attempt's `make` had been SIGTERM-killed mid-compile, leaving 19 stale 0-byte `.o` files that made an
+incremental link fail with 565 bogus undefined references (not a real regression; a clean rebuild was green).
+
+Next: P6 (SVG import — import arbitrary SVG, normalize/sanitize into the model; create-from-blank path).
+
+
 ## 2026-10-30 — Session 20 (P3 create-tool trigger + P4 connector authoring, live)
+
 
 Closed the remaining live gaps and the P4 feature:
 

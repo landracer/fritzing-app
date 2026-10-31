@@ -119,8 +119,15 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   slot binds a new connector to the target graphic's svg id and refreshes the connector list; the
   terminal handle rides on that graphic via the P2 node-edit grips.
 
-- **P5 — library-at-hand.** Replace the fixed `pe.fzb` with full browse/search of the embedded
-  `parts/` library inside the editor so "use an existing part as base" is first-class.
+- **P5 — library-at-hand. ✅ LANDED (Session 21).** The parts editor had *no* part browser at all —
+  its `initDock()` had the `HtmlInfoView` + `BinManager` construction commented out, so "start from an
+  existing part" was only reachable from the *main* app's palette. `PEMainWindow::initDock()` now
+  builds the full dock and calls `initStandardBins()` (every discoverable bin — core + contrib + user —
+  *and* the Search bin) instead of the old single `:/resources/bins/pe.fzb`, so the whole library is
+  browsable and searchable inside the editor. Picking "Edit Part (new parts editor)…" in that dock
+  routes through the inherited `MainWindow::getPartsEditorNewAnd` → `openNewPartsEditor`, which
+  `qobject_cast`s the top-level to this `PEMainWindow` and calls `setInitialItem()` on it — no new
+  routing needed; the base part swaps in place.
 - **P6 — SVG import.** Import arbitrary SVG, normalize/sanitize into the model; create-from-blank path.
 - **P7 — units + history + sanitize hardening.** Unit-aware numeric inputs; full command coverage.
 
@@ -130,14 +137,19 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P3 create-tool trigger + P4 connector semantics landed** (Session 20) — `PEToolView`
-  graphic-tools row (`createPrimitiveRequested`/`addConnectorRequested`) → `PEMainWindow` slots; pure
-  `PEConnector` fzp authoring (`authorConnector`/`rebindGraphic`/`graphicSvgId`/`terminalId`).
-- Prior: **P2 + P3 live wiring** (Session 19) — path node grips + primitive create/delete. **P3 model**
-  (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions 16–17) — typed path model + `editPathAnchor`.
-  **P1** (Session 15) — live `initSvgTree` drives overlay off `PEDocument`. **P0** (Session 14) — typed
-  view + round-trip golden. Branch `feature/vector-editor` (local commits, not yet pushed per choice).
-- Next: **P5** (library-at-hand — full browse/search of the embedded `parts/` library in-editor).
+- **Now:** **P5 library-at-hand landed** (Session 21) — `PEMainWindow::initDock()` now constructs the
+  full `HtmlInfoView` + `BinManager` and calls `initStandardBins()` (all bins + Search) instead of the
+  old fixed `pe.fzb`; picking "Edit Part" in that dock routes through the inherited
+  `getPartsEditorNewAnd`→`openNewPartsEditor`→`setInitialItem`, so any library part is browsable/searchable
+  and loadable as the base in-editor. App builds; all 12 test suites green.
+- Prior: **P3 create-tool trigger + P4 connector semantics** (Session 20) — `PEToolView` graphic-tools
+  row + pure `PEConnector` fzp authoring. **P2 + P3 live wiring** (Session 19) — path node grips +
+  primitive create/delete. **P3 model** (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions
+  16–17) — typed path model + `editPathAnchor`. **P1** (Session 15) — live `initSvgTree` drives overlay
+  off `PEDocument`. **P0** (Session 14) — typed view + round-trip golden. Branch `feature/vector-editor`
+  (pushed to `landracer`).
+- Next: **P6** (SVG import — import arbitrary SVG, normalize/sanitize into the model; create-from-blank path).
+
 
 
 
