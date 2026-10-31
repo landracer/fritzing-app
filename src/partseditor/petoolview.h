@@ -73,6 +73,10 @@ Q_SIGNALS:
 	void terminalPointChanged(const QString & coord, double value);
 	void getSpinAmount(double &);
 	void connectorMetadataChanged(struct ConnectorMetadata *);
+	// P3 create-tool trigger: request a new primitive graphic of a kind.
+	void createPrimitiveRequested(const QString & kind);
+	// P4 authoring trigger: add a connector pointing at the currently-selected graphic (svg id).
+	void addConnectorRequested();
 
 protected Q_SLOTS:
 	void switchConnector(QTreeWidgetItem * current, QTreeWidgetItem * previous);
@@ -85,6 +89,8 @@ protected Q_SLOTS:
 	void terminalPointEntry();
 	void getSpinAmountSlot(double &);
 	void removeConnector();
+	void createPrimitiveSlot();   // P3 create-tool: kind comes from sender()->property("kind")
+	void addConnectorSlot();      // P4 authoring trigger
 
 protected:
 	void changeConnector();

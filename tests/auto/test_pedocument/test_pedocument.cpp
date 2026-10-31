@@ -23,6 +23,7 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 #include "pedocument.h"
 #include "pepath.h"
 #include "peprimitive.h"
+#include "peconnector.h"
 
 // Parse an SVG string into a QDomDocument (namespace processing, like the live editor).
 static void parseDoc(const QString & svg, QDomDocument & doc) {
@@ -425,6 +426,60 @@ BOOST_AUTO_TEST_CASE( pathAnchors_non_path_returns_empty )
     PEElement pe = typed.findById("r1");
     BOOST_CHECK(pe.pathAnchors().isEmpty());
 }
+
+// ---- P4: connector semantics authored in-app (pure fzp DOM authoring) ----
+
+BOOST_AUTO_TEST_CASE( connector_author_block_is_readable )
+{
+    QDomDocument doc;
+    QDomElement module = doc.createElement("module");
+    doc.appendChild(module);
+
+    QDomElement conn = PEConnector::authorConnector(doc, module, "connector1234", "pin 1", "schematic", "G1pin");
+    BOOST_CHECK(!conn.isNull());
+    BOOST_CHECK_EQUAL(conn.attribute("id").toStdString(), "connector1234");
+    BOOST_CHECK_EQUAL(conn.attribute("name").toStdString(), "pin 1");
+    // graphic id is readable via the same path the live editor uses
+    BOOST_CHECK_EQUAL(PEConnector::graphicSvgId(conn, "schematic").toStdString(), "G1pin");
+    // no terminal set -> terminalId empty (centered)
+    BOOST_CHECK(PEConnector::terminalId(conn, "schematic").isEmpty());
+    // a different view's key has no <p>
+    BOOST_CHECK(PEConnector::graphicSvgId(conn, "pcb").isEmpty());
+}
+
+BOOST_AUTO_TEST_CASE( connector_rebind_and_terminal_roundtrip )
+{
+    QDomDocument doc;
+    QDomElement module = doc.createElement("module");
+    doc.appendChild(module);
+
+    QDomElement conn = PEConnector::authorConnector(doc, module, "connectorA", "", "pcb", "oldpin");
+    BOOST_CHECK_EQUAL(PEConnector::graphicSvgId(conn, "pcb").toStdString(), "oldpin");
+    BOOST_CHECK(PEConnector::rebindGraphic(conn, "pcb", "newpin"));
+    BOOST_CHECK_EQUAL(PEConnector::graphicSvgId(conn, "pcb").toStdString(), "newpin");
+
+    // set a terminalId by editing the <p terminalId> directly, then read it back
+    QDomElement views = conn.firstChildElement("views");
+    QDomElement view = views.firstChildElement("pcb");
+    QDomElement p = view.firstChildElement("p");
+    p.setAttribute("terminalId", "G1terminal");
+    BOOST_CHECK_EQUAL(PEConnector::terminalId(conn, "pcb").toStdString(), "G1terminal");
+}
+
+BOOST_AUTO_TEST_CASE( connector_ensure_creates_container_once )
+{
+    QDomDocument doc;
+    QDomElement module = doc.createElement("module");
+    doc.appendChild(module);
+    QDomElement c1 = PEConnector::ensureConnectors(module);
+    BOOST_CHECK(!c1.isNull());
+    BOOST_CHECK_EQUAL(module.elementsByTagName("connectors").count(), 1);
+    // ensure again returns the same container, not a second one
+    QDomElement c2 = PEConnector::ensureConnectors(module);
+    BOOST_CHECK_EQUAL(module.elementsByTagName("connectors").count(), 1);
+    Q_UNUSED(c2);
+}
+
 
 
 

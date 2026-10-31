@@ -154,6 +154,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pesvgview.h"
 #include "pegraphicsitem.h"
 #include "pedocument.h"
+#include "peprimitive.h"
+#include "peconnector.h"
 #include "kicadmoduledialog.h"
 #include "../debugdialog.h"
 #include "../sketch/breadboardsketchwidget.h"
@@ -520,6 +522,8 @@ void PEMainWindow::moreInitDock()
 	connect(m_peToolView, SIGNAL(pickModeChanged(bool)), this, SLOT(pickModeChanged(bool)));
 	connect(m_peToolView, SIGNAL(busModeChanged(bool)), this, SLOT(busModeChanged(bool)));
 	connect(m_peToolView, SIGNAL(connectorMetadataChanged(ConnectorMetadata *)), this, SLOT(connectorMetadataChanged(ConnectorMetadata *)), Qt::DirectConnection);
+	connect(m_peToolView, SIGNAL(createPrimitiveRequested(const QString &)), this, SLOT(createPrimitiveRequested(const QString &)));
+	connect(m_peToolView, SIGNAL(addConnectorRequested()), this, SLOT(addConnectorRequested()));
 	makeDock(tr("Connectors"), m_peToolView, DockMinWidth, ToolDefaultHeight);
 	m_peToolView->setMinimumSize(DockMinWidth, ToolDefaultHeight);
 
@@ -2856,6 +2860,70 @@ void PEMainWindow::pegiPathAnchorMoved(PEGraphicsItem * pegi, int segmentIndex, 
 void PEMainWindow::pegiPathAnchorChanged(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after)
 {
 	pathAnchorChangedAux(pegi, segmentIndex, before, after);
+}
+
+void PEMainWindow::createPrimitiveRequested(const QString & kind)
+{
+	if (m_currentGraphicsView == nullptr) return;
+	// Map the requested kind string onto the typed element kind.
+	PEElementKind k = PEElementKind::Unknown;
+	if (kind == "rect") k = PEElementKind::Rect;
+	else if (kind == "circle") k = PEElementKind::Circle;
+	else if (kind == "ellipse") k = PEElementKind::Ellipse;
+	else if (kind == "line") k = PEElementKind::Line;
+	else if (kind == "path") k = PEElementKind::Path;
+	else if (kind == "polyline") k = PEElementKind::Polyline;
+	else if (kind == "polygon") k = PEElementKind::Polygon;
+	else if (kind == "text") k = PEElementKind::Text;
+	if (k == PEElementKind::Unknown) return;
+
+	// Generate a unique graphic id from the part's module id + a monotonically-increasing counter.
+	QString id = QString("%1.%2").arg(m_originalModuleID).arg(m_fileIndex);
+
+	// Default geometry: a 10x10 box at the origin (the user resizes/moves via the grips).
+	QRectF rect(0, 0, 10, 10);
+	QDomElement built = PEPrimitive::make(*m_viewThings.value(m_currentGraphicsView->viewID())->document,
+	                                       k, id, QString(), rect, QPointF(0, 0), QPointF(10, 10),
+	                                       QPointF(5, 5), 5.0, QPointF(5, 5), 5.0, 5.0,
+	                                       QList<QPointF>() << QPointF(0, 0) << QPointF(10, 10),
+	                                       QString("M 0 0 L 10 10"), QPointF(0, 0), QString());
+	if (built.isNull()) return;
+
+	QDomDocument frag;
+	frag.appendChild(frag.importNode(built, true));
+	QString xml = frag.toString();
+	auto * command = new AddPrimitiveCommand(this, m_currentGraphicsView, QString(), xml, nullptr);
+	command->setText(tr("Add %1").arg(kind));
+	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
+}
+
+void PEMainWindow::addConnectorRequested()
+{
+	if (m_currentGraphicsView == nullptr) return;
+	// Bind a new connector to the first graphic element of the current view (the graphic the user
+	// most plausibly just created); the terminal handle then rides on that graphic via P2 node-edit.
+	ViewThing * viewThing = m_viewThings.value(m_currentGraphicsView->viewID());
+	if (viewThing == nullptr || viewThing->document == nullptr) return;
+	QDomElement svgRoot = viewThing->document->documentElement();
+	// pick the first child graphic of the svg root as the connector's graphic target.
+	QDomElement target;
+	for (QDomElement e = svgRoot.firstChildElement(); !e.isNull(); e = e.nextSiblingElement()) {
+		if (e.tagName() != "g") { target = e; break; }
+	}
+	if (target.isNull() || target.attribute("id").isEmpty()) {
+		DebugDialog::debug("PEMainWindow::addConnectorRequested: no graphic element with an id to bind");
+		return;
+	}
+
+	QString connectorID = QString("connector%1").arg(m_fileIndex);
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	PEConnector::authorConnector(m_fzpDocument, fzpRoot, connectorID, QString(),
+	                            ViewLayer::viewIDXmlName(m_currentGraphicsView->viewID()),
+	                            target.attribute("id"));
+	m_connectorList.clear();
+	initConnectors(true);
+	updateAssignedConnectors();
+	updateChangeCount(m_currentGraphicsView, 1);
 }
 
 void PEMainWindow::pathAnchorChangedAux(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after)

@@ -106,6 +106,9 @@ public Q_SLOTS:
 	void pegiTerminalPointChanged(PEGraphicsItem *, QPointF before, QPointF after);
 	void pegiPathAnchorMoved(PEGraphicsItem *, int segmentIndex, QPointF anchor);
 	void pegiPathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
+	// P3 create-tool trigger / P4 connector authoring triggers (from PEToolView):
+	void createPrimitiveRequested(const QString & kind);
+	void addConnectorRequested();
 	void switchedConnector(int);
 	void removedConnector(const QDomElement &);
 	void terminalPointChanged(const QString & how);

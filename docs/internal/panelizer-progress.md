@@ -7,6 +7,30 @@
 ---
 
 
+## 2026-10-30 — Session 20 (P3 create-tool trigger + P4 connector authoring, live)
+
+Closed the remaining live gaps and the P4 feature:
+
+- **Create-tool trigger (P3 wire-up):** `PEToolView` gained a graphic-tools row (rect/circle/ellipse/
+  line/path/polyline/polygon buttons + "add connector from selected graphic"). Buttons emit
+  `createPrimitiveRequested(kind)` / `addConnectorRequested()`. `PEMainWindow::createPrimitiveRequested`
+  maps the kind → `PEElementKind`, builds a default 10×10 element via `PEPrimitive::make` (id
+  `moduleID.counter`), and pushes `AddPrimitiveCommand` → `addPrimitive` (from Session 19).
+- **P4 connector semantics:** new pure `PEConnector` (`src/partseditor/peconnector.{h,cpp}`):
+  `ensureConnectors`/`authorConnector`/`rebindGraphic`/`graphicSvgId`/`terminalId` over the fzp
+  `<connector><views><view><p svgId terminalId/></view></views></connector>` block, keyed by the fzp
+  `<view>` xml name (caller passes `ViewLayer::viewIDXmlName`). `PEMainWindow::addConnectorRequested`
+  binds a new connector to the first graphic element's svg id, refreshes `initConnectors(true)` +
+  `updateAssignedConnectors()`. The terminal handle rides on that graphic via the P2 node-edit grips.
+- Golden tests: connector authoring readable, rebind + terminalId round-trip, ensure-container-once;
+  suite now 21 tests, all green.
+
+**Verified:** (full app + aggregate build at commit time — see commit). Local commits only on
+`feature/vector-editor` (not pushed yet).
+
+Next: P5 (library-at-hand: full browse/search of the embedded `parts/` library in-editor).
+
+
 ## 2026-10-30 — Session 19 (P2/P3 live wiring: path grips + primitive create/delete, live)
 
 Wired the live layer the P2/P3 model ops were built for (the "select → drag → undo" and "create →

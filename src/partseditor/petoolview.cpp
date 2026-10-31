@@ -181,6 +181,30 @@ PEToolView::PEToolView(QWidget * parent) : QFrame (parent)
 
 	splitter->addWidget(m_connectorInfoGroupBox);
 
+	// P3 create-tool: a row of buttons, each requesting a new primitive graphic of a kind.
+	auto * graphicToolsFrame = new QFrame;
+	auto * graphicToolsLayout = new QVBoxLayout;
+	auto * graphicLabel = new QLabel(tr("Add graphic (then drag its nodes)"));
+	graphicToolsLayout->addWidget(graphicLabel);
+	auto * graphicRow = new QHBoxLayout;
+	const QList<QPair<QString, QString>> kinds {
+		{ "rect", tr("rect") }, { "circle", tr("circle") }, { "ellipse", tr("ellipse") },
+		{ "line", tr("line") }, { "path", tr("path") }, { "polyline", tr("polyline") }, { "polygon", tr("polygon") }
+	};
+	for (const QPair<QString, QString> & k : kinds) {
+		auto * button = new QPushButton(k.second);
+		button->setProperty("kind", k.first);
+		connect(button, SIGNAL(clicked()), this, SLOT(createPrimitiveSlot()));
+		graphicRow->addWidget(button);
+	}
+	graphicToolsLayout->addLayout(graphicRow);
+	// P4: author a connector bound to the currently-selected graphic element.
+	auto * addConnButton = new QPushButton(tr("Add connector from selected graphic"));
+	connect(addConnButton, SIGNAL(clicked()), this, SLOT(addConnectorSlot()));
+	graphicToolsLayout->addWidget(addConnButton);
+	graphicToolsFrame->setLayout(graphicToolsLayout);
+	mainLayout->addWidget(graphicToolsFrame);
+
 	//this->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	//this->setWidget(splitter);
 
@@ -405,6 +429,18 @@ void PEToolView::removeConnector() {
 	QDomElement element = m_connectorList->at(index);
 	Q_EMIT removedConnector(element);
 
+}
+
+void PEToolView::createPrimitiveSlot() {
+	QObject * s = sender();
+	if (s == nullptr) return;
+	QString kind = s->property("kind").toString();
+	if (kind.isEmpty()) return;
+	Q_EMIT createPrimitiveRequested(kind);
+}
+
+void PEToolView::addConnectorSlot() {
+	Q_EMIT addConnectorRequested();
 }
 
 void PEToolView::setChildrenVisible(bool vis)

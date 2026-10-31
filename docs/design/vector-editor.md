@@ -107,15 +107,18 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   emits `pathAnchorMoved`/`pathAnchorChanged`. `PEMainWindow::pathAnchorChangedAux` wraps the live
   writeback in `EditPathAnchorCommand` (→ `PEMainWindow::editPathAnchor` → DOM `d` + re-render +
   `updateChangeCount`), mirroring the `MoveTerminalPointCommand`/`moveTerminalPoint` pattern.
-- **P3 — primitive creation. ✅ LANDED (model op Session 18; live wiring Session 19).** The live
-  editor had *no* creation path (old `addRectToSvg` etc. parked in obsolete/). `PEPrimitive::make`
-  (`src/partseditor/peprimitive.{h,cpp}`) builds the Fritzing-convention DOM element per kind
-  (rect/line/circle/ellipse/polyline/polygon/path/text); `addTo` appends it so `PEDocument.build`
-  reads it back typed. `PEMainWindow::addPrimitive`/`removePrimitive` (driven by `AddPrimitiveCommand`/
-  `DeletePrimitiveCommand`) insert/remove the element in the view's DOM and re-init the overlay tree.
+- **P3 create-tool trigger. ✅ LANDED (Session 20).** `PEToolView` now has a graphic-tools row (rect/
+  circle/ellipse/line/path/polyline/polygon buttons + an "add connector from selected graphic" button)
+  emitting `createPrimitiveRequested(kind)`/`addConnectorRequested()`; `PEMainWindow::createPrimitiveRequested`
+  builds the element via `PEPrimitive::make` (id = moduleID.counter) and pushes `AddPrimitiveCommand`.
 
-- **P4 — connector semantics.** `connectorXpin`/`terminal` authored in-app; terminal handle becomes
-  a node-edit special case.
+- **P4 — connector semantics. ✅ LANDED (model + live trigger, Session 20).** `PEConnector`
+  (`src/partseditor/peconnector.{h,cpp}`) authors/edits the fzp `<connector><views><view><p svgId
+  terminalId/></view></views></connector>` block purely (`authorConnector`/`rebindGraphic`/
+  `graphicSvgId`/`terminalId`, keyed by the fzp `<view>` xml name). The live `addConnectorRequested`
+  slot binds a new connector to the target graphic's svg id and refreshes the connector list; the
+  terminal handle rides on that graphic via the P2 node-edit grips.
+
 - **P5 — library-at-hand.** Replace the fixed `pe.fzb` with full browse/search of the embedded
   `parts/` library inside the editor so "use an existing part as base" is first-class.
 - **P6 — SVG import.** Import arbitrary SVG, normalize/sanitize into the model; create-from-blank path.
@@ -127,17 +130,15 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P2 + P3 live wiring landed** (Session 19) — path node grips (`PEElement::pathAnchors`
-  → `PEGraphicsItem` grip hit-test/drag → `EditPathAnchorCommand` → `PEMainWindow::editPathAnchor`) and
-  primitive create/delete (`PEMainWindow::addPrimitive`/`removePrimitive` via `AddPrimitiveCommand`/
-  `DeletePrimitiveCommand`). **P3 model op** (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions
-  16–17) — typed path model + `editPathAnchor` node-edit op.
-- Prior: **P1 landed** (Session 15) — live `initSvgTree` drives overlay-item creation off `PEDocument`
-  (behavior-identical). **P0** (Session 14) — typed view + byte-stable round-trip golden. Branch
-  `feature/vector-editor` (local commits, not yet pushed per maintainer choice).
-- Next landable code PR: **P4** (connector semantics — `connectorXpin`/`terminal` authored in-app; the
-  terminal handle becomes a node-edit special case). Note: primitive creation's *tool trigger* (a toolbar
-  "add rect/line/…" action that calls `addPrimitive`) is still unwired — the command+writeback layer is in.
+- **Now:** **P3 create-tool trigger + P4 connector semantics landed** (Session 20) — `PEToolView`
+  graphic-tools row (`createPrimitiveRequested`/`addConnectorRequested`) → `PEMainWindow` slots; pure
+  `PEConnector` fzp authoring (`authorConnector`/`rebindGraphic`/`graphicSvgId`/`terminalId`).
+- Prior: **P2 + P3 live wiring** (Session 19) — path node grips + primitive create/delete. **P3 model**
+  (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions 16–17) — typed path model + `editPathAnchor`.
+  **P1** (Session 15) — live `initSvgTree` drives overlay off `PEDocument`. **P0** (Session 14) — typed
+  view + round-trip golden. Branch `feature/vector-editor` (local commits, not yet pushed per choice).
+- Next: **P5** (library-at-hand — full browse/search of the embedded `parts/` library in-editor).
+
 
 
 
