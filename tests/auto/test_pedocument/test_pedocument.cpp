@@ -24,6 +24,8 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 #include "pepath.h"
 #include "peprimitive.h"
 #include "peconnector.h"
+#include "peblankpart.h"
+#include "pesvgimport.h"
 
 // Parse an SVG string into a QDomDocument (namespace processing, like the live editor).
 static void parseDoc(const QString & svg, QDomDocument & doc) {
@@ -485,3 +487,96 @@ BOOST_AUTO_TEST_CASE( connector_ensure_creates_container_once )
 
 
 
+
+// ---- P6: create-from-blank (PEBlankPart) + svg import (PESvgImport) ----
+
+BOOST_AUTO_TEST_CASE( blank_part_module_is_valid )
+{
+    QDomDocument doc;
+    QDomElement module = PEBlankPart::buildModule(doc, "abc123", "My Resistor");
+    BOOST_CHECK(!module.isNull());
+    BOOST_CHECK_EQUAL(module.attribute("moduleId").toStdString(), "abc123");
+    BOOST_CHECK_EQUAL(module.firstChildElement("title").text().toStdString(), "My Resistor");
+    // four view blocks, each with a <layers image><layer layerId/></layers>
+    QDomElement views = module.firstChildElement("views");
+    BOOST_CHECK(views.firstChildElement("breadboardView").firstChildElement("layers").firstChildElement("layer").isNull() == false);
+    BOOST_CHECK_EQUAL(views.firstChildElement("schematicView").firstChildElement("layers").firstChildElement("layer").attribute("layerId").toStdString(), "schematic");
+    BOOST_CHECK_EQUAL(views.firstChildElement("pcbView").firstChildElement("layers").firstChildElement("layer").attribute("layerId").toStdString(), "pcb");
+    BOOST_CHECK_EQUAL(views.firstChildElement("iconView").firstChildElement("layers").firstChildElement("layer").attribute("layerId").toStdString(), "icon");
+    // image placeholder follows <layerName>/<id>.svg
+    BOOST_CHECK_EQUAL(views.firstChildElement("schematicView").firstChildElement("layers").attribute("image").toStdString(), "schematic/abc123.svg");
+    // an empty connectors container exists
+    BOOST_CHECK(!module.firstChildElement("connectors").isNull());
+}
+
+BOOST_AUTO_TEST_CASE( blank_view_svg_has_layer_group )
+{
+    QString svg = PEBlankPart::blankViewSvg("schematic", QRectF(0, 0, 1, 1));
+    // standard header + a single <g id='schematic'> group, byte-stable round-trip through a fresh parse
+    QDomDocument doc;
+    BOOST_REQUIRE(static_cast<bool>(doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing)));
+    QDomElement g = doc.documentElement().firstChildElement("g");
+    BOOST_CHECK_EQUAL(g.attribute("id").toStdString(), "schematic");
+    // viewBox present (the header carried width/height in inches + viewBox user units)
+    BOOST_CHECK(!doc.documentElement().attribute("viewBox").isEmpty());
+}
+
+BOOST_AUTO_TEST_CASE( import_renames_single_group )
+{
+    const QString foreign =
+        R"(<svg xmlns='http://www.w3.org/2000/svg'><g id='foreignGroup'><rect x='1' y='1'/></g></svg>)";
+    QDomDocument doc;
+    BOOST_REQUIRE(PESvgImport::parse(foreign, doc));
+    QString oldId;
+    QString id = PESvgImport::normalize(doc, "schematic", &oldId);
+    BOOST_CHECK_EQUAL(id.toStdString(), "schematic");
+    BOOST_CHECK_EQUAL(oldId.toStdString(), "foreignGroup");
+    // the group is now the canonical id and holds the rect
+    QDomElement g = doc.documentElement().firstChildElement("g");
+    BOOST_CHECK_EQUAL(g.attribute("id").toStdString(), "schematic");
+    BOOST_CHECK(!g.firstChildElement("rect").isNull());
+}
+
+BOOST_AUTO_TEST_CASE( import_wraps_bare_graphics_into_group )
+{
+    const QString foreign =
+        R"(<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' x='1' y='1'/><line id='l' x1='0' y1='0' x2='2' y2='2'/></svg>)";
+    QDomDocument doc;
+    BOOST_REQUIRE(PESvgImport::parse(foreign, doc));
+    QString id = PESvgImport::normalize(doc, "breadboard", nullptr);
+    BOOST_CHECK_EQUAL(id.toStdString(), "breadboard");
+    QDomElement root = doc.documentElement();
+    QDomElement g = root.firstChildElement("g");
+    BOOST_CHECK_EQUAL(g.attribute("id").toStdString(), "breadboard");
+    // both former top-level graphics are now inside the single group, in document order
+    BOOST_CHECK_EQUAL(g.firstChildElement().toElement().tagName().toStdString(), "rect");
+    BOOST_CHECK_EQUAL(g.firstChildElement().toElement().nextSiblingElement().tagName().toStdString(), "line");
+}
+
+BOOST_AUTO_TEST_CASE( import_strips_gorn_and_is_idempotent )
+{
+    const QString foreign =
+        R"(<svg xmlns='http://www.w3.org/2000/svg'><g id='old' gorn='0 0'><rect x='1' y='1'/></g></svg>)";
+    QDomDocument doc;
+    BOOST_REQUIRE(PESvgImport::parse(foreign, doc));
+    PESvgImport::normalize(doc, "pcb", nullptr);
+    QDomElement g = doc.documentElement().firstChildElement("g");
+    BOOST_CHECK_EQUAL(g.attribute("id").toStdString(), "pcb");
+    BOOST_CHECK(!g.hasAttribute("gorn"));   // gorn stripped
+    // normalizing again is a no-op on the id
+    QDomDocument doc2;
+    BOOST_REQUIRE(PESvgImport::parse(doc.toString(4), doc2));
+    QString oldAgain;
+    QString idAgain = PESvgImport::normalize(doc2, "pcb", &oldAgain);
+    BOOST_CHECK_EQUAL(idAgain.toStdString(), "pcb");
+    BOOST_CHECK_EQUAL(oldAgain.toStdString(), "pcb");   // already canonical -> old id == new id
+}
+
+BOOST_AUTO_TEST_CASE( import_parse_failure_returns_input )
+{
+    const QString garbage = "this is not xml <<<";
+    QDomDocument doc;
+    BOOST_CHECK(!PESvgImport::parse(garbage, doc));
+    // normalizeToString returns the input unchanged on parse failure
+    BOOST_CHECK_EQUAL(PESvgImport::normalizeToString(garbage, "schematic").toStdString(), garbage.toStdString());
+}

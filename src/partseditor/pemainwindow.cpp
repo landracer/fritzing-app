@@ -156,6 +156,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pedocument.h"
 #include "peprimitive.h"
 #include "peconnector.h"
+#include "peblankpart.h"
+#include "pesvgimport.h"
 #include "kicadmoduledialog.h"
 #include "../debugdialog.h"
 #include "../sketch/breadboardsketchwidget.h"
@@ -192,6 +194,10 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QUrl>
 #include <QBuffer>
 #include <QClipboard>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QFileDialog>
 #include <limits>
 
 ////////////////////////////////////////////////////
@@ -572,6 +578,15 @@ void PEMainWindow::createFileMenuActions() {
 	m_reusePCBAct->setStatusTip(tr("Reuse the PCB image in this view"));
 	connect(m_reusePCBAct, SIGNAL(triggered()), this, SLOT(reusePCB()));
 
+	// P6 create-from-blank + svg-import file actions.
+	m_newBlankPartAct = new QAction(tr("New blank part"), this);
+	m_newBlankPartAct->setStatusTip(tr("Start a new empty part from scratch"));
+	connect(m_newBlankPartAct, SIGNAL(triggered()), this, SLOT(createBlankPart()));
+
+	m_importSvgAct = new QAction(tr("Import SVG..."), this);
+	m_importSvgAct->setStatusTip(tr("Import an SVG file as the graphic for the current view"));
+	connect(m_importSvgAct, SIGNAL(triggered()), this, SLOT(importSvgFile()));
+
 }
 
 void PEMainWindow::createActions()
@@ -618,6 +633,9 @@ void PEMainWindow::createFileMenu() {
 	m_fileMenu->addAction(m_reuseBreadboardAct);
 	m_fileMenu->addAction(m_reuseSchematicAct);
 	m_fileMenu->addAction(m_reusePCBAct);
+	m_fileMenu->addSeparator();
+	m_fileMenu->addAction(m_newBlankPartAct);
+	m_fileMenu->addAction(m_importSvgAct);
 
 	//m_fileMenu->addAction(m_revertAct);
 
@@ -2933,6 +2951,79 @@ void PEMainWindow::addConnectorRequested()
 	updateChangeCount(m_currentGraphicsView, 1);
 }
 
+void PEMainWindow::createBlankPart()
+{
+	// P6 create-from-blank: stand up a brand-new, empty part in place of the current base. Build the
+	// blank module into m_fzpDocument with a fresh moduleId, write an empty graphic group per view into
+	// the user parts folder, point each view's <layers image> at its file, then reload the canvases.
+	m_guid = PEBlankPart::newModuleID();
+	m_originalModuleID = m_guid;
+	m_prefix = "prefix0000";
+	m_fileIndex = 0;
+	m_userPartsFolderSvgPath = m_userPartsFolderPath + m_guid + "/";
+	FolderUtils::ensureDirectoryExists(m_userPartsFolderSvgPath);
+
+	// A default 0.5in x 0.5in blank box for the empty graphic group's viewBox.
+	QRectF box(0, 0, 0.5, 0.5);
+	QDomDocument blank;
+	QDomElement module = PEBlankPart::buildModule(blank, m_guid, tr("New Part"));
+	// Rewrite each view's <layers image> to the real svg we write for that view, and give the svg a
+	// single empty graphic group named by the view's base layer (the <g id> convention the editor keys on).
+	QDomElement views = module.firstChildElement("views");
+	Q_FOREACH (ViewLayer::ViewID viewID, m_viewThings.keys()) {
+		const QList<ViewLayer::ViewLayerID> layers = ViewLayer::layersForView(viewID);
+		if (layers.isEmpty()) continue;
+		QString layerName = ViewLayer::viewLayerXmlNameFromID(layers.first());
+		QString svg = PEBlankPart::blankViewSvg(layerName, box);
+		QString actualPath = m_userPartsFolderSvgPath + layerName + "/" + m_guid + ".svg";
+		FolderUtils::ensureDirectoryExists(QFileInfo(actualPath).absolutePath());
+		writeXml(actualPath, svg, false);
+		QDomElement view = views.firstChildElement(ViewLayer::viewIDXmlName(viewID));
+		if (!view.isNull())
+			setImageAttribute(module, actualPath, viewID);
+	}
+
+	m_fzpDocument = blank;
+	m_originalFzpPath = m_userPartsFolderSvgPath + m_guid + ".fzp";
+	m_canSave = true;
+	reload(true);
+	setTitle();
+}
+
+void PEMainWindow::importSvgFile()
+{
+	if (m_currentGraphicsView == nullptr) return;
+	QString path = QFileDialog::getOpenFileName(this, tr("Import SVG"), QString(),
+	                                           tr("SVG (*.svg);;All Files (*)"));
+	if (path.isEmpty()) return;
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly)) {
+		QMessageBox::warning(this, tr("Import SVG"), tr("Unable to open %1").arg(path));
+		return;
+	}
+	QString foreign = QString::fromUtf8(file.readAll());
+	file.close();
+
+	// Normalize the foreign svg into a single canonical graphic group keyed by the current view's base layer.
+	const QList<ViewLayer::ViewLayerID> layers = ViewLayer::layersForView(m_currentGraphicsView->viewID());
+	if (layers.isEmpty()) return;
+	QString layerName = ViewLayer::viewLayerXmlNameFromID(layers.first());
+	QString normalized = PESvgImport::normalizeToString(foreign, layerName);
+
+	// Land the imported graphic in the current view's svg file and point the fzp at it.
+	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(m_currentGraphicsView);
+	FolderUtils::ensureDirectoryExists(QFileInfo(newPath).absolutePath());
+	if (!writeXml(newPath, normalized, false)) {
+		QMessageBox::critical(this, tr("Import SVG"), tr("Unable to write svg to %1").arg(newPath));
+		return;
+	}
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	setImageAttribute(fzpRoot, newPath, m_currentGraphicsView->viewID());
+	m_canSave = true;
+	reload(true);
+	setTitle();
+}
+
 void PEMainWindow::pathAnchorChangedAux(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after)
 {
 	if (pegi == nullptr) return;
@@ -4007,6 +4098,8 @@ void PEMainWindow::updateFileMenu() {
 	m_reuseBreadboardAct->setEnabled(enabled);
 	m_reuseSchematicAct->setEnabled(enabled);
 	m_reusePCBAct->setEnabled(enabled);
+	// P6: create-from-blank is always available; svg-import needs an active view to land the graphic in.
+	if (m_importSvgAct != nullptr) m_importSvgAct->setEnabled(m_currentGraphicsView != nullptr);
 }
 
 void PEMainWindow::setImageAttribute(QDomElement & fzpRoot, const QString & svgPath, ViewLayer::ViewID viewID)

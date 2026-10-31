@@ -50,6 +50,8 @@ HEADERS += \
     src/partseditor/pepath.h \
     src/partseditor/peprimitive.h \
     src/partseditor/peconnector.h \
+    src/partseditor/peblankpart.h \
+    src/partseditor/pesvgimport.h \
     src/partseditor/pehistoryentrydialog.h \
     src/partseditor/pecommands.h \
     src/partseditor/peconnectorsview.h \
@@ -91,6 +93,8 @@ SOURCES += \
     src/partseditor/pepath.cpp \
     src/partseditor/peprimitive.cpp \
     src/partseditor/peconnector.cpp \
+    src/partseditor/peblankpart.cpp \
+    src/partseditor/pesvgimport.cpp \
     src/partseditor/pehistoryentrydialog.cpp \
     src/partseditor/pecommands.cpp \
     src/partseditor/peconnectorsview.cpp \

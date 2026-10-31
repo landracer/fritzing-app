@@ -109,6 +109,9 @@ public Q_SLOTS:
 	// P3 create-tool trigger / P4 connector authoring triggers (from PEToolView):
 	void createPrimitiveRequested(const QString & kind);
 	void addConnectorRequested();
+	// P6 library-at-hand / create-from-blank / svg-import triggers (File menu):
+	void createBlankPart();
+	void importSvgFile();
 	void switchedConnector(int);
 	void removedConnector(const QDomElement &);
 	void terminalPointChanged(const QString & how);
@@ -260,6 +263,8 @@ protected:
 	QAction * m_reuseBreadboardAct = nullptr;
 	QAction * m_reuseSchematicAct = nullptr;
 	QAction * m_reusePCBAct = nullptr;
+	QAction * m_newBlankPartAct = nullptr;   // P6 create-from-blank
+	QAction * m_importSvgAct = nullptr;      // P6 svg-import
 	QAction * m_hideOtherViewsAct = nullptr;
 	QAction * m_convertToTenthAct = nullptr;
 

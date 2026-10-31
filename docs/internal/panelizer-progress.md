@@ -7,7 +7,41 @@
 ---
 
 
+## 2026-10-31 — Session 22 (P6 SVG import + create-from-blank)
+
+Made authoring a part from nothing (or from an arbitrary SVG) possible inside the editor.
+
+- **Judged existing code first (per "reuse if good, else write from scratch").** The only existing
+  "import-ish" surfaces are `S2S` (`src/utils/s2s.cpp` — a *schematic-to-schematic* 0.1in-grid re-lay
+  that *requires* an existing `.fzp` and bails if already converted) and the foreign-format converters
+  (`Kicad2Svg`/`GedaElement2Svg`/`KicadModule2Svg`). None of them import an arbitrary SVG into a new part
+  or create a blank part, so P6 is written fresh (the doc's §C note already calls the static SVG path the
+  "core missing capability").
+- **create-from-blank (`PEBlankPart`, `src/partseditor/peblankpart.{h,cpp}`):** `newModuleID()`,
+  `buildModule(doc, moduleID, title)` (a minimal valid fzp `<module>`: version/date/label/author/title/
+  tags/properties + the four `<view><layers image><layer layerId/></layers></view>` + empty `<connectors/>`),
+  and `blankViewSvg(layerName, box)` (a blank `<svg>` with one empty `<g id=layerName>`). DPI constants
+  inlined as literals so the model stays core+xml-only (no QtWidgets drag).
+- **svg-import (`PESvgImport`, `src/partseditor/pesvgimport.{h,cpp}`):** `parse`/`normalize`/`normalizeToString`
+  — foreign svg → one canonical `<g id=layerName>` (rename the source's single group, else wrap bare
+  top-level graphics), strip `gorn`, byte-stable; parse failure returns input unchanged. Both keyed by the
+  layer xml-name string (like `PEConnector`), decoupled from `ViewLayer`.
+- **Live wiring:** new File-menu actions `createBlankPart()` / `importSvgFile()` in `PEMainWindow` build/
+  normalize into `m_fzpDocument` + per-view svg files (via `layersForView(viewID).first()` →
+  `viewLayerXmlNameFromID`) and `reload()`.
+- **Golden tests:** 6 new `test_pedocument` cases (blank module valid; blank view svg has layer group;
+  import renames single group; import wraps bare graphics; import strips gorn + idempotent; parse-failure
+  passthrough). Suite 21 → 27.
+
+**Verified:** full app build exit 0 (16 MB binary, 0-byte-object count 0); aggregate build exit 0; all
+12 suites green. One live-code brace slip (the inserted slots ate `pathAnchorChangedAux`'s signature line)
+was caught by the compiler and fixed before green.
+
+Next: P7 (units + history + sanitize hardening — unit-aware numeric inputs; full command coverage).
+
+
 ## 2026-10-31 — Session 21 (P5 library-at-hand: full browse/search of the library in-editor)
+
 
 Made "use an existing part as base" first-class inside the parts editor:
 

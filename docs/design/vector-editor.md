@@ -128,7 +128,19 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   routes through the inherited `MainWindow::getPartsEditorNewAnd` → `openNewPartsEditor`, which
   `qobject_cast`s the top-level to this `PEMainWindow` and calls `setInitialItem()` on it — no new
   routing needed; the base part swaps in place.
-- **P6 — SVG import.** Import arbitrary SVG, normalize/sanitize into the model; create-from-blank path.
+- **P6 — SVG import + create-from-blank. ✅ LANDED (Session 22).** Two halves, both pure + golden-tested
+  plus live File-menu wiring:
+  - **create-from-blank** — `PEBlankPart` (`src/partseditor/peblankpart.{h,cpp}`): `newModuleID()` (a fresh
+    id), `buildModule(doc, moduleID, title)` builds a minimal valid fzp `<module>` (version/date/label/
+    author/title/tags/properties + the four `<view>`s' `<layers image><layer layerId/>` + empty `<connectors/>`),
+    and `blankViewSvg(layerName, box)` writes a blank per-view `<svg>` with one empty `<g id=layerName>`.
+  - **svg-import** — `PESvgImport` (`src/partseditor/pesvgimport.{h,cpp}`): `parse`/`normalize`/
+    `normalizeToString` take a foreign svg and normalize it to a single canonical `<g id=layerName>` group
+    (rename the source's single group, or wrap bare graphics), stripping `gorn` and staying byte-stable.
+  Both keyed by the layer xml-name string (like `PEConnector`), decoupled from `ViewLayer`. The live
+  `PEMainWindow::createBlankPart()` / `importSvgFile()` File-menu actions build/normalize into
+  `m_fzpDocument` + per-view svg files and `reload()`.
+
 - **P7 — units + history + sanitize hardening.** Unit-aware numeric inputs; full command coverage.
 
 ## G. Open design decisions
@@ -141,14 +153,17 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   full `HtmlInfoView` + `BinManager` and calls `initStandardBins()` (all bins + Search) instead of the
   old fixed `pe.fzb`; picking "Edit Part" in that dock routes through the inherited
   `getPartsEditorNewAnd`→`openNewPartsEditor`→`setInitialItem`, so any library part is browsable/searchable
-  and loadable as the base in-editor. App builds; all 12 test suites green.
-- Prior: **P3 create-tool trigger + P4 connector semantics** (Session 20) — `PEToolView` graphic-tools
-  row + pure `PEConnector` fzp authoring. **P2 + P3 live wiring** (Session 19) — path node grips +
-  primitive create/delete. **P3 model** (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions
-  16–17) — typed path model + `editPathAnchor`. **P1** (Session 15) — live `initSvgTree` drives overlay
-  off `PEDocument`. **P0** (Session 14) — typed view + round-trip golden. Branch `feature/vector-editor`
-  (pushed to `landracer`).
-- Next: **P6** (SVG import — import arbitrary SVG, normalize/sanitize into the model; create-from-blank path).
+- **Now:** **P6 SVG import + create-from-blank landed** (Session 22) — pure `PEBlankPart` (blank fzp
+  `<module>` + blank view svg) and `PESvgImport` (foreign svg → canonical `<g id=layerName>`, gorn-stripped,
+  byte-stable) with live `PEMainWindow::createBlankPart()`/`importSvgFile()` File-menu actions. App builds;
+  all 12 test suites green (`test_pedocument` 27 tests).
+- Prior: **P5 library-at-hand** (Session 21) — PE dock now constructs `BinManager` + `initStandardBins()`
+  (all bins + Search). **P3 trigger + P4 connector semantics** (Session 20) — `PEToolView` graphic-tools row
+  + pure `PEConnector` fzp authoring. **P2 + P3 live wiring** (Session 19) — path node grips + primitive
+  create/delete. **P3 model** (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions 16–17) — typed
+  path model + `editPathAnchor`. **P1** (Session 15) — live `initSvgTree` drives overlay off `PEDocument`.
+  **P0** (Session 14) — typed view + round-trip golden. Branch `feature/vector-editor` (pushed to `landracer`).
+- Next: **P7** (units + history + sanitize hardening — unit-aware numeric inputs; full command coverage).
 
 
 
