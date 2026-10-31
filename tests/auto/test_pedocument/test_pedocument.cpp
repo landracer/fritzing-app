@@ -26,6 +26,7 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 #include "peconnector.h"
 #include "peblankpart.h"
 #include "pesvgimport.h"
+#include "peunits.h"
 
 // Parse an SVG string into a QDomDocument (namespace processing, like the live editor).
 static void parseDoc(const QString & svg, QDomDocument & doc) {
@@ -579,4 +580,142 @@ BOOST_AUTO_TEST_CASE( import_parse_failure_returns_input )
     BOOST_CHECK(!PESvgImport::parse(garbage, doc));
     // normalizeToString returns the input unchanged on parse failure
     BOOST_CHECK_EQUAL(PESvgImport::normalizeToString(garbage, "schematic").toStdString(), garbage.toStdString());
+}
+
+// ---- P7 units: pure px<->user-unit conversion (the math PEUtils now delegates to) ----
+
+BOOST_AUTO_TEST_CASE( units_inch_conversion )
+{
+    // 90 user units (the Fritzing svg dpi) == 1 inch
+    BOOST_CHECK_CLOSE(PEUnits::pxToUnits(90.0, "in"), 1.0, 1e-9);
+    BOOST_CHECK_CLOSE(PEUnits::pxToUnits(45.0, "in"), 0.5, 1e-9);
+    BOOST_CHECK_CLOSE(PEUnits::unitsToPx(1.0, "in"), 90.0, 1e-9);
+}
+
+BOOST_AUTO_TEST_CASE( units_mm_conversion_and_roundtrip )
+{
+    // 90 user units == 1 inch == 25.4 mm
+    BOOST_CHECK_CLOSE(PEUnits::pxToUnits(90.0, "mm"), 25.4, 1e-9);
+    BOOST_CHECK_CLOSE(PEUnits::unitsToPx(25.4, "mm"), 90.0, 1e-9);
+    // round-trip stability: px -> mm -> px == px
+    BOOST_CHECK_CLOSE(PEUnits::unitsToPx(PEUnits::pxToUnits(12.34, "mm"), "mm"), 12.34, 1e-9);
+}
+
+BOOST_AUTO_TEST_CASE( units_unknown_unit_is_identity )
+{
+    // an unrecognized unit name passes through unchanged (as PEUtils did before extraction)
+    BOOST_CHECK_CLOSE(PEUnits::pxToUnits(7.5, "px"), 7.5, 1e-9);
+    BOOST_CHECK_CLOSE(PEUnits::unitsToPx(7.5, "px"), 7.5, 1e-9);
+    BOOST_CHECK_EQUAL(PEUnits::pxToUnitsStr(90.0, "in").toStdString(), "1");
+}
+
+// ---- P7 move/resize: pure geometry rewrite of a typed element's attributes ----
+
+BOOST_AUTO_TEST_CASE( moveBy_rect_shifts_x_y )
+{
+    QDomDocument doc;
+    QDomElement rect = doc.createElement("rect");
+    rect.setAttribute("x", "10");
+    rect.setAttribute("y", "20");
+    rect.setAttribute("width", "5");
+    rect.setAttribute("height", "6");
+    PEElement pe;
+    pe.kind = PEElementKind::Rect;
+    pe.element = rect;
+    BOOST_CHECK(pe.moveBy(QPointF(3, -4)));
+    BOOST_CHECK_EQUAL(rect.attribute("x").toStdString(), "13");
+    BOOST_CHECK_EQUAL(rect.attribute("y").toStdString(), "16");
+    // width/height unchanged by a pure translate
+    BOOST_CHECK_EQUAL(rect.attribute("width").toStdString(), "5");
+    BOOST_CHECK_EQUAL(rect.attribute("height").toStdString(), "6");
+}
+
+BOOST_AUTO_TEST_CASE( moveBy_line_shifts_both_endpoints )
+{
+    QDomDocument doc;
+    QDomElement line = doc.createElement("line");
+    line.setAttribute("x1", "0"); line.setAttribute("y1", "0");
+    line.setAttribute("x2", "10"); line.setAttribute("y2", "10");
+    PEElement pe;
+    pe.kind = PEElementKind::Line;
+    pe.element = line;
+    BOOST_CHECK(pe.moveBy(QPointF(5, 5)));
+    BOOST_CHECK_EQUAL(line.attribute("x1").toStdString(), "5");
+    BOOST_CHECK_EQUAL(line.attribute("y2").toStdString(), "15");
+}
+
+BOOST_AUTO_TEST_CASE( moveBy_polygon_shifts_every_point )
+{
+    QDomDocument doc;
+    QDomElement poly = doc.createElement("polygon");
+    poly.setAttribute("points", "0,0 10,0 10,10");
+    PEElement pe;
+    pe.kind = PEElementKind::Polygon;
+    pe.element = poly;
+    BOOST_CHECK(pe.moveBy(QPointF(1, 2)));
+    BOOST_CHECK_EQUAL(poly.attribute("points").toStdString(), "1,2 11,2 11,12");
+}
+
+BOOST_AUTO_TEST_CASE( moveBy_group_is_not_geometric_returns_false )
+{
+    QDomDocument doc;
+    QDomElement g = doc.createElement("g");
+    PEElement pe;
+    pe.kind = PEElementKind::Group;
+    pe.element = g;
+    BOOST_CHECK(!pe.moveBy(QPointF(1, 1)));
+}
+
+BOOST_AUTO_TEST_CASE( moveBy_path_shifts_absolute_anchor )
+{
+    QDomDocument doc;
+    QDomElement path = doc.createElement("path");
+    path.setAttribute("d", "M 0 0 L 10 10");
+    PEElement pe;
+    pe.kind = PEElementKind::Path;
+    pe.element = path;
+    BOOST_CHECK(pe.moveBy(QPointF(2, 3)));
+    // absolute anchors shift by the delta
+    PEElement readBack;
+    readBack.kind = PEElementKind::Path;
+    readBack.element = path;
+    QList<QPointF> anchors = readBack.pathAnchors();
+    BOOST_REQUIRE(anchors.count() >= 2);
+    BOOST_CHECK_CLOSE(anchors.at(0).x(), 2.0, 1e-6);
+    BOOST_CHECK_CLOSE(anchors.at(0).y(), 3.0, 1e-6);
+    BOOST_CHECK_CLOSE(anchors.at(1).x(), 12.0, 1e-6);
+    BOOST_CHECK_CLOSE(anchors.at(1).y(), 13.0, 1e-6);
+}
+
+BOOST_AUTO_TEST_CASE( resizeRect_replaces_box_and_nonrect_returns_false )
+{
+    QDomDocument doc;
+    QDomElement rect = doc.createElement("rect");
+    rect.setAttribute("x", "0"); rect.setAttribute("y", "0");
+    rect.setAttribute("width", "1"); rect.setAttribute("height", "1");
+    PEElement pe;
+    pe.kind = PEElementKind::Rect;
+    pe.element = rect;
+    BOOST_CHECK(pe.resizeRect(QRectF(7, 8, 9, 10)));
+    BOOST_CHECK_EQUAL(rect.attribute("x").toStdString(), "7");
+    BOOST_CHECK_EQUAL(rect.attribute("width").toStdString(), "9");
+    BOOST_CHECK_EQUAL(rect.attribute("height").toStdString(), "10");
+
+    // a non-rect cannot be resized at the attribute level
+    QDomElement circle = doc.createElement("circle");
+    circle.setAttribute("cx", "0"); circle.setAttribute("cy", "0"); circle.setAttribute("r", "5");
+    PEElement ce;
+    ce.kind = PEElementKind::Circle;
+    ce.element = circle;
+    BOOST_CHECK(!ce.resizeRect(QRectF(0, 0, 1, 1)));
+}
+
+BOOST_AUTO_TEST_CASE( kindForElement_maps_tag_to_kind )
+{
+    QDomDocument doc;
+    BOOST_CHECK(PEPrimitive::kindForElement(doc.createElement("rect"))   == PEElementKind::Rect);
+    BOOST_CHECK(PEPrimitive::kindForElement(doc.createElement("path"))   == PEElementKind::Path);
+    BOOST_CHECK(PEPrimitive::kindForElement(doc.createElement("g"))      == PEElementKind::Group);
+    BOOST_CHECK(PEPrimitive::kindForElement(doc.createElement("bogus"))  == PEElementKind::Unknown);
+    BOOST_CHECK(PEPrimitive::kindForElement(QDomElement())               == PEElementKind::Unknown);
 }

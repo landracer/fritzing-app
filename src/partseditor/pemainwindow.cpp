@@ -2874,6 +2874,68 @@ void PEMainWindow::removePrimitive(SketchWidget * sketchWidget, const QString & 
 	updateChangeCount(sketchWidget, changeDirection);
 }
 
+// P7 live wiring: move/resize a graphic element (by svg id) -> rewrite its geometry attrs, then
+// re-render the view. Mirrors editPathAnchor (find the element by id, mutate, rewrite svg + fzp).
+void PEMainWindow::moveGraphic(SketchWidget * sketchWidget, const QString & svgID, QPointF delta, int changeDirection)
+{
+	if (svgID.isEmpty()) return;
+	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
+	if (viewThing == nullptr || viewThing->document == nullptr) return;
+	QDomDocument * svgDoc = viewThing->document;
+	QDomElement svgRoot = svgDoc->documentElement();
+	QDomElement target = TextUtils::findElementWithAttribute(svgRoot, "id", svgID);
+	if (target.isNull()) {
+		DebugDialog::debug(QString("Unable to find svg graphic element %1").arg(svgID));
+		return;
+	}
+
+	PEElement pe;
+	pe.kind = PEPrimitive::kindForElement(target);
+	pe.element = target;
+	if (!pe.moveBy(delta)) return;
+
+	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+	FolderUtils::ensureDirectoryExists(newPath);
+	QString svg = TextUtils::svgNSOnly(svgDoc->toString());
+	writeXml(newPath, removeGorn(svg), true);
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
+
+	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
+
+	updateChangeCount(sketchWidget, changeDirection);
+}
+
+void PEMainWindow::resizeGraphic(SketchWidget * sketchWidget, const QString & svgID, QRectF to, int changeDirection)
+{
+	if (svgID.isEmpty()) return;
+	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
+	if (viewThing == nullptr || viewThing->document == nullptr) return;
+	QDomDocument * svgDoc = viewThing->document;
+	QDomElement svgRoot = svgDoc->documentElement();
+	QDomElement target = TextUtils::findElementWithAttribute(svgRoot, "id", svgID);
+	if (target.isNull()) {
+		DebugDialog::debug(QString("Unable to find svg graphic element %1").arg(svgID));
+		return;
+	}
+
+	PEElement pe;
+	pe.kind = PEElementKind::Rect;   // resize is defined for a <rect> at the attribute level
+	pe.element = target;
+	if (!pe.resizeRect(to)) return;
+
+	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
+	FolderUtils::ensureDirectoryExists(newPath);
+	QString svg = TextUtils::svgNSOnly(svgDoc->toString());
+	writeXml(newPath, removeGorn(svg), true);
+	QDomElement fzpRoot = m_fzpDocument.documentElement();
+	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
+
+	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
+
+	updateChangeCount(sketchWidget, changeDirection);
+}
+
 void PEMainWindow::pegiPathAnchorMoved(PEGraphicsItem * pegi, int segmentIndex, QPointF anchor)
 {
 	// live drag feedback: re-render the item so the grip tracks the cursor (no undo yet)
@@ -4353,25 +4415,52 @@ void PEMainWindow::itemMovedSlot(ItemBase * itemBase) {
 	if (itemBase == nullptr) return;
 	if (itemBase->viewID() != m_currentGraphicsView->viewID()) return;
 
-	Q_FOREACH (PEGraphicsItem * pegi, getPegiList(m_currentGraphicsView)) {
-		if (pegi->itemBase() == itemBase) {
-			pegi->setPos(itemBase->pos() + pegi->offset());
-		}
+	QList<PEGraphicsItem *> pegiList = getPegiList(m_currentGraphicsView);
+	Q_FOREACH (PEGraphicsItem * pegi, pegiList) {
+		if (pegi->itemBase() != itemBase) continue;
+		// keep the overlay grip on top of the moved graphic
+		pegi->setPos(itemBase->pos() + pegi->offset());
 	}
-
+	// command-cover the move: find the moved graphic element (a top-level graphic whose pegi tracks
+	// it) and translate its geometry attrs by the item's position delta, so the move is undoable.
+	QDomElement element;
+	Q_FOREACH (PEGraphicsItem * pegi, pegiList) {
+		if (pegi->itemBase() == itemBase) { element = pegi->element(); break; }
+	}
+	if (element.isNull()) return;
+	QString svgID = element.attribute("id");
+	if (svgID.isEmpty()) return;
+	SketchWidget * sketchWidget = m_currentGraphicsView;
+	QPointF delta = itemBase->pos();
+	auto * command = new MoveGraphicCommand(this, sketchWidget, svgID, delta, nullptr);
+	command->setText(tr("Move graphic"));
+	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
 }
 
 void PEMainWindow::resizedSlot(ItemBase * itemBase) {
 	if (itemBase == nullptr) return;
 	if (itemBase->viewID() != m_currentGraphicsView->viewID()) return;
 
-	Q_FOREACH (PEGraphicsItem * pegi, getPegiList(m_currentGraphicsView)) {
-		if (pegi->itemBase() == itemBase) {
-			pegi->setPos(itemBase->pos() + pegi->offset());
-			QRectF bounds = itemBase->boundingRect();
-			pegi->setRect(bounds);
-		}
+	QList<PEGraphicsItem *> pegiList = getPegiList(m_currentGraphicsView);
+	QDomElement element;
+	Q_FOREACH (PEGraphicsItem * pegi, pegiList) {
+		if (pegi->itemBase() != itemBase) continue;
+		pegi->setPos(itemBase->pos() + pegi->offset());
+		QRectF bounds = itemBase->boundingRect();
+		pegi->setRect(bounds);
+		element = pegi->element();
 	}
+	if (element.isNull()) return;
+	QString svgID = element.attribute("id");
+	if (svgID.isEmpty()) return;
+	SketchWidget * sketchWidget = m_currentGraphicsView;
+	QRectF before = element.attribute("x").isEmpty() ? QRectF()
+	                           : QRectF(element.attribute("x").toDouble(), element.attribute("y").toDouble(),
+	                                    element.attribute("width").toDouble(), element.attribute("height").toDouble());
+	QRectF to = itemBase->boundingRect();
+	auto * command = new ResizeGraphicCommand(this, sketchWidget, svgID, before, to, nullptr);
+	command->setText(tr("Resize graphic"));
+	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
 }
 
 void PEMainWindow::clickedItemCandidateSlot(QGraphicsItem * item, bool & ok) {

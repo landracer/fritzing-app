@@ -141,7 +141,22 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
   `PEMainWindow::createBlankPart()` / `importSvgFile()` File-menu actions build/normalize into
   `m_fzpDocument` + per-view svg files and `reload()`.
 
-- **P7 — units + history + sanitize hardening.** Unit-aware numeric inputs; full command coverage.
+- **P7 — units + history + sanitize hardening. ✅ LANDED (Session 23).** Two halves, both pure +
+  golden-tested plus live wiring:
+  - **units** — `PEUnits` (`src/partseditor/peunits.{h,cpp}`, core+xml-only): `pxToUnits`/`unitsToPx`/
+    `pxToUnitsStr` (the px↔user-unit math: `/90` for inches, `*25.4/90` for mm; unknown unit = identity
+    passthrough). `PEUtils::convertUnits`/`unconvertUnits`/`convertUnitsStr` now *delegate* to it
+    (behavior-identical; the inline math they used is now isolated into the testable pure core).
+  - **move/resize command coverage** — `PEElement::moveBy(delta)` (translate a graphic's geometry:
+    rect x/y, line x1..y2, circle/ellipse cx/cy, text x/y, every polyline/polygon point, and — re-encoded
+    in the source's own abs/rel convention — each `<path>` anchor) and `PEElement::resizeRect(to)` (replace
+    a `<rect>`'s box; defined for rect only, since the other kinds store a position, not a size). Both
+    rewrite the DOM element in place. Live: new `PEMainWindow::moveGraphic`/`resizeGraphic` model ops
+    (find-by-id → mutate → rewrite svg + fzp → re-init overlay) and `MoveGraphicCommand`/
+    `ResizeGraphicCommand` (`pecommands.{h,cpp}`), pushed from `itemMovedSlot`/`resizedSlot`. A grip-drag on
+    a graphic now rewrites the underlying SVG (undoable + persisted) rather than just moving the overlay.
+    `PEPrimitive::kindForElement(element)` (public) recovers an element's kind from its tag so the live ops
+    dispatch moveBy/resizeRect per kind. `test_pedocument` grew 27 → 37 (10 new P7 cases).
 
 ## G. Open design decisions
 - Freehand capture: polyline-of-segments vs auto-smooth (match svgedit: store as `L`-segments until edited).
@@ -149,21 +164,21 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P5 library-at-hand landed** (Session 21) — `PEMainWindow::initDock()` now constructs the
-  full `HtmlInfoView` + `BinManager` and calls `initStandardBins()` (all bins + Search) instead of the
-  old fixed `pe.fzb`; picking "Edit Part" in that dock routes through the inherited
-  `getPartsEditorNewAnd`→`openNewPartsEditor`→`setInitialItem`, so any library part is browsable/searchable
-- **Now:** **P6 SVG import + create-from-blank landed** (Session 22) — pure `PEBlankPart` (blank fzp
-  `<module>` + blank view svg) and `PESvgImport` (foreign svg → canonical `<g id=layerName>`, gorn-stripped,
-  byte-stable) with live `PEMainWindow::createBlankPart()`/`importSvgFile()` File-menu actions. App builds;
-  all 12 test suites green (`test_pedocument` 27 tests).
-- Prior: **P5 library-at-hand** (Session 21) — PE dock now constructs `BinManager` + `initStandardBins()`
-  (all bins + Search). **P3 trigger + P4 connector semantics** (Session 20) — `PEToolView` graphic-tools row
-  + pure `PEConnector` fzp authoring. **P2 + P3 live wiring** (Session 19) — path node grips + primitive
-  create/delete. **P3 model** (Session 18) — `PEPrimitive` typed builder. **P2** (Sessions 16–17) — typed
-  path model + `editPathAnchor`. **P1** (Session 15) — live `initSvgTree` drives overlay off `PEDocument`.
-  **P0** (Session 14) — typed view + round-trip golden. Branch `feature/vector-editor` (pushed to `landracer`).
-- Next: **P7** (units + history + sanitize hardening — unit-aware numeric inputs; full command coverage).
+- **Now:** **P7 units + history + sanitize landed** (Session 23) — pure `PEUnits` (px↔user-unit math that
+  `PEUtils` now delegates to) and pure `PEElement::moveBy`/`resizeRect` (per-kind geometry rewrite,
+  path anchors re-encoded in the source's abs/rel convention) with live `PEMainWindow::moveGraphic`/
+  `resizeGraphic` ops + `MoveGraphicCommand`/`ResizeGraphicCommand` so a grip-drag on a graphic rewrites
+  the SVG undoably (not just the overlay). `test_pedocument` 27 → 37. App builds; all 12 suites green.
+  **This completes the P0–P7 roadmap** as scoped.
+- Prior: **P6 SVG import + create-from-blank** (Session 22) — pure `PEBlankPart`/`PESvgImport` + live
+  File-menu actions. **P5 library-at-hand** (Session 21) — PE dock constructs `BinManager` +
+  `initStandardBins()` (all bins + Search). **P3 trigger + P4 connector semantics** (Session 20).
+  **P2 + P3 live wiring** (Session 19). **P3 model** (Session 18). **P2** (Sessions 16–17). **P1**
+  (Session 15). **P0** (Session 14). Branch `feature/vector-editor` (pushed to `landracer`).
+- Next: roadmap **complete** (P0–P7 landed). Follow-ups to consider when a concrete need arises: a live
+  unit-toggle UI wired to `PEUnits` (the toggle is not yet exposed in `PEToolView`/`PESvgView`); a live
+  numeric-coordinate *input* field (the model supports it via `moveGraphic`/`resizeGraphic`; only the
+  grip-drag trigger is wired today).
 
 
 

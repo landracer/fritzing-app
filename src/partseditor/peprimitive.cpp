@@ -104,3 +104,21 @@ QDomElement PEPrimitive::addTo(QDomDocument & doc, QDomElement & parent, PEEleme
     parent.appendChild(el);
     return el;
 }
+
+// P7: tag-name -> kind (the same mapping PEDocument.build's internal kindForTag uses). Public so the
+// live move/resize wiring can recover an element's kind from the DOM node it found by id.
+PEElementKind PEPrimitive::kindForElement(const QDomElement & element)
+{
+    if (element.isNull()) return PEElementKind::Unknown;
+    const QString tag = element.tagName();
+    if (tag == QLatin1String("g"))        return PEElementKind::Group;
+    if (tag == QLatin1String("rect"))      return PEElementKind::Rect;
+    if (tag == QLatin1String("circle"))    return PEElementKind::Circle;
+    if (tag == QLatin1String("ellipse"))   return PEElementKind::Ellipse;
+    if (tag == QLatin1String("line"))      return PEElementKind::Line;
+    if (tag == QLatin1String("polyline"))  return PEElementKind::Polyline;
+    if (tag == QLatin1String("polygon"))   return PEElementKind::Polygon;
+    if (tag == QLatin1String("path"))      return PEElementKind::Path;
+    if (tag == QLatin1String("text"))      return PEElementKind::Text;
+    return PEElementKind::Unknown;
+}

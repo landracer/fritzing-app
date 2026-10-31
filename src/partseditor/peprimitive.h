@@ -61,6 +61,11 @@ QDomElement make(QDomDocument & doc, PEElementKind kind, const QString & id, con
 QDomElement addTo(QDomDocument & doc, QDomElement & parent, PEElementKind kind,
                   const QString & id, const QString & cssClass, const QRectF & rect);
 
+// P7: map a DOM element's tag name to its modelled kind (rect/line/circle/.../path/text). Returns
+// Unknown for a group or unrecognized tag. Exposed so the live move/resize wiring can recover the
+// element's kind from the DOM node it found by id (the same mapping PEDocument.build uses internally).
+PEElementKind kindForElement(const QDomElement & element);
+
 }   // namespace PEPrimitive
 
 #endif   // PEPRIMITIVE_H

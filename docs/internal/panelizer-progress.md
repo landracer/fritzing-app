@@ -7,7 +7,42 @@
 ---
 
 
+## 2026-11-01 — Session 23 (P7 units + history + sanitize hardening)
+
+Closed out the roadmap: isolated the unit math into a pure, testable core, and made graphic move/resize
+undoable + persisted (not just overlay-grip moves).
+
+- **Units (pure):** `PEUnits` (`src/partseditor/peunits.{h,cpp}`, core+xml only) carries the px↔user-unit
+  math that `PEUtils` used to do inline (`/90` for inches, `*25.4/90` for mm; unknown unit = identity).
+  `PEUtils::convertUnits`/`unconvertUnits`/`convertUnitsStr` now *delegate* to it — byte-for-byte identical
+  behavior, but the math is now golden-testable (PEUtils itself drags QWidget/Connector/graphicsutils).
+- **Move/resize (pure + live):** `PEElement::moveBy(delta)` translates a graphic's geometry attrs per kind
+  (rect x/y, line x1..y2, circle/ellipse cx/cy, text x/y, every polyline/polygon point; a `<path>` re-encodes
+  each anchor in the source's own abs/rel convention — a relative arg is target-cursor, and shifting both by
+  delta shifts the target by delta, so relative encoding is preserved). `PEElement::resizeRect(to)` replaces
+  a `<rect>`'s box (defined for rect only; the other kinds store a position, not a size). Live: new
+  `PEMainWindow::moveGraphic`/`resizeGraphic` model ops (find-by-id → mutate → rewrite svg+fzp → re-init
+  overlay, mirroring `editPathAnchor`) and `MoveGraphicCommand`/`ResizeGraphicCommand`, pushed from
+  `itemMovedSlot`/`resizedSlot`. `PEPrimitive::kindForElement` (made public) recovers an element's kind from
+  its tag so the live ops dispatch per kind.
+- **Golden tests:** 10 new `test_pedocument` cases (in/mm conversions + round-trip stability; unknown-unit
+  identity; moveBy rect/line/polygon/path; moveBy group returns false; resizeRect rect + non-rect false;
+  kindForElement mapping). Suite 27 → 37.
+
+**Verified:** full app clean rebuild exit 0 (16 MB binary, 0-byte-object count 0); aggregate test build
+exit 0; all 12 suites green (pedocument 37, panelizer 6/0, gerberpreview 8/0, 9 others "no errors"). The
+first P7 build link failed identically to the documented false failure — 20 truncated 0-byte `.o` files
+from a foreground make that hit the 30s tool timeout and was killed mid-compile; a clean `rm -rf build &&
+qmake6 && make -j` went green. Not a regression; documented in the onboarding notes.
+
+**Roadmap status: P0–P7 complete.** Remaining follow-ups (not started, only when a concrete need arises): a
+live unit-toggle UI (the `PEUtils::Units` toggle isn't exposed in `PEToolView`/`PESvgView` yet — today
+`"mm"` is the fixed default), and a live numeric-coordinate input field (the model already supports
+coordinate edits via `moveGraphic`/`resizeGraphic`; only the grip-drag trigger is wired today).
+
+
 ## 2026-10-31 — Session 22 (P6 SVG import + create-from-blank)
+
 
 Made authoring a part from nothing (or from an arbitrary SVG) possible inside the editor.
 

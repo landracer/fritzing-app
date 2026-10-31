@@ -101,6 +101,115 @@ QList<QPointF> PEElement::pathAnchors() const {
     return path.anchors().toList();
 }
 
+// P7: translate a graphic by rewriting its geometry attributes. Absolute-coordinate kinds
+// (rect/line/circle/ellipse/text) shift their attributes; polyline/polygon shift each point pair;
+// a <path> decodes 'd' and, walking with a running cursor, shifts each segment's anchor in the
+// source's own abs/rel encoding (a relative segment's arg is target-cursor, and shifting both by
+// the same delta shifts the target by exactly the delta, so relative encoding is preserved). A
+// group/unknown is not geometric and returns false.
+bool PEElement::moveBy(QPointF delta) {
+    switch (kind) {
+    case PEElementKind::Rect: {
+        bool ok = false;
+        double x = element.attribute(QStringLiteral("x")).toDouble(&ok);
+        if (!ok) return false;
+        double y = element.attribute(QStringLiteral("y")).toDouble(&ok);
+        if (!ok) return false;
+        element.setAttribute(QStringLiteral("x"), QString::number(x + delta.x()));
+        element.setAttribute(QStringLiteral("y"), QString::number(y + delta.y()));
+        return true;
+    }
+    case PEElementKind::Line: {
+        bool ok = false;
+        double x1 = element.attribute(QStringLiteral("x1")).toDouble(&ok); if (!ok) return false;
+        double y1 = element.attribute(QStringLiteral("y1")).toDouble(&ok); if (!ok) return false;
+        double x2 = element.attribute(QStringLiteral("x2")).toDouble(&ok); if (!ok) return false;
+        double y2 = element.attribute(QStringLiteral("y2")).toDouble(&ok); if (!ok) return false;
+        element.setAttribute(QStringLiteral("x1"), QString::number(x1 + delta.x()));
+        element.setAttribute(QStringLiteral("y1"), QString::number(y1 + delta.y()));
+        element.setAttribute(QStringLiteral("x2"), QString::number(x2 + delta.x()));
+        element.setAttribute(QStringLiteral("y2"), QString::number(y2 + delta.y()));
+        return true;
+    }
+    case PEElementKind::Circle:
+    case PEElementKind::Ellipse: {
+        bool ok = false;
+        double cx = element.attribute(QStringLiteral("cx")).toDouble(&ok); if (!ok) return false;
+        double cy = element.attribute(QStringLiteral("cy")).toDouble(&ok); if (!ok) return false;
+        element.setAttribute(QStringLiteral("cx"), QString::number(cx + delta.x()));
+        element.setAttribute(QStringLiteral("cy"), QString::number(cy + delta.y()));
+        return true;
+    }
+    case PEElementKind::Text: {
+        bool ok = false;
+        double x = element.attribute(QStringLiteral("x")).toDouble(&ok); if (!ok) return false;
+        double y = element.attribute(QStringLiteral("y")).toDouble(&ok); if (!ok) return false;
+        element.setAttribute(QStringLiteral("x"), QString::number(x + delta.x()));
+        element.setAttribute(QStringLiteral("y"), QString::number(y + delta.y()));
+        return true;
+    }
+    case PEElementKind::Polyline:
+    case PEElementKind::Polygon: {
+        const QString pts = element.attribute(QStringLiteral("points"));
+        if (pts.isEmpty()) return false;
+        const QStringList pairs = pts.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        QStringList out;
+        for (const QString & pair : pairs) {
+            const QStringList xy = pair.split(QLatin1Char(','), Qt::SkipEmptyParts);
+            if (xy.count() != 2) return false;
+            bool ok = false;
+            double x = xy.at(0).toDouble(&ok); if (!ok) return false;
+            double y = xy.at(1).toDouble(&ok); if (!ok) return false;
+            out << QStringLiteral("%1,%2").arg(QString::number(x + delta.x()),
+                                               QString::number(y + delta.y()));
+        }
+        if (out.isEmpty()) return false;
+        element.setAttribute(QStringLiteral("points"), out.join(QStringLiteral(" ")));
+        return true;
+    }
+    case PEElementKind::Path: {
+        const QString d = element.attribute(QStringLiteral("d"));
+        if (d.isEmpty()) return false;
+        PEPath path = PEPath::fromD(d);
+        if (!path.ok()) return false;
+        const QVector<PEPathSegment> segs = path.segments();
+        QVector<PEPathSegment> out;
+        QPointF cursor(0, 0);
+        for (const PEPathSegment & s : segs) {
+            PEPathSegment ns = s;
+            const QPointF oldAnchor = s.anchor(cursor);
+            const QPointF newAnchor = oldAnchor + delta;
+            if (s.relative && !s.args.isEmpty()) {
+                // preserve relative encoding: arg = (target+delta) - (cursor+delta)
+                ns.args = { newAnchor.x() - (cursor.x() + delta.x()),
+                            newAnchor.y() - (cursor.y() + delta.y()) };
+            } else if (s.args.count() >= 2) {
+                ns.args = { newAnchor.x(), newAnchor.y() };
+            }
+            out.append(ns);
+            cursor = oldAnchor;
+        }
+        element.setAttribute(QStringLiteral("d"), PEPath::fromSegments(out).serialize());
+        return true;
+    }
+    case PEElementKind::Group:
+    case PEElementKind::Unknown:
+    default:
+        return false;   // not a geometric primitive
+    }
+}
+
+// P7: resize a <rect> by replacing its box. Non-rect kinds store only a position (no width/height
+// to rescale), so resize is undefined for them at the attribute level -- return false.
+bool PEElement::resizeRect(QRectF to) {
+    if (kind != PEElementKind::Rect) return false;
+    element.setAttribute(QStringLiteral("x"), QString::number(to.x()));
+    element.setAttribute(QStringLiteral("y"), QString::number(to.y()));
+    element.setAttribute(QStringLiteral("width"), QString::number(to.width()));
+    element.setAttribute(QStringLiteral("height"), QString::number(to.height()));
+    return true;
+}
+
 void PEDocument::build(const QDomDocument & doc) {
     m_elements.clear();
     m_dom = const_cast<QDomDocument *>(&doc);

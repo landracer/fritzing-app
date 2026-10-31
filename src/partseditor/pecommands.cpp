@@ -492,3 +492,75 @@ QString DeletePrimitiveCommand::getParamString() const {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+MoveGraphicCommand::MoveGraphicCommand(PEMainWindow * peMainWindow, SketchWidget * sketchWidget, const QString & svgID, QPointF delta, QUndoCommand *parent)
+	: PEBaseCommand(peMainWindow, parent)
+{
+	m_sketchWidget = sketchWidget;
+	m_svgID = svgID;
+	m_delta = delta;
+}
+
+void MoveGraphicCommand::undo()
+{
+	m_peMainWindow->moveGraphic(m_sketchWidget, m_svgID, -m_delta, -1);
+}
+
+void MoveGraphicCommand::redo()
+{
+	if (m_skipFirstRedo) {
+		m_skipFirstRedo = false;
+	}
+	else {
+		m_peMainWindow->moveGraphic(m_sketchWidget, m_svgID, m_delta, 1);
+	}
+}
+
+QString MoveGraphicCommand::getParamString() const {
+	return "MoveGraphicCommand " +
+	       QString(" vid:%1 svgid:%2 dx:%3 dy:%4")
+	       .arg(m_sketchWidget->viewID())
+	       .arg(m_svgID)
+	       .arg(m_delta.x()).arg(m_delta.y())
+	       ;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+ResizeGraphicCommand::ResizeGraphicCommand(PEMainWindow * peMainWindow, SketchWidget * sketchWidget, const QString & svgID, QRectF before, QRectF after, QUndoCommand *parent)
+	: PEBaseCommand(peMainWindow, parent)
+{
+	m_sketchWidget = sketchWidget;
+	m_svgID = svgID;
+	m_before = before;
+	m_after = after;
+}
+
+void ResizeGraphicCommand::undo()
+{
+	m_peMainWindow->resizeGraphic(m_sketchWidget, m_svgID, m_before, -1);
+}
+
+void ResizeGraphicCommand::redo()
+{
+	if (m_skipFirstRedo) {
+		m_skipFirstRedo = false;
+	}
+	else {
+		m_peMainWindow->resizeGraphic(m_sketchWidget, m_svgID, m_after, 1);
+	}
+}
+
+QString ResizeGraphicCommand::getParamString() const {
+	return "ResizeGraphicCommand " +
+	       QString(" vid:%1 svgid:%2 before:%3,%4 %5x%6 after:%7,%8 %9x%10")
+	       .arg(m_sketchWidget->viewID())
+	       .arg(m_svgID)
+	       .arg(m_before.x()).arg(m_before.y())
+	       .arg(m_before.width()).arg(m_before.height())
+	       .arg(m_after.x()).arg(m_after.y())
+	       .arg(m_after.width()).arg(m_after.height())
+	       ;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+

@@ -81,6 +81,9 @@ public:
 	void editPathAnchor(SketchWidget *, const QString & svgID, int segmentIndex, QPointF anchor, int changeDirection);
 	void addPrimitive(SketchWidget *, const QString & parentSvgID, const QString & elementXml, int changeDirection);
 	void removePrimitive(SketchWidget *, const QString & elementXml, int changeDirection);
+	// P7 live wiring: move/resize a graphic element (by svg id) -> rewrite its geometry attrs + re-render.
+	void moveGraphic(SketchWidget *, const QString & svgID, QPointF delta, int changeDirection);
+	void resizeGraphic(SketchWidget *, const QString & svgID, QRectF to, int changeDirection);
 	void restoreFzp(const QString & filename);
 	bool editsModuleID(const QString &);
 	void addBusConnector(const QString & busID, const QString & connectorID);

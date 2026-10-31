@@ -264,6 +264,48 @@ protected:
 
 /////////////////////////////////////////////
 
+// P7: move/resize a graphic by svg id. Move carries the translate delta; resize carries the
+// before/after box. redo/undo call PEMainWindow::moveGraphic/resizeGraphic; move's undo passes the
+// negated delta, resize's undo passes the 'before' box (mirrors the EditPathAnchorCommand pattern).
+class MoveGraphicCommand : public PEBaseCommand
+{
+public:
+	MoveGraphicCommand(class PEMainWindow *, SketchWidget *, const QString & svgID, QPointF delta, QUndoCommand *parent);
+	void undo();
+	void redo();
+
+protected:
+	QString getParamString() const;
+
+protected:
+	SketchWidget * m_sketchWidget;
+	QString m_svgID;
+	QPointF m_delta;
+};
+
+/////////////////////////////////////////////
+
+// P7: resize a <rect> graphic by svg id; redo/undo call PEMainWindow::resizeGraphic with the
+// after/before box respectively.
+class ResizeGraphicCommand : public PEBaseCommand
+{
+public:
+	ResizeGraphicCommand(class PEMainWindow *, SketchWidget *, const QString & svgID, QRectF before, QRectF after, QUndoCommand *parent);
+	void undo();
+	void redo();
+
+protected:
+	QString getParamString() const;
+
+protected:
+	SketchWidget * m_sketchWidget;
+	QString m_svgID;
+	QRectF m_before;
+	QRectF m_after;
+};
+
+/////////////////////////////////////////////
+
 class RemoveBusConnectorCommand : public PEBaseCommand
 {
 public:

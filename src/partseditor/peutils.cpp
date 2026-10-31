@@ -19,6 +19,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 ********************************************************************/
 
 #include "peutils.h"
+#include "peunits.h"
 #include "hashpopulatewidget.h"
 #include "../debugdialog.h"
 #include "../utils/graphicsutils.h"
@@ -38,33 +39,22 @@ const int PEUtils::Spacing = 10;
 
 /////////////////////////////////////////////////////////
 
+// P7: the conversion math lives in the pure, golden-tested PEUnits (see peunits.*). These delegate
+// to it with the live default unit (PEUnits::SvgDpi == GraphicsUtils::SVGDPI == 90), byte-for-byte
+// what PEUtils did inline before the extraction.
 QString PEUtils::convertUnitsStr(double val)
 {
-	return QString::number(PEUtils::convertUnits(val));
+	return PEUnits::pxToUnitsStr(val, Units, GraphicsUtils::SVGDPI);
 }
 
 double PEUtils::convertUnits(double val)
 {
-	if (Units.compare("in") == 0) {
-		return val / GraphicsUtils::SVGDPI;
-	}
-	else if (Units.compare("mm") == 0) {
-		return val * 25.4 / GraphicsUtils::SVGDPI;
-	}
-
-	return val;
+	return PEUnits::pxToUnits(val, Units, GraphicsUtils::SVGDPI);
 }
 
 double PEUtils::unconvertUnits(double val)
 {
-	if (Units.compare("in") == 0) {
-		return val * GraphicsUtils::SVGDPI;
-	}
-	else if (Units.compare("mm") == 0) {
-		return val * GraphicsUtils::SVGDPI / 25.4;
-	}
-
-	return val;
+	return PEUnits::unitsToPx(val, Units, GraphicsUtils::SVGDPI);
 }
 
 QWidget * PEUtils::makeConnectorForm(const QDomElement & connector, int index, QObject * slotHolder, bool alternating)

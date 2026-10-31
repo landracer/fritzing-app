@@ -77,6 +77,20 @@ struct PEElement {
     // path (the grips a node-edit drag would grab); empty list otherwise. Order matches
     // segment index, so segmentIndex in editPathAnchor lines up with this list's index.
     QList<QPointF> pathAnchors() const;
+
+    // P7 (docs/design/vector-editor.md section F): pure move/resize of a graphic. These rewrite the
+    // element's own geometry attributes in place (so a grip-drag on a graphic becomes an undoable,
+    // model-backed edit rather than just moving the overlay). moveBy translates every coordinate the
+    // kind stores: rect x/y, line x1/y1/x2/y2, circle/ellipse cx/cy, text x/y, every polyline/polygon
+    // point, and (for a <path>) each decoded segment anchor re-encoded in the source's own absolute/
+    // relative convention. It returns true if it rewrote anything (a group/unknown element has no
+    // geometry and returns false).
+    //
+    // resizeRect is defined for a <rect>: it replaces the box outright. The other kinds store only a
+    // position, not a size (a line has no width/height to rescale against), so it returns false for
+    // them -- resizing those is a non-goal of the attribute-level model (the user drags their anchors).
+    bool moveBy(QPointF delta);
+    bool resizeRect(QRectF to);
 };
 
 // The typed view + round-trip contract. Owns nothing: it borrows the QDomDocument
