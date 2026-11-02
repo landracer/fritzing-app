@@ -41,6 +41,10 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el.setAttribute(QStringLiteral("y"), fmtNum(rect.y()));
         el.setAttribute(QStringLiteral("width"), fmtNum(rect.width()));
         el.setAttribute(QStringLiteral("height"), fmtNum(rect.height()));
+        // Visible default: Fritzing symbol graphics are black-on-white; the live self-rendering item
+        // (P10) draws fill+stroke from these attrs, so a freshly created graphic must be visible.
+        el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
+        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
         el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Line:
@@ -49,13 +53,17 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el.setAttribute(QStringLiteral("y1"), fmtNum(lineStart.y()));
         el.setAttribute(QStringLiteral("x2"), fmtNum(lineEnd.x()));
         el.setAttribute(QStringLiteral("y2"), fmtNum(lineEnd.y()));
-        el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
+        el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
+        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
         break;
     case PEElementKind::Circle:
         el = doc.createElement(QStringLiteral("circle"));
         el.setAttribute(QStringLiteral("cx"), fmtNum(circleCenter.x()));
         el.setAttribute(QStringLiteral("cy"), fmtNum(circleCenter.y()));
         el.setAttribute(QStringLiteral("r"), fmtNum(circleRadius));
+        el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
+        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Ellipse:
         el = doc.createElement(QStringLiteral("ellipse"));
@@ -63,6 +71,9 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el.setAttribute(QStringLiteral("cy"), fmtNum(ellipseCenter.y()));
         el.setAttribute(QStringLiteral("rx"), fmtNum(ellipseRx));
         el.setAttribute(QStringLiteral("ry"), fmtNum(ellipseRy));
+        el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
+        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Polyline:
     case PEElementKind::Polygon: {
@@ -72,11 +83,17 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
             pairs << QStringLiteral("%1,%2").arg(fmtNum(p.x()), fmtNum(p.y()));
         }
         el.setAttribute(QStringLiteral("points"), pairs.join(QStringLiteral(" ")));
+        el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
+        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     }
     case PEElementKind::Path:
         el = doc.createElement(QStringLiteral("path"));
         el.setAttribute(QStringLiteral("d"), pathData);
+        el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
+        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Text:
         el = doc.createElement(QStringLiteral("text"));

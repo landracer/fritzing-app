@@ -26,6 +26,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QWidget>
 #include <QDomElement>
+#include <QPointF>
 
 struct ConnectorMetadata {
 	Connector::ConnectorType connectorType;
@@ -41,6 +42,8 @@ public:
 	static QString convertUnitsStr(double val);
 	static double convertUnits(double val);
 	static double unconvertUnits(double val);
+	// Convenience: convert a px point to user units, componentwise (used by the create-primitive path).
+	static QPointF convertUnits(const QPointF & px) { return QPointF(convertUnits(px.x()), convertUnits(px.y())); }
 	static QWidget * makeConnectorForm(const QDomElement & connector, int index, QObject * slotHolder, bool alternating);
 	static bool fillInMetadata(int senderIndex, QWidget * parentWidget, ConnectorMetadata & cmd);
 

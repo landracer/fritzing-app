@@ -23,6 +23,29 @@ LayerPalette QObject {
 	background: #d9d9d9;
 }
 
+/* Labels + group-box titles: dark text so they read on the #d9d9d9 panel
+   (previously they inherited the app-root color:#fff -> white-on-grey, unreadable). */
+#PEToolView QLabel,
+#PEToolView QGroupBox::title {
+	background: transparent;
+	color: #323232;
+}
+
+#PEToolView QGroupBox {
+	color: #323232;
+}
+
+#PEToolView QCheckBox {
+	background: transparent;
+	color: #323232;
+}
+
+/* The terminal-point x/y numeric fields: white field, black text. */
+#PEToolView QDoubleSpinBox {
+	background: #ffffff;
+	color: #000000;
+}
+
 #PEToolView QPushButton {
 	font-size: 11px;
 	/*min-width: 100px;*/
