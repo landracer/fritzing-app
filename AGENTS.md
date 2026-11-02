@@ -49,7 +49,7 @@ Top-level:
   - `docs/design/part-migration.md` — the obsolete-part swap feature.
   - `docs/design/vector-editor.md` — spec for turning the parts editor into a de-facto parts/symbol
     design editor (library-at-hand + in-app vector editing + SVG round-trip; svgedit/Inkscape are
-    references; phased P0–P7).
+    references; phased P0–P11 — P8/P9/P10 landed the live self-rendering flattened surface, P11 pending).
   - `docs/internal/panelizer-progress.md` — newest-first working log for the panelizer/gerber effort.
   - `docs/internal/issue-triage-log.md` — newest-first log of upstream issues we investigated and **shot
     down** (closed as FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION), with root cause

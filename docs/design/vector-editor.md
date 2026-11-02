@@ -32,26 +32,76 @@ build a Fritzing-shaped editing layer that operates on the part's `QDomDocument`
 node/selection behavior and svgedit's `core/` (pathData ⇄ segment list, grips, command-undo, sanitize)
 as behavioral references.
 
+### B.1 Architecture decision (Session 24) — **fully-live flattened**, one mental model
+
+The overlay model (see §C) is *not* an editor: the part is a baked `QGraphicsSvgItem` and each graphic
+gets an invisible hit-`QGraphicsRectItem` on top. A "graphic" and its "handle" are decoupled by
+construction, which is exactly why no amount of command wiring makes it feel editable.
+
+**Decision (user, Session 24): go fully-live/flattened.** Every *modeled primitive* (rect, circle,
+ellipse, line, polyline, polygon, path, text) becomes a **live editable `QGraphicsItem` that renders
+itself** — the item *is* the graphic, selectable and draggable directly, not a hit-rect over a picture.
+A `<g>` group is **not** a live item; it contributes a **transform context only**. This is the lower-risk
+path precisely because it is what already renders correctly today: `PEDocument::build` flattens to a
+flat `QList<PEElement>` (hierarchy is not preserved) and `getPixelBounds` already bakes each element's
+inherited group transform into its absolute bounds (`matrix.mapRect(r)`). The typed model and the
+renderer already agree on *flatten + bake-transform*; making the item live is the last step to close the
+loop, not a new idea.
+
+Consequences we accept, explicitly:
+- **Flatten + baked transform on load.** When a graphic lived under `<g transform=…>`, its local geometry
+  attrs are rewritten with the transform folded to absolute user units at load, so "what you see is what
+  is stored." The group's `<g id=layerName>` stays as the *container* (it is what `insertElement` appends
+  into and what `removeGorn`/`svgNSOnly` preserve), but it is not itself an editable handle.
+- **`PEElement` must carry the transform context it was baked from** (see §B.2) so re-render reproduces the
+  original appearance and a "move" carries the element's *local-space* delta, not a screen delta.
+
+### B.2 `PEElement` transform-context gap (the actual crux — resolve before live items land)
+
+Today `PEDocument::build` stores `id`, `cssClass`, and (for rect) attribute-derived bounds — but **not**
+the element's `transform` or the inherited transform chain. `getPixelBounds` bakes the transform for
+*display* only; on the write-back path `moveBy`/`editPathAnchor` rewrite the element's own attrs in its
+**own** coordinate space, and the group transform is silently re-applied on re-render. For the
+terminal-point drag that is invisible; for a general move/resize it is a latent correctness bug the live
+model must own.
+
+**Decision — open (first thing to pin):** when the user moves a graphic that lived under a transformed
+group, do we (a) rewrite the element's local attrs by the *inverse-transformed* delta so the group
+transform re-applies and it lands where dragged, or (b) **flatten the transform away at load** (store the
+already-baked absolute geometry on `PEElement` and drop the group transform for that subtree, so stored
+== displayed with no re-apply)? Recommendation: **(b) flatten-and-drop at load** — one coordinate space,
+no re-apply, matches "what you see is what's stored," and it is what `getPixelBounds` already computes.
+It costs us the ability to move a whole group as a unit (future: re-introduce group selection as a set of
+selected flat items, not a nested live item).
+
 ## C. Ground truth (what exists today)
 
-- The **live** parts editor is the `pe*` family: `src/partseditor/pemainwindow.cpp` (+
-  `pemetadataview`, `peconnectorsview`, `pesvgview`, `petoolview`, `pegraphicsitem`,
-  `pecommands`). The *old* editor (`partseditormainwindow`, `partseditorview`, old `svgview`)
-  is parked in `src/partseditor/obsolete/` and **commented out** in `pri/partseditor.pri`.
-- **It has never been a vector editor.** `initSvgTree()` (`pemainwindow.cpp:1393`) parses the
-  part's SVG into a `QDomDocument`, normalizes it via `FSvgRenderer::loadSvg(...)`
-  (`FSvgRenderer : public QSvgRenderer`, Qt *static* SVG; returns cleaned SVG bytes), then does a
-  depth-first walk (`pemainwindow.cpp:1444`) and creates **one `PEGraphicsItem` per element**.
-- `PEGraphicsItem` (`pegraphicsitem.h`) is a **`QGraphicsRectItem` overlay** — a hit-target rect
-  over an already-baked SVG node. Its only affordances are hover/press/move and a single
-  **terminal-point** handle. There is **no primitive creation and no node/path editing**: grep of
-  the live `pemainwindow.cpp` for `addRect`/`addPath`/`addText`/`insertElement`/`createNew` → none.
-- Rendering into the canvas is `QGraphicsSvgItem` + `QSvgRenderer` (`sketchwidget.cpp:3230,9882`).
+- **Was never a vector editor (until P0–P10).** Historically `initSvgTree()` (`pemainwindow.cpp:1423`)
+  parsed the part's SVG into a `QDomDocument`, normalized it via `FSvgRenderer::loadSvg(...)`, then did a
+  depth-first walk and created **one invisible hit-`PEGraphicsItem` (a `QGraphicsRectItem`) per element** over
+  a single baked `QGraphicsSvgItem`. `PEGraphicsItem` was a pure hit-target rect with only hover/press/move
+  and a single **terminal-point** handle — no primitive creation, no node/path editing.
+- **Now (post-P9/P10): live self-rendering items.** `initSvgTree` builds the typed view (`PEDocument::build`)
+  and calls `flattenInPlace()` (P9) to bake each leaf's group transform into absolute attrs, then creates one
+  **self-rendering `PEGraphicsItem`** per element via `makePegi(...)` → `scene()->addItem(...)`, positioned at
+  `itemBase->pos() + getPixelBounds(element)` (now reads the element's own absolute attrs — no renderer
+  bounds, no px scaling). `PEGraphicsItem::paint` renders the element's own geometry (fill+stroke) via
+  `PETransform::shapeFromElement` (P10); primitive creation (`createPrimitiveRequested` → `PEPrimitive::make`)
+  and path node-editing grips are wired (P2/P3). This is the §B.1 fully-live model replacing the old overlay.
+- The *old* editor (`partseditormainwindow`, `partseditorview`, old `svgview`) is parked in
+  `src/partseditor/obsolete/` and **commented out** in `pri/partseditor.pri`.
 - Round-trip: on save the DOM is serialized back with `removeGorn(...)`/`writeXml(...)`
-  (`pemainwindow.cpp:907,1716,2177`); the `QDomDocument` is the source of truth.
+  (`pemainwindow.cpp:937,1729,1870,...`); the `QDomDocument` is the source of truth.
 
 Consequence: today, to author *any* new part graphic you must leave the app (real Inkscape) or
 bake a symbol with the parametric `fritzing-schematic` plugin. That is the gap this work closes.
+
+**Ground-truth (current, post-P10).** `initSvgTree` builds, per element, a **self-rendering** `PEGraphicsItem`
+via `makePegi(...)` → `itemBase->scene()->addItem(...)` (`pemainwindow.cpp:3124`), each positioned at
+`itemBase->pos() + getPixelBounds(element)` — the element's own **absolute (flattened)** geometry. `paint`
+renders that geometry itself (`PETransform::shapeFromElement` + fill/stroke), so the graphic you see *is* the
+live item, not a baked whole-view raster under an invisible rect. The pre-P10 overlay model (one baked
+`QGraphicsSvgItem` of the whole view + per-element invisible hit-rects) is what P8–P10 replaced.
 
 ## D. Editing model (reference behavior → Qt)
 
@@ -158,27 +208,107 @@ Behavioral mapping (reference *behavior*, re-implemented in Qt — not line-by-l
     `PEPrimitive::kindForElement(element)` (public) recovers an element's kind from its tag so the live ops
     dispatch moveBy/resizeRect per kind. `test_pedocument` grew 27 → 37 (10 new P7 cases).
 
+## F.5 The live-item rework — P8+ (the part that was missing; roadmap reopened)
+
+P0–P7 built the *engine* (typed DOM model + commands + undo + units). It never became a *car*: the live
+editor still renders a baked `QGraphicsSvgItem` and overlays invisible `QGraphicsRectItem` hit-targets
+(`§C`/`§C′`). Per the §B.1 decision, we now replace the overlay with live editable items. Ordered slices:
+
+- **P8 — transform context on the model (pure, golden). ✅ LANDED (Session 25).** `PETransform`
+  (`src/partseditor/petransform.{h,cpp}`, pure + Qt-only) implements the §B.2(b) flatten-and-drop contract:
+  `parseTransform` (parses `translate/scale/rotate/skewX/skewY/matrix` into a `QTransform`), `inheritedTransform`
+  (folds the ancestor `<g>` chain + the element's own `transform` into one `QTransform`), `bakeInto` (rewrites
+  the element's own geometry attrs with the transform mapped in — rect/image via `mapRect`, line/polyline/polygon
+  per point, circle/ellipse center + radii, `text` anchor, `<path>` re-encoded to absolute), and `flatten`
+  (bake + drop the `transform` attribute). `test_pedocument` 37 → 45 (8 new P8 cases). No live behavior change
+  yet — wiring into `initSvgTree` is P9.
+- **P9 — flatten-and-drop wired into the live surface. ✅ LANDED (Session 25).** `PEDocument::flattenInPlace()`
+  (pure) bakes each *leaf* graphic's nearest `<g>` transform into its own attrs (absolute) and drops it;
+  `initSvgTree` now calls `typed.build(doc); typed.flattenInPlace();` before building overlays, and
+  `getPixelBounds` reads the element's own (now absolute) attrs directly instead of the old
+  renderer-bounds-then-scale-to-pixels. Because both the renderer and the overlay's `setPos(itemBase->pos()
+  + topLeft)` live in the svg's local/user-unit space, this *closes* the §B.2 latent bug (previously the
+  overlay was scaled to pixels while `moveBy` rewrote user-unit attrs → a graphic under a transformed `<g>`
+  snapped when dragged). Groups keep their `<g transform>` (flatten is leaf-only) so group-as-unit and the
+  renderer's per-id addressing keep working; self-rendering per-kind items are P10 (landed below).
+  `test_pedocument` 45 → 47 (2 new `flattenInPlace` cases).
+
+- **P10 — live self-rendering item + command rewire. ✅ LANDED (Session 25).** `PETransform::shapeFromElement`
+  (pure) decodes a *modeled leaf* element into a `QPainterPath` in the item's local (absolute) coords;
+  `PEGraphicsItem::paint` now renders that path with the element's own `fill`/`stroke`/`stroke-width`
+  (defaulting to no-brush/no-pen when absent/`none`), replacing the old baked-`QGraphicsSvgItem`-under-hit-rect
+  overlay. The path decode is byte-consistent with the rest of the app: it reuses `SVGPathLexer`/`SVGPathParser`
+  (H/V normalized upstream) and `SVGPathRunner::commandSignal`, dispatched to a file-local `PEPathShapeAdapter`
+  (`Q_OBJECT`, connected via the `SIGNAL`/`SLOT` string form like `svgfilesplitter.cpp`); the meta-object is
+  moc'd from `petransform.cpp` (`#include "petransform.moc"`), NOT a header (a `Q_OBJECT` header re-triggers the
+  AGENTS.md §5 aggregate build breakage). The item's signals (`terminalPointChanged`/`pathAnchorChanged`) feed
+  the existing `MoveGraphicCommand`/`ResizeGraphicCommand`/`EditPathAnchorCommand` (no new command layer — signal
+  source changed, commands stay). `test_pedocument` 47 → 55 (8 new `shapeFromElement` cases: rect/circle/ellipse,
+  line hairline, polygon/polyline point-list, path abs+relative, cubic tight-bounds, unmodelled→false, plus a
+  live-render round-trip proving the shape follows a `moveBy`).
+  **Documented limitation:** Qt 6 `QPainterPath` has no close-segment element type, so a `<polygon>` is modeled
+  as an open point-list (identical to `<polyline>` over the same points); close-state is not observable.
+- **P11 — entry + discoverability. (planned)** Make the editor the Welcome landing ("New part" → straight onto the
+  canvas); add a toolbar "New part"/"Open part" affordance so authoring a footprint is the front door, not
+  a right-click.
+
+**Deferred follow-ups** (explicit non-goals this pass): numeric-coordinate input field (the model already
+supports coordinate edits via `moveGraphic`/`resizeGraphic`; only grip-drag is wired), a live unit-toggle
+UI (`PEUtils::Units` is still a fixed `"mm"`), group-as-unit selection (see §B.2 cost), and a lossless path
+re-encode that preserves each segment's original abs/rel encoding (P8 normalizes every coordinate to
+absolute — geometry is exact; encoding normalization is the one lossy-in-text-but-true-in-geometry trade).
+
 ## G. Open design decisions
+- **RESOLVED (Session 24, §B.1):** the live canvas uses real editable `QGraphicsItem`s, not the static
+  `QSvgRenderer` preview + overlay hit-rects. **§B.2 resolved as (b) flatten-and-drop-at-load**, landed as
+  pure `PETransform` (P8), wired into `initSvgTree` (P9), and made self-rendering (P10). Group-as-unit
+  selection remains deferred (see the §B.2 cost note).
 - Freehand capture: polyline-of-segments vs auto-smooth (match svgedit: store as `L`-segments until edited).
-- Static `QSvgRenderer` stays the *preview*; the live-edit canvas must use real `QGraphicsPathItem`s.
 - Gorn (`generic:origin`) handling: current save does `removeGorn(...)`; model must round-trip it.
 
 ## H. Status
-- **Now:** **P7 units + history + sanitize landed** (Session 23) — pure `PEUnits` (px↔user-unit math that
-  `PEUtils` now delegates to) and pure `PEElement::moveBy`/`resizeRect` (per-kind geometry rewrite,
-  path anchors re-encoded in the source's abs/rel convention) with live `PEMainWindow::moveGraphic`/
-  `resizeGraphic` ops + `MoveGraphicCommand`/`ResizeGraphicCommand` so a grip-drag on a graphic rewrites
-  the SVG undoably (not just the overlay). `test_pedocument` 27 → 37. App builds; all 12 suites green.
-  **This completes the P0–P7 roadmap** as scoped.
-- Prior: **P6 SVG import + create-from-blank** (Session 22) — pure `PEBlankPart`/`PESvgImport` + live
-  File-menu actions. **P5 library-at-hand** (Session 21) — PE dock constructs `BinManager` +
-  `initStandardBins()` (all bins + Search). **P3 trigger + P4 connector semantics** (Session 20).
-  **P2 + P3 live wiring** (Session 19). **P3 model** (Session 18). **P2** (Sessions 16–17). **P1**
-  (Session 15). **P0** (Session 14). Branch `feature/vector-editor` (pushed to `landracer`).
-- Next: roadmap **complete** (P0–P7 landed). Follow-ups to consider when a concrete need arises: a live
-  unit-toggle UI wired to `PEUnits` (the toggle is not yet exposed in `PEToolView`/`PESvgView`); a live
-  numeric-coordinate *input* field (the model supports it via `moveGraphic`/`resizeGraphic`; only the
-  grip-drag trigger is wired today).
+- **Now (Session 28): M0 stabilization started; two real defects found and fixed.**
+  1. **Destructive load-time flatten (data loss).** `initSvgTree()` ran `PEDocument::flattenInPlace()` on
+     `*viewThing->document`, which *is* `m_breadboardDocument`/`m_schematicDocument`/`m_pcbDocument`/
+     `m_iconDocument` (`pemainwindow.cpp:451-463`) — the very DOMs serialized on save (`:2471`, `:2187`,
+     `:1726`). Merely opening a part and saving it rewrote the library file, **lossily**: a `<circle>` under
+     a non-translation loses its `r` (`bakeInto` documents this), every `<path>` is re-encoded to absolute,
+     and every ancestor `<g transform>` is destroyed. It also ran outside the undo stack, so it could not
+     be undone. **Fixed:** the transform is now carried per item (`PEGraphicsItem::setAbsoluteTransform`)
+     as display/hit-test state alongside `m_offset`/`m_docBounds`; geometry attrs stay local, the document
+     round-trips byte-for-byte, and groups keep their transforms (keeping group-as-unit selection possible).
+     `flattenInPlace()` is retained for pure model tests only and documented deprecated-for-live-use.
+  2. **`PETransform::inheritedTransform()` composed the chain backwards.** It walked the ancestor chain
+     child→root while accumulating `result = result * t`, applying the **outermost** transform first and the
+     element's own transform **last**. SVG nesting semantics are `abs = G_outer * … * G_inner * own * p`, so
+     each newly-encountered transform must be **pre-multiplied**. Ground truth for
+     `translate(10,20) > scale(2) > rect rotate(90)`: `(1,1) → (-42,22)`; the old code produced `(-22,12)`.
+     Every existing P8/P9 golden used single-level nesting, where order is irrelevant — which is exactly why
+     this was never observable. **Fixed** and pinned by a ground-truth test.
+- **§B.2 is now RESOLVED AS (c), superseding the (b) flatten-and-drop decision:** keep the model document
+  pristine (local attrs + intact group transforms) and carry the resolved transform as *item* state.
+  (b) was rejected because it is lossy and because it silently made `moveGraphic`/`resizeGraphic` correct
+  only by construction — those apply a user-unit delta straight to the element's own attrs, which is valid
+  only if the transform was destroyed. With (c), callers map an absolute delta through
+  `PEDocument::absoluteTransform(id)` (see the `m02_move_is_local_space_so_callers_must_map` contract test).
+- **Library reality check (corrects an earlier assumption in this doc):** only **109 of 9,128** part SVGs
+  use a `<style>` block — the library is overwhelmingly inline-attribute. A CSS cascade is therefore **not**
+  the blocker for rendering existing parts; it matters for the 1.2% tail and for imported SVG. Correct
+  inline rendering, non-destructive transforms, real Text, and the stale-item bug are.
+- **Verification correction:** the "aggregate suite is green" claim must be checked with a **serialized**
+  build. Concurrently racing `make -j` runs in this environment produce ~180 spurious link errors
+  (`undefined reference to TextUtils::*`, `vtable for …`, `undefined reference to main`) with byte-identical
+  link lines and suites that pass in isolation — i.e. it *looks exactly like* the AGENTS.md §5 path-keying
+  hazard but is memory/resource contention. Verify with `make -j1` before believing a §5 regression.
+- **Next:** finish M0 (stale-`PEGraphicsItem` cleanup in `initSvgTree`, null-element `makePegi` guard in
+  `itemAddedSlot`), then M1 (selection persistence, one coordinate space, real Text, inline style fidelity,
+  drag-to-create, resize-all-kinds, headless mouse-event coverage).
+- **Engine (P0–P7) reused** (PEDocument/PEElement/PEPath/PEPrimitive/PEConnector/PEUnits + pecommands).
+  Branch `feature/vector-editor`. `test_pedocument` now **60/60**.
+- **Next:** P11 (Welcome landing + toolbar entry). Deferred: numeric-coordinate field, live unit toggle,
+  group-as-unit selection, lossless per-segment path abs/rel re-encode.
+- **Earlier (engine) slices landed:** P7 units+history+sanitize (S23), P6 import/blank (S22), P5 library-at-hand
+  (S21), P3+P4 (S20), P2+P3 live (S19), P3 model (S18), P2 (S16–17), P1 (S15), P0 typed model (S14).
 
 
 

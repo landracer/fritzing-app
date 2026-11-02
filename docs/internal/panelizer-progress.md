@@ -6,6 +6,167 @@
 
 ---
 
+## 2026-11-04 — Session 27 (fully-live: each graphic is a top-level movable/selectable live item — §B.1 realized)
+
+Follow-up to the user report "the additions like add a line or circle, none of that works as I'd expect." Root
+cause (beyond Session-26's invisibility): each `PEGraphicsItem` was a **child overlay** of the whole-view
+`QGraphicsSvgItem` (`new PEGraphicsItem(..., itemBase)` + `setPos(itemBase->pos()+topLeft)`), and
+`PEGraphicsItem : QObject, QGraphicsRectItem` defaulted to movable=false. So an individual shape could not be
+grabbed — only the whole svg (the `itemBase`) moved. This is the last step of §B.1 ("the item *is* the graphic,
+selectable and draggable directly"): make each modeled graphic a **standalone, movable, selectable** item.
+
+- **`PEGraphicsItem`:** added an `m_interactive` mode (default off → legacy overlay behavior unchanged for any
+  non-interactive use). `setInteractive(true)` sets `ItemIsMovable|ItemIsFocusable|ItemIsSelectable` and shows the
+  marquee (+ path anchors for `<path>`). `mousePressEvent`: for an interactive item, a press **selects** it
+  (`highlightSignal` → `highlightSlot` dims the others, revealing grips); if the press is on a path-node/terminal
+  grip it takes over for grip-drag (unchanged handlers); otherwise it defers to Qt's built-in movable drag.
+  `mouseReleaseEvent`: on a body-drag, converts the px scene-delta into **user-unit** px→units and emits a new
+  `graphicMoveDelta(item, deltaUnits)` signal.
+- **`PEMainWindow`:** `makePegi` now creates the item **without a parent** (top-level in the scene) and calls
+  `setInteractive(true)` + `setDocBounds(...)` for **every** kind (was: only `<path>` got docBounds/anchors).
+  New slot `pegiGraphicMoveDelta` forwards the user-unit delta into the **existing** `moveGraphic`/
+  `MoveGraphicCommand` → `PEElement::moveBy` (which already translates rect/line/circle/ellipse/polyline/polygon/
+  **and path** anchors), so dragging any shape edits its real SVG geometry, undoably. `initSvgTree`'s per-element
+  loop dropped the now-redundant path-only docBounds/anchor special-casing.
+- **Deferred (unchanged):** group-as-unit selection (flatten-and-drop drops group as an object — a group's
+  children stay separate live items; see §B.2 cost), a distinct resize handle for non-rect kinds (move is wired;
+  resize stays rect-via-`resizeGraphic`), and a focus-clear affordance so the selected item deselects.
+- `test_pedocument` **56** (unchanged; the live wiring is not headless-unit-testable). Full aggregate still green;
+  app links. **Caveat to watch:** because `moveGraphic` re-runs `initSvgTree` (rebuilding all pegis), selection
+  does not currently persist across a move (focus is cleared on rebuild) — the shape lands correctly, but you
+  re-click to select again. Fine for now; revisit if it feels janky.
+
+## 2026-11-03 — Session 26 (parts-editor usability: readable connectors panel + visible primitive creation)
+
+User reported the new parts editor "seems non-functional": the right-side Connectors panel was grey-on-grey
+text, and the rect/circle/etc. create buttons appeared to do nothing, with no on-screen alignment/measuring.
+Root-caused both and landed the two tractable fixes (alignment/measuring stays unbuilt — see
+`docs/design/vector-editor.md` deferred list).
+
+- **Grey-on-grey (real styling bug).** The app-wide `fritzing.qss` `#PEMainWindow { color:#fff; background:#666 }`
+  (the dark theme) is what the connectors panel's `QLabel`/spinbox text *inherits*, but the panel itself paints
+  light (`#PEToolView { background:#d9d9d9 }`). The intended per-view palette (`resources/styles/newpartseditor.qss`)
+  is loaded **nowhere** (its `setStyleSheet` calls are commented out in `petoolview.cpp`/`peconnectorsview.cpp`),
+  so labels had no dark color → white-on-light, unreadable. Fix: extend the live `fritzing.qss` `#PEToolView`
+  block with scoped dark-text rules (`#PEToolView QLabel/QGroupBox/QCheckBox { color:#323232 }`,
+  `#PEToolView QDoubleSpinBox { background:#fff; color:#000 }`) so the panel text is readable regardless of theme.
+- **Primitive creation was effectively invisible (real gap).** `PEMainWindow::createPrimitiveRequested`
+  (a) early-returned *silently* when no graphic tab was active (e.g. the Welcome landing) — added a
+  `DebugDialog` note; (b) always dropped the new element at document **0,0** with **no fill/stroke**, so the P10
+  self-render item drew nothing → looked dead. Fix: seed created primitives with a **visible default**
+  (`stroke="#000000" stroke-width="1" fill="none"`, matching Fritzing's black-on-white symbol convention) and
+  **center the new graphic on the current view's visible rect** (px→mm via the new `PEUtils::convertUnits(QPointF)`
+  overload). Also bumped `m_fileIndex` per created graphic so repeat-adds get **unique ids** (was: every graphic
+  reused the same id, so only the first ever rendered/updated). `test_pedocument` 55 → **56** (golden asserting
+  `PEPrimitive::make` seeds the visible default stroke; all 56 green; full aggregate still green; app links).
+- **Out of scope this pass (unchanged):** on-canvas alignment/measuring (rulers, grid, snapping, smart guides)
+  is still unbuilt; numeric-coordinate editing remains the terminal-point x/y spinboxes only.
+
+
+## 2026-11-02 — Session 25 (P8 LANDED: pure transform-resolution model; §B.2(b) resolved)
+
+The open P8-prerequisite decision was **how to handle a `<g transform=…>` a child inherits**. We resolved
+§B.2 in favor of **(b) flatten-and-drop at load**: bake the inherited transform into the element's own
+geometry attrs and *drop* the `transform` attribute, so the stored DOM == what was displayed and a later
+`moveBy`/`editPathAnchor` operates in one absolute space (the latent mis-alignment on move the Session-24
+diagnosis flagged is now structurally impossible). Landed as a **pure, golden-tested module** (no live/wiring
+change — the surface swap is P9):
+
+- **New files:** `src/partseditor/petransform.{h,cpp}` (pure Qt: `QDomElement`/`QTransform`/`QRegularExpression`
+  only; no widget, no `QGraphicsItem`). API: `parseTransform` (string→`QTransform`, multi-primitive,
+  left-to-right compose), `inheritedTransform` (fold the ancestor `<g>` chain + own `transform`), `bakeInto`
+  (map a resolved transform into the element's attrs: rect/image via `mapRect`; line/polyline/polygon per
+  point; circle center + r only under pure translate (else r dropped, documented); ellipse center + per-axis
+  radii; text anchor; `<path>` decoded through `PEPath`/`SVGPath*` and re-encoded absolute), and `flatten`
+  (bake + `removeAttribute("transform")`). Wired into `pri/partseditor.pri` (HEADERS+SOURCES, all-explicit
+  `$$absolute_path()`) and `tests/auto/test_pedocument/test_pedocument.pro` (absolute-path source/header entries
+  — no globs, per the qmake path-keying hazard in AGENTS.md §5).
+- **Tests:** `test_pedocument` 37 → 45 (8 new: translate-bakes-rect + post-flatten moveBy; line both ends;
+  polygon every point; text anchor; path absolute anchor baked + transform dropped; no-group-transform is a
+  no-op (returns false); circle under scale drops `r`; and the parseTransform unit test incl. invalid string
+  → false). All 45 green headless.
+- **Non-lossless cases documented (not silent):** circle→non-translate drops radius (ellipse not storable as
+  r); `<path>` re-encode normalizes abs/rel → absolute (geometry exact, encoding normalized). Both are
+  deliberate trade-offs, not bugs.
+- **App still builds** clean at HEAD+P8 (`make -j$(nproc)` → `build/Fritzing`). The app is unchanged behaviorally —
+  `PETransform` is not yet called from `initSvgTree` (that is P9).
+- **Next (P9):** swap the live surface — `initSvgTree` calls `PETransform::flatten` per element and builds a live
+  self-rendering item per `PEElement`; `PEGraphicsItem`'s hit-rect overlay role is deleted. P10 rewires the
+  existing `Move/Resize/EditPathAnchor` commands to the live item's document-unit deltas; P11 is Welcome-landing
+  + toolbar entry.
+
+### Session 25 follow-up — P9 landed (flatten wired into the live surface)
+
+P9 wired P8's `PETransform` into the live editor *as a pure model operation* (the self-rendering item is P10):
+
+- `PEDocument::flattenInPlace()` (pure, in `pedocument.cpp`): bakes each **leaf** graphic's nearest `<g>`
+  transform into its own geometry attrs and drops it; **groups are skipped** (a `<g transform>` contributes
+  context only; flattening it would compound under the live re-walk). Runs in DOM order (parents before
+  leaves) so each leaf bakes a still-present parent transform, then the parent is identity → **idempotent**
+  across the per-edit re-walk.
+- `pemainwindow.cpp::initSvgTree`: now `typed.build(doc); typed.flattenInPlace();` before overlay creation,
+  and `getPixelBounds(element)` (signature dropped the `FSvgRenderer&` param) reads the element's own
+  (now absolute) attrs per kind — **no more renderer-bounds-then-scale-to-pixels**. This was the §B.2 latent
+  bug: the overlay's local coords and `moveBy`'s user-unit coords were different spaces; now both are the
+  svg's absolute user-unit space, so a graphic under a transformed `<g>` no longer snaps when dragged.
+- `test_pedocument` 45 → 47 (2 new `flattenInPlace` cases: leaf baked into group space + group transform kept;
+  no-transform doc is byte-stable). All green.
+- **App builds** clean (`build/Fritzing`); full aggregate test suite stays green (`auto.pro` all pass;
+  `test_pedocument` 47/47). Behavior change is the §B.2 correctness fix only; rendering path (renderer +
+  baked `QGraphicsSvgItem`) untouched until P10.
+
+### Session 25 follow-up — P10 landed (live self-rendering item; baked-fill overlay retired)
+
+P10 turned `PEGraphicsItem` into a true **self-rendering** item (docs/design/vector-editor.md §F.5): the item
+paints the element's own geometry instead of a baked blue fill over a static raster.
+
+- `PETransform::shapeFromElement(element, QPainterPath&)` (new, pure + golden-testable): per-kind geometry ->
+  `QPainterPath`. rect/image -> rect; line -> hairline; circle/ellipse -> addEllipse; polyline/polygon ->
+  move+line-to each vertex; path -> decoded through the app's own `SVGPathLexer`/`SVGPathParser`/`SVGPathRunner`
+  (byte-consistent, curve-aware: M/L/H/V/C/S/Q/T + Z, abs+relative resolved against a running cursor via a
+  file-local `Q_OBJECT` adapter `PEPathShapeAdapter` connected with the `SIGNAL`/`SLOT` string form).
+- `PEGraphicsItem::paint` now calls `shapeFromElement(m_element, shape)`, applies the element's `fill`/`stroke`/
+  `stroke-width`/`fill-rule`, and `drawPath(shape)` — **no more `QGraphicsRectItem::paint` baked blue fill**. The
+  hit-test `shape()` is the inherited `QGraphicsRectItem::shape()` (the constructor rect == the flattened bounds),
+  so display and hit-testing read the *same* absolute attrs the command layer edits. Terminal/anchor grip overlays
+  unchanged (they map doc-unit anchors into the local rect via `m_docBounds`).
+- **§5 hazard + fix (important):** the first P10 cut declared `PEPathShapeAdapter` (a `Q_OBJECT` class) in the
+  **header**. A `Q_OBJECT` header wired into the aggregate build re-triggers the qmake path-keying hazard from
+  AGENTS.md §5 — the aggregate `auto.pro` build emitted duplicate/mis-keyed `moc_<x>.o` rules and ~5 unrelated
+  Boost suites failed to link (`undefined reference to main` / `TextUtils::*`). A clean-HEAD aggregate build was
+  green, so the header-`Q_OBJECT` was the cause. **Fix:** define `PEPathShapeAdapter` **file-local in
+  `petransform.cpp`** (class + its `onCommand` slot) and end the file with `#include "petransform.moc"`. qmake
+  runs `moc -f petransform.cpp -o petransform.moc` (a per-source rule that does *not* key on a shared header), so
+  the meta-object lands in this one TU. A plain `QObject` (no `Q_OBJECT`) does *not* route the connected slot —
+  moc is genuinely required — hence the `.moc` approach. With it, the aggregate build is green again.
+- `test_pedocument` 47 → **55** (8 new: shapeFromElement per-kind — rect, circle/ellipse, line hairline,
+  polygon/polyline point-list, path absolute+relative, cubic tight bounds, unmodelled returns false — plus a
+  live-render round-trip proving the shape follows a `moveBy`). All green; full aggregate suite green; app links.
+- **Known limitation (documented):** Qt 6 `QPainterPath` has no close-segment element type, so a `<polygon>` is
+  modeled as an open point-list (identical to `<polyline>` over the same points); close-state is not observable.
+
+## 2026-11-02 — Session 24 (Roadmap REOPENED — re-scoped to a true live vector editor)
+
+User ran the HEAD build and saw nothing new in the parts editor — and was right to. Root-cause: P0–P7
+built the *model/engine* (typed DOM, commands, undo, units) but the **live surface was never an editor**.
+The part renders as one baked `QGraphicsSvgItem`, and each graphic gets an invisible
+`PEGraphicsItem : QGraphicsRectItem` **hit-target overlay** (`makePegi` → `scene->addItem`, positioned at
+the baked-transform bounds from `getPixelBounds`). A graphic and its handle are decoupled by construction,
+so no command wiring makes it feel editable. The editor is also reachable only via the main window's
+`Part` menu → "Edit (new parts editor)", so authoring a footprint in-app was effectively impossible.
+
+**Decision (user): fully-live/flattened.** Every modeled primitive becomes a live self-rendering editable
+`QGraphicsItem`; `<g>` groups contribute baked-transform context only. This is the lower-risk path because
+it is what already renders correctly: `PEDocument::build` flattens to a flat `QList<PEElement>` and
+`getPixelBounds` already bakes each element's inherited transform (`matrix.mapRect(r)`). Engine (PEDocument/
+PEElement/PEPath/PEPrimitive/PEConnector/PEUnits + pecommands + 37 golden tests) is **reused**; the
+baked-preview + overlay path is what we replace.
+
+Doc rewrite only this pass (`docs/design/vector-editor.md` §B.1, §B.2, §C, §F.5, §G, §H). Roadmap re-opened
+as **P8–P11**. **Open before P8:** §B.2 — on move of a graphic under a transformed group, rewrite local
+attrs by the inverse-transformed delta (a) vs. flatten-and-drop-the-transform at load (b, recommended).
+No code changed; no tests changed; build/tests unchanged (still 12 green).
+
 
 ## 2026-11-01 — Session 23 (P7 units + history + sanitize hardening)
 
