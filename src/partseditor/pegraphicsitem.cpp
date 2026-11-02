@@ -31,6 +31,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QGraphicsScene>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTransform>
 
 
 static QVector<qreal> Dashes;
@@ -383,6 +384,15 @@ int PEGraphicsItem::grabbedAnchor() {
 
 void PEGraphicsItem::setDocBounds(QRectF r) {
 	m_docBounds = r;
+}
+
+// M0.2: carry the local->absolute mapping as item state. Setting a non-identity transform changes where
+// the geometry actually sits, so invalidate the item's shape to make Qt re-derive its bounding region;
+// paint() and the grip mapping read m_absoluteTransform directly.
+void PEGraphicsItem::setAbsoluteTransform(const QTransform & t) {
+	if (m_absoluteTransform == t) return;
+	m_absoluteTransform = t;
+	prepareGeometryChange();
 }
 
 QRectF PEGraphicsItem::docBounds() {

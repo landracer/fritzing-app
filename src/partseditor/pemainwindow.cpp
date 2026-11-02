@@ -1465,15 +1465,28 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 	}
 
 	TextUtils::gornTree(svgDocument);
-	FSvgRenderer renderer;
-	renderer.loadSvg(svgDocument.toByteArray(), "", false);
 
 	// P1: drive the per-element overlay items off the typed model. PEDocument walks the
 	// DOM depth-first / document-order (same order the previous manual traverse produced);
 	// each modelled (non-Unknown) element becomes one PEGraphicsItem, keyed by id, exactly
 	// as before. Behavior (item set, z-order, positions, signals) is unchanged.
+	//
+	// M0.2 (non-destructive transform handling): the view is built straight over svgDocument and the
+	// group transform is NO LONGER baked into the elements. flattenInPlace() here used to rewrite every
+	// leaf's geometry attrs and strip every ancestor <g transform> -- on the very QDomDocument that
+	// gets serialized on save. Merely opening a part and saving it therefore rewrote the library file,
+	// and lossily: a <circle> under a non-translation lost its r, and every <path> was re-encoded to
+	// absolute. It also could not be undone, since it ran outside the undo stack at load.
+	//
+	// Instead the transform is carried per item (PEGraphicsItem::setAbsoluteTransform) as a display and
+	// hit-test property, exactly like its existing m_offset/m_docBounds. Geometry attrs stay local, the
+	// document round-trips byte-for-byte, and groups keep their transforms so group-as-unit selection
+	// stays possible. Where a transform is non-identity the item maps through it; the overwhelming
+	// majority of Fritzing part SVGs carry none, so hasTransformedContent() keeps them on the existing
+	// flat path.
 	PEDocument typed;
 	typed.build(svgDocument);
+	const bool needTransformMapping = typed.hasTransformedContent();
 
 	QHash<QString, PEGraphicsItem *> pegiHash;
 
@@ -1483,14 +1496,24 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 		if (pe.kind == PEElementKind::Unknown) continue;
 
 		QDomElement element = pe.element;
-		QRectF bounds = getPixelBounds(renderer, element);
+		QRectF bounds = getPixelBounds(element);
+		// M0.2: getPixelBounds reads the element's own (local) attrs, so under a non-identity transform
+		// the box has the right size but the wrong place. Map it to absolute user units -- the space the
+		// scene, the item position and the grips all live in. This is what the destructive flatten used
+		// to achieve by rewriting the attrs.
+		if (needTransformMapping) {
+			const QTransform abs = typed.absoluteTransform(element.attribute("id"));
+			if (!abs.isIdentity()) {
+				bounds = abs.mapRect(bounds);
+			}
+		}
 		// known Qt bug: boundsOnElement returns zero width and height for text elements.
 		if (bounds.width() > 0 && bounds.height() > 0) {
 			PEGraphicsItem * pegi = makePegi(bounds.size(), bounds.topLeft(), itemBase, element, z++);
-			// P3: path elements expose draggable node grips (anchors in document units).
-			if (pe.kind == PEElementKind::Path) {
-				pegi->setDocBounds(pe.bounds);
-				pegi->showPathAnchors(true);
+			// (makePegi now sets docBounds + interactive for every kind; path node grips are enabled inside
+			// setInteractive, so no per-kind special-casing is needed here any more.)
+			if (needTransformMapping) {
+				pegi->setAbsoluteTransform(typed.absoluteTransform(element.attribute("id")));
 			}
 			pegiHash.insert(element.attribute("id"), pegi);
 		}
@@ -2951,37 +2974,56 @@ void PEMainWindow::pegiPathAnchorChanged(PEGraphicsItem * pegi, int segmentIndex
 
 void PEMainWindow::createPrimitiveRequested(const QString & kind)
 {
-	if (m_currentGraphicsView == nullptr) return;
-	// Map the requested kind string onto the typed element kind.
-	PEElementKind k = PEElementKind::Unknown;
-	if (kind == "rect") k = PEElementKind::Rect;
-	else if (kind == "circle") k = PEElementKind::Circle;
-	else if (kind == "ellipse") k = PEElementKind::Ellipse;
-	else if (kind == "line") k = PEElementKind::Line;
-	else if (kind == "path") k = PEElementKind::Path;
-	else if (kind == "polyline") k = PEElementKind::Polyline;
-	else if (kind == "polygon") k = PEElementKind::Polygon;
-	else if (kind == "text") k = PEElementKind::Text;
-	if (k == PEElementKind::Unknown) return;
+    if (m_currentGraphicsView == nullptr) {
+        // No graphic canvas is active (e.g. still on the Welcome/landing tab). Say so instead of
+        // silently doing nothing -- a silent return made the tool buttons feel dead/non-functional.
+        DebugDialog::debug("PEMainWindow::createPrimitiveRequested: no active graphic view; open a part's graphic tab first");
+        return;
+    }
+    // Map the requested kind string onto the typed element kind.
+    PEElementKind k = PEElementKind::Unknown;
+    if (kind == "rect") k = PEElementKind::Rect;
+    else if (kind == "circle") k = PEElementKind::Circle;
+    else if (kind == "ellipse") k = PEElementKind::Ellipse;
+    else if (kind == "line") k = PEElementKind::Line;
+    else if (kind == "path") k = PEElementKind::Path;
+    else if (kind == "polyline") k = PEElementKind::Polyline;
+    else if (kind == "polygon") k = PEElementKind::Polygon;
+    else if (kind == "text") k = PEElementKind::Text;
+    if (k == PEElementKind::Unknown) return;
 
-	// Generate a unique graphic id from the part's module id + a monotonically-increasing counter.
-	QString id = QString("%1.%2").arg(m_originalModuleID).arg(m_fileIndex);
+    // Place the new graphic centered on the area the user is currently looking at. The scene is in
+    // px (the svg graphic item renders at 90 dpi); the geometry attrs are mm user units, so convert
+    // the visible-center px (relative to the svg item origin) into units -- so it lands in view.
+    ViewThing * viewThing = m_viewThings.value(m_currentGraphicsView->viewID());
+    if (viewThing == nullptr || viewThing->document == nullptr || viewThing->itemBase == nullptr) return;
+    const QRectF visible = m_currentGraphicsView->mapToScene(m_currentGraphicsView->viewport()->rect()).boundingRect();
+    const QPointF center = PEUtils::convertUnits(visible.center() - viewThing->itemBase->pos());
+    const double half = 5.0;   // 10x10 default box, centered on `center`
+    const QRectF rect(center.x() - half, center.y() - half, 2 * half, 2 * half);
+    const QPointF a(center.x() - half, center.y() - half);
+    const QPointF b(center.x() + half, center.y() + half);
 
-	// Default geometry: a 10x10 box at the origin (the user resizes/moves via the grips).
-	QRectF rect(0, 0, 10, 10);
-	QDomElement built = PEPrimitive::make(*m_viewThings.value(m_currentGraphicsView->viewID())->document,
-	                                       k, id, QString(), rect, QPointF(0, 0), QPointF(10, 10),
-	                                       QPointF(5, 5), 5.0, QPointF(5, 5), 5.0, 5.0,
-	                                       QList<QPointF>() << QPointF(0, 0) << QPointF(10, 10),
-	                                       QString("M 0 0 L 10 10"), QPointF(0, 0), QString());
-	if (built.isNull()) return;
+    // Unique graphic id: module id + the (per-part) graphic counter, which we bump below on success.
+    QString id = QString("%1.%2").arg(m_originalModuleID).arg(m_fileIndex);
 
-	QDomDocument frag;
-	frag.appendChild(frag.importNode(built, true));
-	QString xml = frag.toString();
-	auto * command = new AddPrimitiveCommand(this, m_currentGraphicsView, QString(), xml, nullptr);
-	command->setText(tr("Add %1").arg(kind));
-	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
+    QDomElement built = PEPrimitive::make(*viewThing->document,
+                                          k, id, QString(), rect, a, b,
+                                          center, 5.0, center, 5.0, 5.0,
+                                          QList<QPointF>() << a << b,
+                                          QString("M %1 %2 L %3 %4").arg(QString::number(a.x()), QString::number(a.y()), QString::number(b.x()), QString::number(b.y())),
+                                          center, QString());
+    if (built.isNull()) return;
+
+    QDomDocument frag;
+    frag.appendChild(frag.importNode(built, true));
+    QString xml = frag.toString();
+    auto * command = new AddPrimitiveCommand(this, m_currentGraphicsView, QString(), xml, nullptr);
+    command->setText(tr("Add %1").arg(kind));
+    // Bump the counter now so the next created graphic gets a fresh id (was: every graphic reused
+    // the same id, so only the first ever showed / updated).
+    m_fileIndex++;
+    m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
 }
 
 void PEMainWindow::addConnectorRequested()
@@ -3119,6 +3161,9 @@ void PEMainWindow::showInOS() {
 
 PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z)
 {
+	// Fully-live slice: the graphic is now a standalone top-level object (no parent), movable +
+	// selectable, so the user can click a single shape to select it and drag it (or its nodes) directly.
+	// (It used to be a child overlay of the whole-view svg item.)
 	auto * pegiItem = new PEGraphicsItem(0, 0, size.width(), size.height(), itemBase);
 	pegiItem->showTerminalPoint(false);
 	pegiItem->setPos(itemBase->pos() + topLeft);
@@ -3126,6 +3171,8 @@ PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase *
 	itemBase->scene()->addItem(pegiItem);
 	pegiItem->setElement(element);
 	pegiItem->setOffset(topLeft);
+	pegiItem->setDocBounds(QRectF(topLeft, size));   // element bounds in user units (px<->doc mapping for grips/drag)
+	pegiItem->setInteractive(true);
 	connect(pegiItem, SIGNAL(highlightSignal(PEGraphicsItem *)), this, SLOT(highlightSlot(PEGraphicsItem *)));
 	connect(pegiItem, SIGNAL(mouseReleasedSignal(PEGraphicsItem *)), this, SLOT(pegiMouseReleased(PEGraphicsItem *)));
 	connect(pegiItem, SIGNAL(mousePressedSignal(PEGraphicsItem *, bool &)), this, SLOT(pegiMousePressed(PEGraphicsItem *, bool &)), Qt::DirectConnection);
@@ -3133,28 +3180,67 @@ PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase *
 	connect(pegiItem, SIGNAL(terminalPointChanged(PEGraphicsItem *, QPointF, QPointF)), this, SLOT(pegiTerminalPointChanged(PEGraphicsItem *, QPointF, QPointF)));
 	connect(pegiItem, SIGNAL(pathAnchorMoved(PEGraphicsItem *, int, QPointF)), this, SLOT(pegiPathAnchorMoved(PEGraphicsItem *, int, QPointF)));
 	connect(pegiItem, SIGNAL(pathAnchorChanged(PEGraphicsItem *, int, QPointF, QPointF)), this, SLOT(pegiPathAnchorChanged(PEGraphicsItem *, int, QPointF, QPointF)));
+	connect(pegiItem, SIGNAL(graphicMoveDelta(PEGraphicsItem *, QPointF)), this, SLOT(pegiGraphicMoveDelta(PEGraphicsItem *, QPointF)));
 	return pegiItem;
 }
 
-QRectF PEMainWindow::getPixelBounds(FSvgRenderer & renderer, QDomElement & element)
+// Fully-live slice: a live graphic was body-dragged; apply the user-unit delta to its geometry attrs
+// through the existing moveGraphic path (translates every kind, incl. <path>), undoable.
+void PEMainWindow::pegiGraphicMoveDelta(PEGraphicsItem * pegi, QPointF deltaUnits)
 {
-	QSizeF defaultSizeF = renderer.defaultSizeF();
-	QRectF viewBox = renderer.viewBoxF();
+	if (m_currentGraphicsView == nullptr || pegi == nullptr) return;
+	QString svgID = pegi->element().attribute("id");
+	if (svgID.isEmpty()) return;
+	auto * command = new MoveGraphicCommand(this, m_currentGraphicsView, svgID, deltaUnits, nullptr);
+	command->setText(tr("Move graphic"));
+	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
+}
 
-	QString id = element.attribute("id");
-	QRectF r = renderer.boundsOnElement(id);
-	QTransform matrix = renderer.transformForElement(id);
-	QString oldid = element.attribute("oldid");
-	if (!oldid.isEmpty()) {
-		element.setAttribute("id", oldid);
-		element.removeAttribute("oldid");
+QRectF PEMainWindow::getPixelBounds(QDomElement & element)
+{
+	// P9: the element has been flattened (PETransform::flatten in initSvgTree), so its own geometry
+	// attrs already hold absolute user-unit coordinates -- no renderer bounds / viewBox→px scaling is
+	// needed (and the renderer's baked id-addressing no longer applies to the rewritten attrs). Read the
+	// attrs directly per kind, matching PEElement::moveBy's per-kind coordinate set. For kinds that store
+	// no box (line/circle/path/text), return an axis-aligned box spanning their (absolute) points.
+	const QString tag = element.tagName();
+	if (tag == QLatin1String("rect") || tag == QLatin1String("image")) {
+		bool ok = false;
+		const double x = element.attribute(QStringLiteral("x")).toDouble(&ok);
+		if (!ok) return QRectF();
+		const double y = element.attribute(QStringLiteral("y")).toDouble(&ok);
+		if (!ok) return QRectF();
+		const double w = element.attribute(QStringLiteral("width")).toDouble(&ok);
+		if (!ok) return QRectF();
+		const double h = element.attribute(QStringLiteral("height")).toDouble(&ok);
+		if (!ok) return QRectF();
+		return QRectF(x, y, w, h);
 	}
-	QRectF bounds = matrix.mapRect(r);
-	bounds.setRect(bounds.x() * defaultSizeF.width() / viewBox.width(),
-	               bounds.y() * defaultSizeF.height() / viewBox.height(),
-	               bounds.width() * defaultSizeF.width() / viewBox.width(),
-	               bounds.height() * defaultSizeF.height() / viewBox.height());
-	return bounds;
+	if (tag == QLatin1String("line")) {
+		bool ok = false;
+		const double x1 = element.attribute(QStringLiteral("x1")).toDouble(&ok); if (!ok) return QRectF();
+		const double y1 = element.attribute(QStringLiteral("y1")).toDouble(&ok); if (!ok) return QRectF();
+		const double x2 = element.attribute(QStringLiteral("x2")).toDouble(&ok); if (!ok) return QRectF();
+		const double y2 = element.attribute(QStringLiteral("y2")).toDouble(&ok); if (!ok) return QRectF();
+		return QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized();
+	}
+	if (tag == QLatin1String("circle")) {
+		bool ok = false;
+		const double cx = element.attribute(QStringLiteral("cx")).toDouble(&ok); if (!ok) return QRectF();
+		const double cy = element.attribute(QStringLiteral("cy")).toDouble(&ok); if (!ok) return QRectF();
+		const double r = element.attribute(QStringLiteral("r")).toDouble(&ok); if (!ok) return QRectF();
+		return QRectF(cx - r, cy - r, 2 * r, 2 * r);
+	}
+	if (tag == QLatin1String("ellipse")) {
+		bool ok = false;
+		const double cx = element.attribute(QStringLiteral("cx")).toDouble(&ok); if (!ok) return QRectF();
+		const double cy = element.attribute(QStringLiteral("cy")).toDouble(&ok); if (!ok) return QRectF();
+		const double rx = element.attribute(QStringLiteral("rx")).toDouble(&ok); if (!ok) return QRectF();
+		const double ry = element.attribute(QStringLiteral("ry")).toDouble(&ok); if (!ok) return QRectF();
+		return QRectF(cx - rx, cy - ry, 2 * rx, 2 * ry);
+	}
+	// path/text/unknown: not box-bounded at the attribute level; the caller skips zero-area bounds.
+	return QRectF();
 }
 
 bool PEMainWindow::canSave() {

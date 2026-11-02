@@ -109,6 +109,8 @@ public Q_SLOTS:
 	void pegiTerminalPointChanged(PEGraphicsItem *, QPointF before, QPointF after);
 	void pegiPathAnchorMoved(PEGraphicsItem *, int segmentIndex, QPointF anchor);
 	void pegiPathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
+	// Fully-live slice: apply a body-drag user-unit delta to the graphic's geometry attrs (moveGraphic).
+	void pegiGraphicMoveDelta(PEGraphicsItem *, QPointF deltaUnits);
 	// P3 create-tool trigger / P4 connector authoring triggers (from PEToolView):
 	void createPrimitiveRequested(const QString & kind);
 	void addConnectorRequested();
@@ -180,7 +182,7 @@ protected:
 	void showInOS(QWidget *parent, const QString &pathIn);
 	void switchedConnector(int, SketchWidget *);
 	PEGraphicsItem * makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z);
-	QRectF getPixelBounds(FSvgRenderer & renderer, QDomElement & element);
+	QRectF getPixelBounds(QDomElement & element);
 	bool canSave();
 	bool saveAs(bool overWrite);
 	void setBeforeClosingText(const QString & filename, QMessageBox & messageBox);

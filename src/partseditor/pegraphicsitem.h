@@ -64,6 +64,13 @@ public:
 	int grabbedAnchor();
 	void setDocBounds(QRectF);
 	QRectF docBounds();
+	// M0.2: the absolute user-unit transform this element's local geometry resolves to (its own transform
+	// times every ancestor <g>'s). Identity for the common case of a transform-free part SVG. Carried as
+	// item state -- instead of baking the transform into the DOM, which used to corrupt the saved part --
+	// so display, hit-testing and grip mapping can map local<->absolute without mutating the document.
+	void setAbsoluteTransform(const QTransform & t);
+	QTransform absoluteTransform() const { return m_absoluteTransform; }
+	bool hasAbsoluteTransform() const { return !m_absoluteTransform.isIdentity(); }
 	// Fully-live slice (docs/design/vector-editor.md §B.1): when interactive, this item becomes a
 	// top-level movable+selectable object -- clicking focuses (selects) it and dragging its body moves
 	// the underlying element (not the whole-view svg). Default off so non-interactive overlays behave
@@ -115,6 +122,7 @@ protected:
 	QPointF m_pathAnchorOrigin;     // document-unit anchor at drag start
 	QPointF m_dragPathAnchorOrigin; // item-local pixel point at drag start
 	QRectF m_docBounds;             // element bounds in document user units (for pixel<->doc mapping)
+	QTransform m_absoluteTransform; // M0.2: local->absolute user-unit mapping (identity when untransformed)
 	bool m_drawHighlight = false;
 	int m_wheelAccum = 0;
 	qreal m_savedOpacity = 0;
