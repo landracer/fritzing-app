@@ -1455,6 +1455,24 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 
 	int z = PegiZ;
 
+	// M0.3: initSvgTree() is called from reload(), showing(), setInitialItem() and after every graphic
+	// edit (moveGraphic / resizeGraphic / editPathAnchor / addPrimitive / removePrimitive), and it used
+	// to only ever ADD items. Nothing removed the previous set, so each edit left the whole prior batch
+	// of PEGraphicsItems behind in the scene: duplicates stacked on every graphic, and getPegiList() --
+	// which simply scans the scene -- then returned stale items whose QDomElement pointed at nodes from
+	// an earlier parse. That is the direct cause of "click a shape, it drags the wrong thing / nothing
+	// happens", and it made the per-view visibility pass in showing() hide items at random.
+	//
+	// Rebuilding the scene from the document is the cheap, always-correct resync here: the document is
+	// the source of truth and the item count is small (a part view is tens to a few hundred graphics).
+	// Any other item in the scene (wires, connector items, the reference svg item) is left alone.
+	Q_FOREACH (QGraphicsItem * sceneItem, sketchWidget->scene()->items()) {
+		if (auto * stale = dynamic_cast<PEGraphicsItem *>(sceneItem)) {
+			sketchWidget->scene()->removeItem(stale);
+			delete stale;
+		}
+	}
+
 	FSvgRenderer tempRenderer;
 	QByteArray rendered = tempRenderer.loadSvg(tempSvgDoc.toByteArray(), "", false);
 	// cleans up the svg
@@ -1510,6 +1528,7 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 		// known Qt bug: boundsOnElement returns zero width and height for text elements.
 		if (bounds.width() > 0 && bounds.height() > 0) {
 			PEGraphicsItem * pegi = makePegi(bounds.size(), bounds.topLeft(), itemBase, element, z++);
+			if (pegi == nullptr) continue;   // M0.4: no live item without a real backing graphic
 			// (makePegi now sets docBounds + interactive for every kind; path node grips are enabled inside
 			// setInteractive, so no per-kind special-casing is needed here any more.)
 			if (needTransformMapping) {
@@ -2797,7 +2816,9 @@ void PEMainWindow::moveTerminalPoint(SketchWidget * sketchWidget, const QString 
 		double invdy = dy * size.height() / svgBounds.height();
 		QPointF topLeft = connectorPegi->offset() + p - QPointF(invdx, invdy);
 		PEGraphicsItem * pegi = makePegi(QSizeF(invdx * 2, invdy * 2), topLeft, viewThing->itemBase, terminalElement, oldZ);
-		DebugDialog::debug("new pegi location", pegi->pos());
+		if (pegi != nullptr) {
+			DebugDialog::debug("new pegi location", pegi->pos());
+		}
 		updateChangeCount(sketchWidget, changeDirection);
 	}
 
@@ -3161,6 +3182,17 @@ void PEMainWindow::showInOS() {
 
 PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z)
 {
+	// M0.4/M0.5 guard: every live item must be backed by a real modeled graphic. An item built over a
+	// null QDomElement renders nothing (shapeFromElement has no attrs), cannot be edited
+	// (pegiGraphicMoveDelta/MoveGraphicCommand resolve the target by element id), and is still movable,
+	// selectable and returned by getPegiList() -- so it silently eats clicks and corrupts every pass over
+	// that list. Reject it loudly instead of shipping an inert interactive phantom.
+	if (itemBase == nullptr || itemBase->scene() == nullptr || element.isNull()) {
+		DebugDialog::debug(QString("makePegi: refused to create a live graphic item (null element or scene) at %1,%2")
+		                       .arg(topLeft.x()).arg(topLeft.y()));
+		return nullptr;
+	}
+
 	// Fully-live slice: the graphic is now a standalone top-level object (no parent), movable +
 	// selectable, so the user can click a single shape to select it and drag it (or its nodes) directly.
 	// (It used to be a child overlay of the whole-view svg item.)
@@ -4485,16 +4517,24 @@ void PEMainWindow::itemAddedSlot(ModelPart *, ItemBase * itemBase, ViewLayer::Vi
 	Q_UNUSED(id);
 
 	if (itemBase == nullptr) return;
+	if (m_currentGraphicsView == nullptr) return;
 	if (itemBase->viewID() != m_currentGraphicsView->viewID()) return;
 
-	QDomElement element;
-	double z = 0;
-	Q_FOREACH (PEGraphicsItem * pegi, getPegiList(m_currentGraphicsView)) {
-		if (pegi->zValue() > z) z = pegi->zValue();
+	// M0.4: this used to call makePegi() with a default-constructed (null) QDomElement. The result was a
+	// live, interactive PEGraphicsItem with no backing graphic: it rendered nothing (shapeFromElement has
+	// no attrs to read), could not be moved (pegiGraphicMoveDelta bails on an empty id), and yet it was
+	// movable/selectable and returned by getPegiList() -- so it swallowed clicks and skewed every
+	// "highest z" / visibility / connector-lookup pass over that list.
+	//
+	// The graphics items are derived from the part's SVG document in initSvgTree(), which is the single
+	// place items are created; an ItemBase added to the scene is not itself a modeled graphic, so there
+	// is nothing to add here. Resync from the document instead, which is idempotent and keeps the scene
+	// consistent with the source of truth.
+	if (ViewThing * viewThing = m_viewThings.value(itemBase->viewID())) {
+		if (viewThing->document != nullptr && viewThing->itemBase == itemBase) {
+			initSvgTree(viewThing->sketchWidget, viewThing->itemBase, *viewThing->document);
+		}
 	}
-
-	QRectF bounds = itemBase->boundingRect();
-	makePegi(bounds.size(), QPointF(0, 0), itemBase, element, z + 1);
 }
 
 void PEMainWindow::itemMovedSlot(ItemBase * itemBase) {
