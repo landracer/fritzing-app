@@ -26,6 +26,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QRectF>
 #include <QPointF>
 #include <QDomElement>
+#include <QTransform>
 
 // P0 (docs/design/vector-editor.md section F): a typed, inert *view* over a part's
 // SVG QDomDocument. It does NOT yet edit anything -- it only parses the DOM tree
@@ -118,6 +119,39 @@ public:
     PEElement findById(const QString & id) const;
     QList<PEElement> byKind(PEElementKind kind) const;
     QList<PEElement> connectorPins() const;
+
+    // P9 (docs/design/vector-editor.md F.5): flatten every modeled element's inherited group transform
+    // into its own geometry attrs (PETransform::flatten), in place on the borrowed DOM, then re-read so
+    // bounds reflects the now-absolute geometry. Idempotent: a second call is a no-op.
+    //
+    // DEPRECATED FOR LIVE USE (M0.2). This mutates the borrowed DOM, and flattening is LOSSY: a <circle>
+    // under a non-translation drops its r (an ellipse cannot be stored as r), a <path> is re-encoded to
+    // absolute, and every ancestor <g transform> is destroyed. Called on a document destined for disk it
+    // silently corrupts the part file -- merely opening and saving a part rewrites it. It also breaks
+    // editing: moveGraphic/resizeGraphic apply a user-unit delta straight to the element's own attrs,
+    // which is only correct because the transform was destroyed.
+    //
+    // The live editor must instead keep the model document pristine and carry the transform as a
+    // property of the item (PEElement::absoluteTransform / PEDocument::absoluteTransform), so display and
+    // editing map between local and absolute space. flattenInPlace() remains for pure model tests only.
+    void flattenInPlace();
+
+    // M0.2: the absolute user-unit transform 'id' resolves to -- every ancestor <g>'s transform
+    // (outermost applied last) times its own transform attribute. Identity when the element is already
+    // expressed in absolute coordinates, which is the case for the overwhelming majority of Fritzing
+    // part SVGs (they carry no group transforms).
+    //
+    // This is the non-destructive replacement for flattenInPlace(): the element's geometry attrs stay
+    // LOCAL, so the document round-trips byte-for-byte and keeps its group structure, while the live
+    // item multiplies this into its scene transform to draw in the right place. Editing maps a delta
+    // through it, so a graphic under scale(0.5) moves the right distance instead of half as far.
+    // Computed on demand from the live DOM (not cached), so it stays correct after group edits.
+    QTransform absoluteTransform(const QString & id) const;
+
+    // M0.2: true when any modeled element resolves to a non-identity transform, i.e. the view actually
+    // needs local->absolute mapping. Lets callers keep the existing flat fast path for transform-free
+    // documents and pay the mapping cost only where it is real.
+    bool hasTransformedContent() const;
 
     const QDomDocument * domDocument() const { return m_dom; }
     bool isValid() const { return m_dom != nullptr; }

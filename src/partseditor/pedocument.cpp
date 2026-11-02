@@ -24,6 +24,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <cstring>   // strlen for the "connector" prefix length
 
 #include "pepath.h"
+#include "petransform.h"
 
 // Map an SVG tag name to a modelled kind.
 static PEElementKind kindForTag(const QString & tag) {
@@ -282,4 +283,51 @@ QList<PEElement> PEDocument::connectorPins() const {
         if (pe.isConnectorPin()) out.append(pe);
     }
     return out;
+}
+
+void PEDocument::flattenInPlace() {
+    // P9: bake each *graphic* (leaf) element's *nearest* ancestor <g> transform into its own geometry
+    // attrs (absolute user units, i.e. the group's local space -- exactly what the renderer composites),
+    // and drop that transform attribute. This is run once at load, before build(); it strips every <g>
+    // transform, so re-walking an already-flattened document is an exact no-op (idempotent -- the live
+    // initSvgTree re-runs it after every edit with no compounding drift).
+    //
+    // A <g> is never itself flattened: its transform only contributes *context* to its children, which
+    // absorb it. Because a leaf must bake its parent's transform *before* that transform is dropped, we
+    // process in DOM order (parents first), so by the time a leaf is baked its nearest transformed
+    // ancestor is already the identity and only its own transform (if any) remains to fold in.
+    for (PEElement & pe : m_elements) {
+        if (pe.kind == PEElementKind::Unknown || pe.kind == PEElementKind::Group) continue;
+        if (!PETransform::flatten(pe.element)) continue;
+        if (pe.kind == PEElementKind::Rect) {
+            bool ok = false;
+            double x = pe.element.attribute(QStringLiteral("x")).toDouble(&ok);
+            double y = pe.element.attribute(QStringLiteral("y")).toDouble(&ok);
+            double w = pe.element.attribute(QStringLiteral("width")).toDouble(&ok);
+            double h = pe.element.attribute(QStringLiteral("height")).toDouble(&ok);
+            if (ok) {
+                pe.bounds = QRectF(x, y, w, h);
+                pe.hasBounds = true;
+            }
+        }
+    }
+}
+
+QTransform PEDocument::absoluteTransform(const QString & id) const {
+    if (id.isEmpty()) return QTransform();
+    for (const PEElement & pe : m_elements) {
+        if (pe.element.isNull()) continue;
+        if (pe.element.attribute(QStringLiteral("id")) != id) continue;
+        return PETransform::inheritedTransform(pe.element);
+    }
+    return QTransform();
+}
+
+bool PEDocument::hasTransformedContent() const {
+    for (const PEElement & pe : m_elements) {
+        if (pe.kind == PEElementKind::Unknown || pe.kind == PEElementKind::Group) continue;
+        if (pe.element.isNull()) continue;
+        if (!PETransform::inheritedTransform(pe.element).isIdentity()) return true;
+    }
+    return false;
 }

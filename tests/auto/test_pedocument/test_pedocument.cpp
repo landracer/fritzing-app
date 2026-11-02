@@ -19,6 +19,9 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 
 #include <QDomDocument>
 #include <QString>
+#include <QPainterPath>
+#include <QRectF>
+#include <QPointF>
 
 #include "pedocument.h"
 #include "pepath.h"
@@ -27,11 +30,25 @@ along with Fritzing. If not, see <http://www.gnu.org/licenses/>.
 #include "peblankpart.h"
 #include "pesvgimport.h"
 #include "peunits.h"
+#include "petransform.h"
+
+// P10: load an SVG string and return its first child element (the graphic under test).
+static QDomElement loadShape(const QString & svg) {
+    QDomDocument doc;
+    QDomDocument::ParseResult r = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+    return doc.documentElement().firstChildElement();
+}
 
 // Parse an SVG string into a QDomDocument (namespace processing, like the live editor).
 static void parseDoc(const QString & svg, QDomDocument & doc) {
     QDomDocument::ParseResult result = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
     BOOST_REQUIRE(static_cast<bool>(result));
+}
+
+// True if the serialized XML contains a 'transform=' attribute (for the flatten post-condition).
+static bool containsTransform(const QString & xml) {
+    return xml.contains(QStringLiteral("transform="));
 }
 
 BOOST_AUTO_TEST_CASE( round_trip_is_byte_stable )
@@ -368,6 +385,24 @@ BOOST_AUTO_TEST_CASE( primitive_non_creatable_returns_null_element )
     QDomElement e = PEPrimitive::make(doc, PEElementKind::Group, "g", "", QRectF(), QPointF(), QPointF(),
                                        QPointF(), 0.0, QPointF(), 0.0, 0.0, QList<QPointF>(), QString(), QPointF(), QString());
     BOOST_CHECK(e.isNull());
+}
+
+// P10+: a freshly created primitive must be *visible* -- the live self-rendering item draws the
+// element's own stroke, so PEPrimitive::make seeds a default black stroke (and keeps fill=none).
+BOOST_AUTO_TEST_CASE( primitive_make_seeds_visible_default_stroke )
+{
+    QDomDocument doc;
+    QDomElement r = PEPrimitive::make(doc, PEElementKind::Rect, "r1", "",
+                                      QRectF(1, 1, 10, 10), QPointF(), QPointF(), QPointF(), 0.0,
+                                      QPointF(), 0.0, 0.0, QList<QPointF>(), QString(), QPointF(), QString());
+    BOOST_CHECK_EQUAL(r.attribute("stroke").toStdString(), "#000000");
+    BOOST_CHECK_EQUAL(r.attribute("stroke-width").toStdString(), "1");
+    BOOST_CHECK_EQUAL(r.attribute("fill").toStdString(), "none");
+
+    QDomElement l = PEPrimitive::make(doc, PEElementKind::Line, "l1", "",
+                                      QRectF(), QPointF(0, 0), QPointF(2, 2), QPointF(), 0.0,
+                                      QPointF(), 0.0, 0.0, QList<QPointF>(), QString(), QPointF(), QString());
+    BOOST_CHECK_EQUAL(l.attribute("stroke").toStdString(), "#000000");
 }
 
 // ---- P3 live wiring: PEElement::pathAnchors() feeds the draggable node grips ----
@@ -718,4 +753,406 @@ BOOST_AUTO_TEST_CASE( kindForElement_maps_tag_to_kind )
     BOOST_CHECK(PEPrimitive::kindForElement(doc.createElement("g"))      == PEElementKind::Group);
     BOOST_CHECK(PEPrimitive::kindForElement(doc.createElement("bogus"))  == PEElementKind::Unknown);
     BOOST_CHECK(PEPrimitive::kindForElement(QDomElement())               == PEElementKind::Unknown);
+}
+
+// ---- P8: flatten-and-drop the inherited group transform at load (docs/design/vector-editor.md B.2(b)) ----
+
+static QDomElement flattenInGroup(const QString & gTransform, const QString & childXml, QDomDocument & doc) {
+    const QString svg = QStringLiteral(
+        "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>"
+        "<g id='schematic' transform='%1'>%2</g></svg>").arg(gTransform, childXml);
+    QDomDocument::ParseResult r = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+    QDomElement g = doc.documentElement().firstChildElement();
+    QDomElement child = g.firstChildElement();
+    BOOST_REQUIRE(!child.isNull());
+    BOOST_CHECK(PETransform::flatten(child));
+    return child;
+}
+
+BOOST_AUTO_TEST_CASE( p8_parseTransform_translate_and_scale )
+{
+    QTransform t;
+    BOOST_CHECK(PETransform::parseTransform(QStringLiteral("translate(3,4)"), t));
+    BOOST_CHECK_CLOSE(t.dx(), 3.0, 1e-9);
+    BOOST_CHECK_CLOSE(t.dy(), 4.0, 1e-9);
+
+    QTransform s;
+    BOOST_CHECK(PETransform::parseTransform(QStringLiteral("scale(2)"), s));
+    BOOST_CHECK_EQUAL(s.map(QPointF(5, 7)).x(), 10.0);
+    BOOST_CHECK_EQUAL(s.map(QPointF(5, 7)).y(), 14.0);
+
+    QTransform bad;
+    BOOST_CHECK(!PETransform::parseTransform(QStringLiteral("notatransform"), bad));
+    BOOST_CHECK(!PETransform::parseTransform(QStringLiteral(""), bad));
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_rect_translate_then_moveBy_lands_correctly )
+{
+    QDomDocument doc;
+    QDomElement rect = flattenInGroup(QStringLiteral("translate(10,20)"),
+                                      QStringLiteral("<rect x='1' y='2' width='3' height='4'/>"), doc);
+    BOOST_CHECK_EQUAL(rect.attribute("x").toStdString(), "11");
+    BOOST_CHECK_EQUAL(rect.attribute("y").toStdString(), "22");
+    BOOST_CHECK_EQUAL(rect.attribute("width").toStdString(), "3");
+    BOOST_CHECK_EQUAL(rect.attribute("transform").toStdString(), "");   // dropped
+    PEElement pe; pe.kind = PEElementKind::Rect; pe.element = rect;
+    BOOST_CHECK(pe.moveBy(QPointF(1, 1)));
+    BOOST_CHECK_EQUAL(rect.attribute("x").toStdString(), "12");
+    BOOST_CHECK_EQUAL(rect.attribute("y").toStdString(), "23");
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_line_maps_both_endpoints )
+{
+    QDomDocument doc;
+    QDomElement line = flattenInGroup(QStringLiteral("translate(5,5)"),
+                                      QStringLiteral("<line x1='0' y1='0' x2='2' y2='3'/>"), doc);
+    BOOST_CHECK_EQUAL(line.attribute("x1").toStdString(), "5");
+    BOOST_CHECK_EQUAL(line.attribute("y1").toStdString(), "5");
+    BOOST_CHECK_EQUAL(line.attribute("x2").toStdString(), "7");
+    BOOST_CHECK_EQUAL(line.attribute("y2").toStdString(), "8");
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_polygon_maps_every_point )
+{
+    QDomDocument doc;
+    QDomElement poly = flattenInGroup(QStringLiteral("translate(1,2)"),
+                                      QStringLiteral("<polygon points='0,0 10,0 10,10'/>"), doc);
+    BOOST_CHECK_EQUAL(poly.attribute("points").toStdString(), "1,2 11,2 11,12");
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_text_maps_anchor )
+{
+    QDomDocument doc;
+    QDomElement text = flattenInGroup(QStringLiteral("translate(2,3)"),
+                                      QStringLiteral("<text x='1' y='1'>x</text>"), doc);
+    BOOST_CHECK_EQUAL(text.attribute("x").toStdString(), "3");
+    BOOST_CHECK_EQUAL(text.attribute("y").toStdString(), "4");
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_path_absolute_anchor_baked )
+{
+    QDomDocument doc;
+    QDomElement path = flattenInGroup(QStringLiteral("translate(100,200)"),
+                                      QStringLiteral("<path d='M0 0L10 10'/>"), doc);
+    PEElement pe; pe.kind = PEElementKind::Path; pe.element = path;
+    const QList<QPointF> anchors = pe.pathAnchors();
+    BOOST_REQUIRE(anchors.count() >= 2);
+    BOOST_CHECK_CLOSE(anchors.at(0).x(), 100.0, 1e-6);
+    BOOST_CHECK_CLOSE(anchors.at(0).y(), 200.0, 1e-6);
+    BOOST_CHECK_CLOSE(anchors.at(1).x(), 110.0, 1e-6);
+    BOOST_CHECK_CLOSE(anchors.at(1).y(), 210.0, 1e-6);
+    BOOST_CHECK_EQUAL(path.attribute("transform").toStdString(), "");
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_no_group_transform_is_noop )
+{
+    QDomDocument doc;
+    const QString svg = QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg'><rect x='1' y='1' width='2' height='2'/></svg>");
+    QDomDocument::ParseResult r = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+    QDomElement rect = doc.documentElement().firstChildElement();
+    BOOST_CHECK(!PETransform::flatten(rect));
+    BOOST_CHECK_EQUAL(rect.attribute("x").toStdString(), "1");
+}
+
+BOOST_AUTO_TEST_CASE( p8_flatten_circle_drops_r_under_scale )
+{
+    QDomDocument doc;
+    QDomElement circle = flattenInGroup(QStringLiteral("scale(2)"),
+                                        QStringLiteral("<circle cx='5' cy='5' r='3'/>"), doc);
+    BOOST_CHECK_EQUAL(circle.attribute("cx").toStdString(), "10");
+    BOOST_CHECK_EQUAL(circle.attribute("cy").toStdString(), "10");
+    BOOST_CHECK(!circle.hasAttribute("r"));
+}
+
+// ---- P9: typed flattenInPlace over the whole borrowed DOM (the live initSvgTree wiring) ----
+
+BOOST_AUTO_TEST_CASE( p9_flattenInPlace_bakes_leaf_into_group_space )
+{
+    QDomDocument doc;
+    const QString svg =
+        R"(<svg xmlns='http://www.w3.org/2000/svg'><g id='schematic' transform='translate(10,20)'><rect id='r1' x='1' y='2' width='3' height='4'/><line id='l1' x1='0' y1='0' x2='2' y2='2'/></g></svg>)";
+    QDomDocument::ParseResult r = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+
+    PEDocument pe;
+    pe.build(doc);
+    pe.flattenInPlace();
+
+    // A leaf graphic is baked to absolute (1+10, 2+20) and re-read into pe.bounds (moveBy can hit it).
+    PEElement rect = pe.findById("r1");
+    BOOST_CHECK(rect.hasBounds);
+    BOOST_CHECK(rect.bounds == QRectF(11, 22, 3, 4));
+    BOOST_CHECK_EQUAL(rect.element.attribute("x").toStdString(), "11");
+    BOOST_CHECK_EQUAL(rect.element.attribute("y").toStdString(), "22");
+
+    // line baked into the group's space (the transform was in the parent's coords already, so a translate
+    // by the group's (10,20) shifts the leaf's local coords by that delta -- here (0,0)->(10,20)).
+    BOOST_CHECK_EQUAL(pe.findById("l1").element.attribute("x1").toStdString(), "10");
+    BOOST_CHECK_EQUAL(pe.findById("l1").element.attribute("y2").toStdString(), "22");
+
+    // Group-as-unit is deferred (P11): the <g>'s transform is intentionally left in place.
+    BOOST_CHECK(!pe.findById("schematic").element.attribute("transform").isEmpty());
+}
+
+
+BOOST_AUTO_TEST_CASE( p9_flattenInPlace_no_transform_is_identity )
+{
+    QDomDocument doc;
+    const QString svg = R"(<svg xmlns='http://www.w3.org/2000/svg'><rect id='r1' x='5' y='5' width='2' height='2'/></svg>)";
+    QDomDocument::ParseResult r = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+    PEDocument pe;
+    pe.build(doc);
+    const QString before = pe.toXml();
+    pe.flattenInPlace();
+    BOOST_CHECK_EQUAL(pe.toXml().toStdString(), before.toStdString());   // byte-stable when nothing to bake
+}
+
+// ---- P10: shapeFromElement (per-kind geometry -> QPainterPath) ----
+
+BOOST_AUTO_TEST_CASE( p10_shape_rect )
+{
+    QDomElement e = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><rect x='3' y='4' width='10' height='20'/></svg>)");
+    QPainterPath p;
+    BOOST_REQUIRE(PETransform::shapeFromElement(e, p));
+    BOOST_CHECK(p.boundingRect() == QRectF(3, 4, 10, 20));
+    BOOST_CHECK(p.contains(QPointF(3.0001, 4.0001)));
+    BOOST_CHECK(!p.contains(QPointF(2.9, 4)));   // outside the rect
+}
+
+BOOST_AUTO_TEST_CASE( p10_shape_circle_and_ellipse )
+{
+    QPainterPath c;
+    QDomElement ce = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><circle cx='10' cy='10' r='5'/></svg>)");
+    BOOST_REQUIRE(PETransform::shapeFromElement(ce, c));
+    BOOST_CHECK(c.boundingRect() == QRectF(5, 5, 10, 10));
+    BOOST_CHECK(c.contains(QPointF(10, 10)));
+
+    QPainterPath el;
+    QDomElement ee = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><ellipse cx='0' cy='0' rx='2' ry='3'/></svg>)");
+    BOOST_REQUIRE(PETransform::shapeFromElement(ee, el));
+    BOOST_CHECK(el.boundingRect() == QRectF(-2, -3, 4, 6));
+}
+
+BOOST_AUTO_TEST_CASE( p10_shape_line_is_hairline )
+{
+    QDomElement e = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><line x1='0' y1='0' x2='10' y2='0'/></svg>)");
+    QPainterPath p;
+    BOOST_REQUIRE(PETransform::shapeFromElement(e, p));
+    BOOST_CHECK(p.boundingRect() == QRectF(0, 0, 10, 0));   // zero-height hairline
+    BOOST_CHECK(p.elementCount() == 2);                       // a move + a line
+}
+
+BOOST_AUTO_TEST_CASE( p10_shape_polygon_and_polyline )
+{
+    // Qt 6 QPainterPath has no close-segment element type, so a <polygon> cannot be modeled as closed;
+    // both tags decode their point-list to the same open move + line-tos. The vertex sequence is the
+    // modeled geometry the live item paints/hit-tests from (documented limitation, not a bug).
+    const QString pts = QStringLiteral("0,0 10,0 10,10");
+    for (const QString & tag : {QStringLiteral("polygon"), QStringLiteral("polyline")}) {
+        QDomElement e = loadShape(QString(R"(<svg xmlns='http://www.w3.org/2000/svg'><%1 points='%2'/></svg>)").arg(tag, pts));
+        BOOST_CHECK(!e.isNull());
+        QPainterPath p;
+        BOOST_REQUIRE(PETransform::shapeFromElement(e, p));
+        BOOST_CHECK(p.elementCount() == 3);   // move + two line-tos
+        BOOST_CHECK(QPointF(p.elementAt(0)) == QPointF(0, 0));
+        BOOST_CHECK(QPointF(p.elementAt(1)) == QPointF(10, 0));
+        BOOST_CHECK(QPointF(p.elementAt(2)) == QPointF(10, 10));
+        BOOST_CHECK(p.boundingRect() == QRectF(0, 0, 10, 10));
+    }
+}
+
+BOOST_AUTO_TEST_CASE( p10_shape_path_absolute_and_relative )
+{
+    // Absolute square with a real close.
+    QPainterPath a;
+    QDomElement ae = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><path d='M 0 0 L 10 0 L 10 10 L 0 10 Z'/></svg>)");
+    BOOST_REQUIRE(PETransform::shapeFromElement(ae, a));
+    BOOST_CHECK(a.boundingRect() == QRectF(0, 0, 10, 10));
+    BOOST_CHECK(a.contains(QPointF(5, 5)));
+
+    // Equivalent path in relative encoding must resolve to the same square (cursor-relative resolve).
+    QPainterPath r;
+    QDomElement re = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><path d='M 0 0 l 10 0 l 0 10 l -10 0 z'/></svg>)");
+    BOOST_REQUIRE(PETransform::shapeFromElement(re, r));
+    BOOST_CHECK(r.boundingRect() == QRectF(0, 0, 10, 10));
+    BOOST_CHECK(r.contains(QPointF(5, 5)));
+}
+
+BOOST_AUTO_TEST_CASE( p10_shape_path_cubic_curve_bounds )
+{
+    // A cubic from (0,0) to (10,0) with controls at y=+10 and y=-10. Qt's tight bounding box is
+    // curve-accurate (it ignores control points), so it bulges off the zero-height anchor line --
+    // proving curves are honored, not just the anchor polyline.
+    QPainterPath p;
+    QDomElement e = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><path d='M 0 0 C 5 10 5 -10 10 0 Z'/></svg>)");
+    BOOST_REQUIRE(PETransform::shapeFromElement(e, p));
+    const QRectF b = p.boundingRect();
+    BOOST_CHECK(qAbs(b.left()) < 1e-6);                 // 0
+    BOOST_CHECK(qAbs(b.right() - 10.0) < 1e-6);          // 10
+    BOOST_CHECK(b.top() < 0.0 && b.top() > -10.0);        // curve bulges above (more negative than) the anchor line
+    BOOST_CHECK(b.bottom() > 0.0 && b.bottom() < 10.0);   // and below it (tight curve bound ~ +/-2.887)
+}
+
+BOOST_AUTO_TEST_CASE( p10_shape_unmodelled_returns_false )
+{
+    // A bare <g> is not a shape, and an unrecognized tag is not a shape -> no self-render geometry.
+    QDomElement g = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><g id='notshape'/></svg>)");
+    QPainterPath p;
+    BOOST_CHECK(!PETransform::shapeFromElement(g, p));
+
+    QDomElement foo = loadShape(R"(<svg xmlns='http://www.w3.org/2000/svg'><foo id='x'/></svg>)");
+    QPainterPath p2;
+    BOOST_CHECK(!PETransform::shapeFromElement(foo, p2));
+}
+
+BOOST_AUTO_TEST_CASE( p10_live_render_round_trip_moveBy )
+{
+    // Live-item contract: shapeFromElement(render) reads the same attrs moveBy edits, so a move is
+    // reflected in the shape with no baked fill and no separate renderer coordinate space.
+    QDomDocument doc;
+    QDomDocument::ParseResult r = doc.setContent(
+        R"(<svg xmlns='http://www.w3.org/2000/svg'><rect id='r1' x='3' y='4' width='10' height='20'/></svg>)",
+        QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+    PEDocument pe;
+    pe.build(doc);
+
+    QPainterPath before;
+    BOOST_REQUIRE(PETransform::shapeFromElement(pe.findById("r1").element, before));
+    BOOST_CHECK(before.boundingRect() == QRectF(3, 4, 10, 20));
+
+    BOOST_REQUIRE(pe.findById("r1").moveBy(QPointF(100, 100)));
+
+    QPainterPath after;
+    BOOST_REQUIRE(PETransform::shapeFromElement(pe.findById("r1").element, after));
+    BOOST_CHECK(after.boundingRect() == QRectF(103, 104, 10, 20));   // followed the model edit
+}
+
+// ---- M0.2 / M0.5: non-destructive transform handling (docs/design/vector-editor.md §B.2) ----
+
+// Parse a part SVG, build the typed view over it, and hand back the document. Used by the M0.2 cases to
+// assert that building/querying the view never perturbs the DOM the editor later serializes to disk.
+static QDomDocument m02Build(const QString & svg, PEDocument & out) {
+    QDomDocument doc;
+    QDomDocument::ParseResult r = doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing);
+    BOOST_REQUIRE(static_cast<bool>(r));
+    out.build(doc);
+    return doc;
+}
+
+BOOST_AUTO_TEST_CASE( m02_byte_equality_open_and_save_untouched )
+{
+    // The regression that made the editor unsafe to ship: opening a part and saving it must not rewrite
+    // the file. The typed view is built on every load, so building it -- and every read path the live
+    // surface uses -- must be pure with respect to the DOM.
+    PEDocument pe;
+    QDomDocument doc = m02Build(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
+        "<g id='schematic' transform='translate(5,5) scale(2)'>"
+        "<rect id='r1' x='1' y='2' width='3' height='4' fill='#FFFFFF' stroke='#000000'/>"
+        "<circle id='c1' cx='10' cy='10' r='2'/>"
+        "<path id='p1' d='M 1 1 l 5 5 h 3 z'/>"
+        "<line id='l1' x1='0' y1='0' x2='9' y2='9'/>"
+        "<text id='t1' x='3' y='4'>Ref</text>"
+        "</g></svg>",
+        pe);
+    const QString before = doc.toString();
+
+    BOOST_REQUIRE(pe.count() > 0);
+    BOOST_CHECK(pe.hasTransformedContent());
+    (void) pe.findById("r1").bounds;
+    (void) pe.findById("p1").pathAnchors();
+    (void) pe.absoluteTransform("c1");
+    (void) pe.findById("c1").moveBy(QPointF(0, 0));   // a zero-delta move must not perturb formatting either
+
+    BOOST_CHECK_EQUAL(doc.toString().toStdString(), before.toStdString());
+}
+
+BOOST_AUTO_TEST_CASE( m02_absolute_transform_matches_renderer_composition )
+{
+    // absoluteTransform reports the mapping the renderer composites: ancestor transforms outermost-last,
+    // times the element's own transform -- while geometry attrs stay LOCAL (non-destructive).
+    PEDocument pe;
+    QDomDocument doc = m02Build(
+        "<svg xmlns='http://www.w3.org/2000/svg'>"
+        "<g transform='translate(10,20)'>"
+        "<g transform='scale(2)'>"
+        "<rect id='inner' x='1' y='1' width='2' height='2' transform='rotate(90)'/>"
+        "</g></g></svg>",
+        pe);
+
+    const QTransform t = pe.absoluteTransform("inner");
+    BOOST_CHECK(!t.isIdentity());
+
+    // Expected composition, built the same way PETransform::inheritedTransform accumulates:
+    // result = result * parentTransform, outermost group first, then the element's own transform.
+    QTransform expected;
+    expected = expected * QTransform().translate(10, 20);
+    expected = expected * QTransform().scale(2, 2);
+    expected = expected * QTransform().rotate(90);
+
+    // Compare by mapping a probe point rather than a QTransform equality API (Qt exposes no operator==
+    // /isNearExact for QTransform): the mapping is the contract, so test the mapping.
+    const QPointF probe(1, 1);
+    const QPointF got = t.map(probe);
+    const QPointF want = expected.map(probe);
+    BOOST_CHECK_CLOSE(got.x(), want.x(), 1e-6);
+    BOOST_CHECK_CLOSE(got.y(), want.y(), 1e-6);
+
+    // Nothing was baked: the rect keeps local attrs and both transforms stay on their own nodes.
+    const QDomElement inner = pe.findById("inner").element;
+    BOOST_CHECK_EQUAL(inner.attribute("x").toStdString(), "1");
+    BOOST_CHECK_EQUAL(inner.attribute("width").toStdString(), "2");
+    BOOST_CHECK_EQUAL(inner.attribute("transform").toStdString(), "rotate(90)");
+
+    QDomElement scaleGroup;
+    for (int i = 0; i < doc.elementsByTagName("g").count(); ++i) {
+        const QDomElement g = doc.elementsByTagName("g").at(i).toElement();
+        if (g.attribute("transform") == "scale(2)") scaleGroup = g;
+    }
+    BOOST_CHECK_EQUAL(scaleGroup.attribute("transform").toStdString(), "scale(2)");
+}
+
+BOOST_AUTO_TEST_CASE( m02_absolute_transform_identity_when_no_transform )
+{
+    // The overwhelmingly common case (Fritzing part SVGs carry no group transforms): identity, and the
+    // document reports no transformed content so callers keep the flat fast path.
+    PEDocument pe;
+    m02Build(R"(<svg xmlns='http://www.w3.org/2000/svg'><g id='schematic'><rect id='r1' x='5' y='5' width='2' height='2'/></g></svg>)", pe);
+
+    BOOST_CHECK(pe.absoluteTransform("r1").isIdentity());
+    BOOST_CHECK(!pe.hasTransformedContent());
+    BOOST_CHECK(pe.absoluteTransform("missing").isIdentity());
+}
+
+BOOST_AUTO_TEST_CASE( m02_move_is_local_space_so_callers_must_map )
+{
+    // Why the destructive flatten existed: moveGraphic applies a user-unit (absolute) delta straight to
+    // the element's own attrs, which is only correct when the element is already absolute. Non-destructive
+    // means moveBy stays in LOCAL space, so the caller must divide the absolute delta through
+    // absoluteTransform(). This pins both halves of that contract.
+    PEDocument pe;
+    m02Build(R"(<svg xmlns='http://www.w3.org/2000/svg'><g transform='scale(2)'><rect id='r1' x='1' y='1' width='2' height='2'/></g></svg>)", pe);
+
+    const QTransform t = pe.absoluteTransform("r1");
+    BOOST_CHECK(!t.isIdentity());
+
+    // A 10-unit absolute move under scale(2) is a 5-unit move in local space.
+    bool ok = false;
+    const QTransform inv = t.inverted(&ok);
+    BOOST_REQUIRE(ok);
+    const QPointF localDelta = inv.map(QPointF(10, 10));
+    BOOST_CHECK_CLOSE(localDelta.x(), 5.0, 1e-6);
+    BOOST_CHECK_CLOSE(localDelta.y(), 5.0, 1e-6);
+
+    BOOST_REQUIRE(pe.findById("r1").moveBy(localDelta));
+    BOOST_CHECK_EQUAL(pe.findById("r1").element.attribute("x").toStdString(), "6");
+
+    // ...and the absolute position really did advance by exactly 10 user units.
+    const QPointF absTopLeft = pe.absoluteTransform("r1").map(QPointF(6, 6));
+    BOOST_CHECK_CLOSE(absTopLeft.x(), 12.0, 1e-6);
+    BOOST_CHECK_CLOSE(absTopLeft.y(), 12.0, 1e-6);
 }
