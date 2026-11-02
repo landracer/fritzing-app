@@ -64,6 +64,13 @@ public:
 	int grabbedAnchor();
 	void setDocBounds(QRectF);
 	QRectF docBounds();
+	// Fully-live slice (docs/design/vector-editor.md §B.1): when interactive, this item becomes a
+	// top-level movable+selectable object -- clicking focuses (selects) it and dragging its body moves
+	// the underlying element (not the whole-view svg). Default off so non-interactive overlays behave
+	// exactly as the legacy child-overlay did.
+	void setInteractive(bool interactive);
+	bool interactive() const { return m_interactive; }
+	QPointF docOrigin() const { return m_docBounds.topLeft(); }   // element origin in user units
 	void setTerminalPoint(QPointF);
 	QPointF terminalPoint();
 	void setPendingTerminalPoint(QPointF);
@@ -83,6 +90,9 @@ Q_SIGNALS:
 	// is the document-unit anchor point (segmentIndex indexes pathAnchors()).
 	void pathAnchorMoved(PEGraphicsItem *, int segmentIndex, QPointF anchor);
 	void pathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
+	// Fully-live slice: the whole (interactive) graphic was body-dragged; deltaUnits is the move in
+	// document user units. PEMainWindow applies it to the element's geometry attrs (moveGraphic).
+	void graphicMoveDelta(PEGraphicsItem *, QPointF deltaUnits);
 
 protected Q_SLOTS:
 	void restoreColor();
@@ -109,6 +119,9 @@ protected:
 	int m_wheelAccum = 0;
 	qreal m_savedOpacity = 0;
 	bool m_pick = false;
+	bool m_interactive = false;   // fully-live slice: movable+selectable object (not a child overlay)
+	QPointF m_bodyDragOrigin;     // scene px point where a body-drag started (empty = not dragging)
+	bool m_draggingBody = false;  // true while the whole element is being dragged (vs a grip/anchor)
 	class ItemBase * m_itemBase = nullptr;
 };
 

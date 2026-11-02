@@ -24,11 +24,13 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../sketch/infographicsview.h"
 #include "../items/itembase.h"
 #include "pedocument.h"   // PEElement/PEElementKind (typed path anchors)
+#include "petransform.h"  // P10: shapeFromElement (live self-render of the element geometry)
 
 #include <QBrush>
 #include <QColor>
 #include <QGraphicsScene>
 #include <QPainter>
+#include <QPainterPath>
 
 
 static QVector<qreal> Dashes;
@@ -41,6 +43,13 @@ static bool ShiftY = false;
 static constexpr double MinMouseMove = 2;
 static const QColor NormalColor(0, 0, 255);
 static const QColor PickColor(255, 0, 255);
+
+// Resolve the element's fill-rule attribute into a Qt fill rule (default: nonzero winding).
+static Qt::FillRule fillRuleOf(const QDomElement & el) {
+    const QString fr = el.attribute(QStringLiteral("fill-rule"));
+    if (fr.compare(QStringLiteral("evenodd"), Qt::CaseInsensitive) == 0) return Qt::OddEvenFill;
+    return Qt::WindingFill;
+}
 
 
 ////////////////////////////////////////////////
@@ -188,7 +197,40 @@ QPointF PEGraphicsItem::offset() {
 
 void PEGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
-	QGraphicsRectItem::paint(painter, option, widget);
+	Q_UNUSED(option);
+	Q_UNUSED(widget);
+
+	// P10 (docs/design/vector-editor.md F.5): the live item self-renders the element's own geometry
+	// (fill + stroke) instead of painting a baked fill over a static raster. The rendered path and the
+	// hit-test shape both come from PETransform::shapeFromElement(m_element) -- the same attrs the
+	// command layer edits -- so display always equals model with no separate renderer coordinate space.
+	if (!m_element.isNull()) {
+		QPainterPath shape;
+		if (PETransform::shapeFromElement(m_element, shape)) {
+			shape.setFillRule(fillRuleOf(m_element));
+			const QString stroke = m_element.attribute(QStringLiteral("stroke"));
+			bool sok = false;
+			double swv = m_element.attribute(QStringLiteral("stroke-width")).toDouble(&sok);
+			QPen pen;
+			if (!stroke.isEmpty() && stroke.compare(QStringLiteral("none"), Qt::CaseInsensitive) != 0) {
+				pen.setColor(QColor(stroke));
+				pen.setWidthF(sok ? swv : 0.0);
+			} else {
+				pen.setStyle(Qt::NoPen);
+			}
+			const QString fill = m_element.attribute(QStringLiteral("fill"));
+			QBrush brush;
+			if (fill.isEmpty() || fill.compare(QStringLiteral("none"), Qt::CaseInsensitive) == 0) {
+				brush.setStyle(Qt::NoBrush);
+			} else {
+				brush = QBrush(QColor(fill));
+				brush.setStyle(Qt::SolidPattern);
+			}
+			painter->setPen(pen);
+			painter->setBrush(brush);
+			painter->drawPath(shape);
+		}
+	}
 
 	if (m_flash) {
 		m_flash = false;
@@ -261,6 +303,21 @@ void PEGraphicsItem::showTerminalPoint(bool show)
 {
 	m_showTerminalPoint = show;
 	update();
+}
+
+// Fully-live slice (vector-editor.md §B.1): when interactive, this item is a standalone movable +
+// focusable object. A click focuses it (select -> highlight shows its grips); Qt's built-in movable
+// drag then relocates it, which PEMainWindow maps back onto the element's geometry attrs. Non-interactive
+// items keep the legacy child-overlay behavior untouched.
+void PEGraphicsItem::setInteractive(bool interactive) {
+	m_interactive = interactive;
+	if (interactive) {
+		setFlag(QGraphicsItem::ItemIsMovable, true);
+		setFlag(QGraphicsItem::ItemIsFocusable, true);
+		setFlag(QGraphicsItem::ItemIsSelectable, true);
+		showMarquee(true);
+		if (m_element.tagName().compare(QStringLiteral("path")) == 0) showPathAnchors(true);
+	}
 }
 
 
@@ -351,8 +408,8 @@ QPointF PEGraphicsItem::pendingTerminalPoint() {
 void PEGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent * event) {
 	m_dragTerminalPoint = false;
 
-	if (!m_highlighted) {
-		// allows to click through to next layer
+	if (!m_interactive && !m_highlighted) {
+		// legacy overlay: a non-highlighted (unselected) overlay click-throughs to the next layer
 		event->ignore();
 		return;
 	}
@@ -365,6 +422,53 @@ void PEGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent * event) {
 	InfoGraphicsView * infoGraphicsView = InfoGraphicsView::getInfoGraphicsView(this);
 	if ((infoGraphicsView != nullptr) && infoGraphicsView->spaceBarIsPressed()) {
 		event->ignore();
+		return;
+	}
+
+	if (m_interactive) {
+		// Fully-live slice: pressing a live graphic selects it (highlight -> grips appear). If the press
+		// is on a path node/terminal grip, we take over for grip-drag; otherwise we accept (so Qt's built-in
+		// movable drag relocates the item) and PEMainWindow converts the move into a geometry edit.
+		Q_EMIT highlightSignal(this);
+		QPointF p = event->pos();
+		QVector<QPointF> anchors = pathAnchors();
+		if (!anchors.isEmpty() && m_docBounds.width() > 0 && m_docBounds.height() > 0) {
+			double sx = rect().width() / m_docBounds.width();
+			double sy = rect().height() / m_docBounds.height();
+			qreal side = qMin(rect().width(), rect().height()) / 10.0;
+			if (side <= 0) side = 4;
+			int hit = -1;
+			qreal best = 1e30;
+			for (int i = 0; i < anchors.count(); ++i) {
+				QPointF a = anchors.at(i);
+				qreal px = (a.x() - m_docBounds.left()) * sx;
+				qreal py = (a.y() - m_docBounds.top()) * sy;
+				QRectF grip(px - side / 2, py - side / 2, side, side);
+				if (grip.adjusted(-2, -2, 2, 2).contains(p)) {
+					qreal d = QLineF(p, QPointF(px, py)).length();
+					if (d < best) { best = d; hit = i; }
+				}
+			}
+			if (hit >= 0) {
+				m_dragPathAnchor = true;
+				m_grabbedAnchor = hit;
+				m_pathAnchorOrigin = anchors.at(hit);
+				m_dragPathAnchorOrigin = p;
+				event->accept();
+				return;
+			}
+		}
+		if (qAbs(p.x() - m_terminalPoint.x()) <= MinMouseMove && qAbs(p.y() - m_terminalPoint.y()) <= MinMouseMove) {
+			m_dragTerminalPoint = true;
+			m_terminalPointOrigin = m_terminalPoint;
+			m_dragTerminalOrigin = event->pos();
+			event->accept();
+			return;
+		}
+		// body drag: let the base movable-item drag relocate us
+		m_draggingBody = true;
+		m_bodyDragOrigin = event->scenePos();
+		QGraphicsRectItem::mousePressEvent(event);
 		return;
 	}
 
@@ -481,7 +585,7 @@ void PEGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent * event) {
 }
 
 
-void PEGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *) {
+void PEGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent * event) {
 	if (m_dragPathAnchor) {
 		m_dragPathAnchor = false;
 		QVector<QPointF> anchors = pathAnchors();
@@ -497,11 +601,26 @@ void PEGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *) {
 		if (m_terminalPointOrigin != m_terminalPoint) {
 			Q_EMIT terminalPointChanged(this, m_terminalPointOrigin, m_terminalPoint);
 		}
+		return;
 	}
-	else {
-		// relocate the connector
+	if (m_draggingBody) {
+		// Fully-live slice: the whole graphic was body-dragged. Convert the on-screen (px) move into a
+		// user-unit delta relative to the press point, and hand it to PEMainWindow via the same
+		// mouseReleasedSignal the connector flow uses. PEMainWindow applies it with moveGraphic/
+		// MoveGraphicCommand (which translates every kind's attrs, incl. <path>) so the edit is real+undoable.
+		m_draggingBody = false;
+		const QPointF deltaScene = event->scenePos() - m_bodyDragOrigin;
+		m_bodyDragOrigin = QPointF();
+		QRectF r = rect();
+		const QRectF doc = m_docBounds;
+		const double sux = (r.width()  > 0 && doc.width()  > 0) ? doc.width()  / r.width()  : 1.0;
+		const double suy = (r.height() > 0 && doc.height() > 0) ? doc.height() / r.height() : 1.0;
 		Q_EMIT mouseReleasedSignal(this);
+		Q_EMIT graphicMoveDelta(this, QPointF(deltaScene.x() * sux, deltaScene.y() * suy));
+		return;
 	}
+	// legacy overlay: relocate the connector
+	Q_EMIT mouseReleasedSignal(this);
 }
 
 void PEGraphicsItem::setPickAppearance(bool pick) {
