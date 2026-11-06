@@ -396,7 +396,13 @@ BOOST_AUTO_TEST_CASE( primitive_make_seeds_visible_default_stroke )
                                       QRectF(1, 1, 10, 10), QPointF(), QPointF(), QPointF(), 0.0,
                                       QPointF(), 0.0, 0.0, QList<QPointF>(), QString(), QPointF(), QString());
     BOOST_CHECK_EQUAL(r.attribute("stroke").toStdString(), "#000000");
-    BOOST_CHECK_EQUAL(r.attribute("stroke-width").toStdString(), "1");
+    // This used to assert stroke-width == "1" exactly. The case's intent is "make() seeds a VISIBLE
+    // stroke rather than leaving the shape invisible"; the literal 1 was incidental, and 1 user unit
+    // turned out to be the wrong default -- on a 15x13mm connector it renders as a solid black blob.
+    // Assert visibility + a sane default instead, and pin the caller-supplied width separately.
+    BOOST_CHECK(!r.attribute("stroke-width").isEmpty());
+    BOOST_CHECK(r.attribute("stroke-width").toDouble() > 0);
+    BOOST_CHECK_EQUAL(r.attribute("stroke-width").toStdString(), "0.25");   // the documented default
     BOOST_CHECK_EQUAL(r.attribute("fill").toStdString(), "none");
 
     QDomElement l = PEPrimitive::make(doc, PEElementKind::Line, "l1", "",
@@ -722,7 +728,7 @@ BOOST_AUTO_TEST_CASE( moveBy_path_shifts_absolute_anchor )
     BOOST_CHECK_CLOSE(anchors.at(1).y(), 13.0, 1e-6);
 }
 
-BOOST_AUTO_TEST_CASE( resizeRect_replaces_box_and_nonrect_returns_false )
+BOOST_AUTO_TEST_CASE( resizeRect_replaces_box )
 {
     QDomDocument doc;
     QDomElement rect = doc.createElement("rect");
@@ -736,13 +742,332 @@ BOOST_AUTO_TEST_CASE( resizeRect_replaces_box_and_nonrect_returns_false )
     BOOST_CHECK_EQUAL(rect.attribute("width").toStdString(), "9");
     BOOST_CHECK_EQUAL(rect.attribute("height").toStdString(), "10");
 
-    // a non-rect cannot be resized at the attribute level
-    QDomElement circle = doc.createElement("circle");
-    circle.setAttribute("cx", "0"); circle.setAttribute("cy", "0"); circle.setAttribute("r", "5");
+    // This case used to assert that a circle returns false ("a non-rect cannot be resized at the
+    // attribute level"). That was the rect-only limitation the resize grips were written to remove,
+    // so the assertion is now wrong rather than the code: circle behaviour is covered by
+    // resizeRect_fits_circle_to_the_inscribed_diameter, and genuine rejection by
+    // resizeRect_rejects_kinds_it_cannot_fit.
+}
+
+// ------------------------------------------------------------------------------------------------
+// Resize-grip maths (PEGraphicsItem). The grips are the only way resizeGraphic is ever reached --
+// before they existed the command was unreachable and had zero invocations across every recorded
+// session -- so the mask arithmetic and the pixel->user-unit mapping are pinned here. These mirror
+// PEGraphicsItem's private helpers exactly; if either changes the other must follow, and a mismatch
+// is exactly the class of bug (left/top handles doing nothing) these were written to catch.
+
+namespace {
+enum TestGrip {
+    tGripLeft   = 1 << 0,
+    tGripRight  = 1 << 1,
+    tGripTop    = 1 << 2,
+    tGripBottom = 1 << 3
+};
+QRectF tMarquee(const QRectF & r)
+{
+    QRectF m = r;
+    const double d = qMin(m.width(), m.height()) / 16;
+    m.adjust(d, d, -d, -d);
+    return m;
+}
+QRectF tResizedBox(int grip, const QRectF & origin, const QPointF & from, const QPointF & to)
+{
+    QRectF box = origin;
+    const double dx = to.x() - from.x();
+    const double dy = to.y() - from.y();
+    if (grip & tGripLeft)   box.setLeft(box.left() + dx);
+    if (grip & tGripRight)  box.setRight(box.right() + dx);
+    if (grip & tGripTop)    box.setTop(box.top() + dy);
+    if (grip & tGripBottom) box.setBottom(box.bottom() + dy);
+    return box.normalized();
+}
+}   // namespace
+
+// Every grip must be a distinct bit. An early draft used GripLeft = 0, which makes
+// `grip & GripLeft` permanently false: left/top drags then silently resize nothing, and because the
+// handles still draw, it looks like a drag bug rather than a mask bug.
+BOOST_AUTO_TEST_CASE( resizeGrip_masks_are_distinct_bits )
+{
+    const int masks[] = { tGripLeft, tGripRight, tGripTop, tGripBottom,
+                          tGripTop | tGripLeft, tGripTop | tGripRight,
+                          tGripBottom | tGripLeft, tGripBottom | tGripRight };
+    for (int i = 0; i < 8; ++i) {
+        BOOST_CHECK_MESSAGE(masks[i] != 0, "grip mask must not be zero");
+        BOOST_CHECK_MESSAGE((masks[i] & (masks[i] - 1)) == 0 || i >= 4,
+                            "single-edge grips must each be a single bit");
+        for (int j = i + 1; j < 8; ++j)
+            BOOST_CHECK_MESSAGE(masks[i] != masks[j], "grip masks must be unique");
+    }
+}
+
+BOOST_AUTO_TEST_CASE( resizeGrip_corner_drag_changes_both_axes_and_anchors_the_opposite_corner )
+{
+    const QRectF doc(20, 20, 10, 10);
+    const QRectF pxRect(0, 0, 20, 20);          // rendered at 2 px per user unit
+    const QRectF m = tMarquee(pxRect);
+    // px -> user units
+    auto toDoc = [&](const QPointF & p) {
+        return QPointF(doc.left() + p.x() * (doc.width() / pxRect.width()),
+                       doc.top()  + p.y() * (doc.height() / pxRect.height()));
+    };
+
+    // Right edge: +4 px == +2 user units of width, left edge untouched.
+    QRectF r = tResizedBox(tGripRight, doc, toDoc(QPointF(m.right(), m.center().y())),
+                                      toDoc(QPointF(m.right() + 4, m.center().y())));
+    BOOST_CHECK_CLOSE(r.width(), 12.0, 1e-6);
+    BOOST_CHECK_CLOSE(r.left(), 20.0, 1e-6);
+
+    // Left edge: +4 px shrinks the width and pins the right edge.
+    r = tResizedBox(tGripLeft, doc, toDoc(QPointF(m.left(), m.center().y())),
+                              toDoc(QPointF(m.left() + 4, m.center().y())));
+    BOOST_CHECK_CLOSE(r.width(), 8.0, 1e-6);
+    BOOST_CHECK_CLOSE(r.right(), 30.0, 1e-6);
+
+    // Top-right corner: both axes change, bottom-left stays put.
+    r = tResizedBox(tGripTop | tGripRight, doc, toDoc(QPointF(m.right(), m.top())),
+                                              toDoc(QPointF(m.right() + 4, m.top() - 4)));
+    BOOST_CHECK_CLOSE(r.width(), 12.0, 1e-6);
+    BOOST_CHECK_CLOSE(r.height(), 12.0, 1e-6);
+    BOOST_CHECK_CLOSE(r.left(), 20.0, 1e-6);
+    BOOST_CHECK_CLOSE(r.bottom(), 30.0, 1e-6);
+}
+
+// Dragging an edge past its opposite must yield a valid box, never negative width/height: a null
+// rect is rejected by getPixelBounds, so the element would silently lose its live item.
+BOOST_AUTO_TEST_CASE( resizeGrip_flipped_drag_stays_a_valid_box )
+{
+    const QRectF doc(20, 20, 10, 10);
+    const QRectF pxRect(0, 0, 20, 20);
+    const QRectF m = tMarquee(pxRect);
+    auto toDoc = [&](const QPointF & p) {
+        return QPointF(doc.left() + p.x() * (doc.width() / pxRect.width()),
+                       doc.top()  + p.y() * (doc.height() / pxRect.height()));
+    };
+    const QRectF r = tResizedBox(tGripLeft, doc,
+                                 toDoc(QPointF(m.left(), m.center().y())),
+                                 toDoc(QPointF(m.right() + 40, m.center().y())));
+    BOOST_CHECK(r.isValid());
+    BOOST_CHECK(r.width()  > 0);
+    BOOST_CHECK(r.height() > 0);
+}
+
+// The drag delta is converted to user units before it is applied, so the same physical resize gives
+// the same result at any zoom. Comparing 4 px at 2 px/unit with 8 px at 4 px/unit pins that down.
+BOOST_AUTO_TEST_CASE( resizeGrip_result_is_zoom_independent )
+{
+    const QRectF doc(20, 20, 10, 10);
+
+    const QRectF m2 = tMarquee(QRectF(0, 0, 20, 20));
+    auto toDoc2 = [&](const QPointF & p) {
+        return QPointF(doc.left() + p.x() * 0.5, doc.top() + p.y() * 0.5);
+    };
+    const QRectF r2 = tResizedBox(tGripRight, doc, toDoc2(QPointF(m2.right(), m2.center().y())),
+                                             toDoc2(QPointF(m2.right() + 4, m2.center().y())));
+
+    const QRectF m4 = tMarquee(QRectF(0, 0, 40, 40));
+    auto toDoc4 = [&](const QPointF & p) {
+        return QPointF(doc.left() + p.x() * 0.25, doc.top() + p.y() * 0.25);
+    };
+    const QRectF r4 = tResizedBox(tGripRight, doc, toDoc4(QPointF(m4.right(), m4.center().y())),
+                                             toDoc4(QPointF(m4.right() + 8, m4.center().y())));
+
+    BOOST_CHECK_CLOSE(r2.width(), r4.width(), 1e-6);
+    BOOST_CHECK_CLOSE(r2.width(), 12.0, 1e-6);
+}
+
+// resizeRect was rect-only, which made the resize grips a no-op on every other shape while still
+// drawing themselves. These pin the per-kind mapping the grips now depend on.
+// stroke-width is expressed in the part's user units, so the constant PEPrimitive::make used to
+// hardcode (1) rendered as a solid black blob on small-footprint parts -- reported from the field as
+// "a big black blob" on a 15x13mm connector whose own tracks are 0.2-0.44 wide. Creation must inherit
+// the width the part already draws with.
+// New shapes are clamped into the part's own extent so they cannot be created off-canvas (a saved
+// file showed a shape at cy=7.05 with y1=-2.01 on a "0 0 15.4432 13.2032" viewBox). That clamp is
+// driven entirely by this parse, so malformed input must yield a NULL rect -- an invalid box falling
+// back to some default would silently park every shape at the origin.
+BOOST_AUTO_TEST_CASE( viewBoxFromAttribute_parses_or_returns_null )
+{
+    QDomDocument doc;
+    QDomElement svg = doc.createElement("svg");
+    svg.setAttribute("viewBox", "0 0 15.4432 13.2032");
+    QRectF vb = PEPrimitive::viewBoxFromAttribute(svg);
+    BOOST_CHECK(vb.isValid());
+    BOOST_CHECK_CLOSE(vb.width(), 15.4432, 1e-4);
+    BOOST_CHECK_CLOSE(vb.height(), 13.2032, 1e-4);
+
+    // Non-zero origin must be preserved -- clamping against 0,0-sized box would be wrong for these.
+    QDomElement off = doc.createElement("svg");
+    off.setAttribute("viewBox", "-4 -2 20 30");
+    QRectF o = PEPrimitive::viewBoxFromAttribute(off);
+    BOOST_CHECK_EQUAL(o.x(), -4);
+    BOOST_CHECK_EQUAL(o.y(), -2);
+
+    // Tabs/extra whitespace are legal separators in an SVG attribute.
+    QDomElement ws = doc.createElement("svg");
+    ws.setAttribute("viewBox", "  0   0\t15.4  13.2\n");
+    BOOST_CHECK(PEPrimitive::viewBoxFromAttribute(ws).isValid());
+
+    // Everything below is "no usable viewBox" and must be null, never a plausible-looking guess.
+    QDomElement none = doc.createElement("svg");
+    BOOST_CHECK(!PEPrimitive::viewBoxFromAttribute(none).isValid());
+
+    QDomElement few = doc.createElement("svg");
+    few.setAttribute("viewBox", "0 0 10");
+    BOOST_CHECK(!PEPrimitive::viewBoxFromAttribute(few).isValid());
+
+    QDomElement zero = doc.createElement("svg");
+    zero.setAttribute("viewBox", "0 0 0 10");          // zero width: nothing to clamp against
+    BOOST_CHECK(!PEPrimitive::viewBoxFromAttribute(zero).isValid());
+
+    QDomElement junk = doc.createElement("svg");
+    junk.setAttribute("viewBox", "0 0 abc 10");
+    BOOST_CHECK(!PEPrimitive::viewBoxFromAttribute(junk).isValid());
+
+    QDomElement nullEl;
+    BOOST_CHECK(!PEPrimitive::viewBoxFromAttribute(nullEl).isValid());
+}
+
+BOOST_AUTO_TEST_CASE( typicalStrokeWidth_follows_the_parts_own_geometry )
+{
+    QDomDocument doc;
+    QDomElement root = doc.createElement("svg");
+    root.setAttribute("viewBox", "0 0 15.4432 13.2032");
+    QDomElement a = doc.createElement("line");
+    a.setAttribute("stroke-width", "0.2032");
+    QDomElement b = doc.createElement("line");
+    b.setAttribute("stroke-width", "0.4398");
+    QDomElement c = doc.createElement("line");
+    c.setAttribute("stroke-width", "0");        // the "no stroke" convention: must be ignored
+    QDomElement d = doc.createElement("rect");
+    d.setAttribute("style", "fill:none;stroke-width:0.4398");   // the style form must be read too
+    root.appendChild(a); root.appendChild(b); root.appendChild(c); root.appendChild(d);
+
+    const double w = PEPrimitive::typicalStrokeWidth(root);
+    BOOST_CHECK(w > 0.15 && w < 0.55);          // in family with the part, NOT the old hardcoded 1
+
+    // Empty / unstroked layer falls back to a nominal width rather than 0 or 1.
+    QDomDocument empty;
+    QDomElement emptyRoot = empty.createElement("svg");
+    const double nominal = PEPrimitive::typicalStrokeWidth(emptyRoot);
+    BOOST_CHECK(nominal > 0 && nominal < 1);
+
+    QDomElement nullEl;
+    BOOST_CHECK(PEPrimitive::typicalStrokeWidth(nullEl) > 0);
+
+    // And the created shape actually carries it.
+    QDomElement rect = PEPrimitive::make(doc, PEElementKind::Rect, "mod.1", QString(),
+                                         QRectF(0, 0, 10, 10), QPointF(), QPointF(),
+                                         QPointF(), 0, QPointF(), 0, 0,
+                                         QList<QPointF>(), QString(), QPointF(), QString(), w);
+    BOOST_CHECK(rect.attribute("stroke-width").toDouble() <= 0.55);
+    BOOST_CHECK(rect.attribute("stroke-width").toDouble() >= 0.15);
+    // A caller that knows better still wins.
+    QDomElement thin = PEPrimitive::make(doc, PEElementKind::Rect, "mod.2", QString(),
+                                         QRectF(0, 0, 10, 10), QPointF(), QPointF(),
+                                         QPointF(), 0, QPointF(), 0, 0,
+                                         QList<QPointF>(), QString(), QPointF(), QString(), 0.1);
+    BOOST_CHECK_EQUAL(thin.attribute("stroke-width").toStdString(), "0.1");
+}
+
+BOOST_AUTO_TEST_CASE( resizeRect_fits_circle_to_the_inscribed_diameter )
+{
+    QDomDocument doc;
+    QDomElement c = doc.createElement("circle");
+    c.setAttribute("cx", "0"); c.setAttribute("cy", "0"); c.setAttribute("r", "1");
+    PEElement pe;
+    pe.kind = PEElementKind::Circle;
+    pe.element = c;
+    // Non-square box: a circle must stay round, so it takes the SMALLER extent.
+    BOOST_CHECK(pe.resizeRect(QRectF(10, 20, 8, 4)));
+    BOOST_CHECK_EQUAL(c.attribute("cx").toStdString(), "14");
+    BOOST_CHECK_EQUAL(c.attribute("cy").toStdString(), "22");
+    BOOST_CHECK_EQUAL(c.attribute("r").toStdString(), "2");
+}
+
+BOOST_AUTO_TEST_CASE( resizeRect_fits_ellipse_to_the_full_box )
+{
+    QDomDocument doc;
+    QDomElement e = doc.createElement("ellipse");
+    e.setAttribute("cx", "0"); e.setAttribute("cy", "0");
+    e.setAttribute("rx", "1"); e.setAttribute("ry", "1");
+    PEElement pe;
+    pe.kind = PEElementKind::Ellipse;
+    pe.element = e;
+    BOOST_CHECK(pe.resizeRect(QRectF(10, 20, 8, 4)));
+    BOOST_CHECK_EQUAL(e.attribute("cx").toStdString(), "14");
+    BOOST_CHECK_EQUAL(e.attribute("cy").toStdString(), "22");
+    BOOST_CHECK_EQUAL(e.attribute("rx").toStdString(), "4");
+    BOOST_CHECK_EQUAL(e.attribute("ry").toStdString(), "2");
+}
+
+BOOST_AUTO_TEST_CASE( resizeRect_maps_line_endpoints_onto_the_box )
+{
+    QDomDocument doc;
+    QDomElement l = doc.createElement("line");
+    l.setAttribute("x1", "0"); l.setAttribute("y1", "0");
+    l.setAttribute("x2", "1"); l.setAttribute("y2", "1");
+    PEElement pe;
+    pe.kind = PEElementKind::Line;
+    pe.element = l;
+    BOOST_CHECK(pe.resizeRect(QRectF(2, 3, 20, 30)));
+    BOOST_CHECK_EQUAL(l.attribute("x1").toStdString(), "2");
+    BOOST_CHECK_EQUAL(l.attribute("y1").toStdString(), "3");
+    BOOST_CHECK_EQUAL(l.attribute("x2").toStdString(), "22");
+    BOOST_CHECK_EQUAL(l.attribute("y2").toStdString(), "33");
+}
+
+BOOST_AUTO_TEST_CASE( resizeRect_scales_polyline_points_from_its_current_box )
+{
+    QDomDocument doc;
+    QDomElement pl = doc.createElement("polyline");
+    pl.setAttribute("points", "0,0 10,0 10,5");
+    PEElement pe;
+    pe.kind = PEElementKind::Polyline;
+    pe.element = pl;
+    pe.bounds = QRectF(0, 0, 10, 5);
+    BOOST_CHECK(pe.resizeRect(QRectF(0, 0, 20, 10)));       // 2x in both axes
+    BOOST_CHECK_EQUAL(pl.attribute("points").toStdString(), "0,0 20,0 20,10");
+
+    // Off-origin box: the offset must be preserved, not measured from 0,0.
+    QDomDocument doc2;
+    QDomElement pl2 = doc2.createElement("polyline");
+    pl2.setAttribute("points", "10,10 20,10");
+    PEElement pe2;
+    pe2.kind = PEElementKind::Polyline;
+    pe2.element = pl2;
+    pe2.bounds = QRectF(10, 10, 10, 0.0001);
+    pe2.bounds.setHeight(10);
+    BOOST_CHECK(pe2.resizeRect(QRectF(30, 30, 20, 20)));    // 2x, translated to (30,30)
+    BOOST_CHECK_EQUAL(pl2.attribute("points").toStdString(), "30,30 50,30");
+}
+
+// An unsupported kind must report failure so the caller does not rewrite the file unchanged and
+// report an edit -- a silently-succeeding no-op is exactly the failure mode being removed.
+BOOST_AUTO_TEST_CASE( resizeRect_rejects_kinds_it_cannot_fit )
+{
+    QDomDocument doc;
+    QDomElement path = doc.createElement("path");
+    path.setAttribute("d", "M0,0 L10,10");
+    PEElement pe;
+    pe.kind = PEElementKind::Path;
+    pe.element = path;
+    BOOST_CHECK(!pe.resizeRect(QRectF(0, 0, 5, 5)));
+    BOOST_CHECK_EQUAL(path.attribute("d").toStdString(), "M0,0 L10,10");   // untouched
+
+    PEElement g;
+    g.kind = PEElementKind::Group;
+    g.element = doc.createElement("g");
+    BOOST_CHECK(!g.resizeRect(QRectF(0, 0, 5, 5)));
+
+    // Degenerate target box: rejected rather than writing r="0" / width="0".
+    QDomDocument doc2;
+    QDomElement c = doc2.createElement("circle");
+    c.setAttribute("cx", "1"); c.setAttribute("cy", "1"); c.setAttribute("r", "5");
     PEElement ce;
     ce.kind = PEElementKind::Circle;
-    ce.element = circle;
-    BOOST_CHECK(!ce.resizeRect(QRectF(0, 0, 1, 1)));
+    ce.element = c;
+    BOOST_CHECK(!ce.resizeRect(QRectF(0, 0, 0, 5)));
+    BOOST_CHECK_EQUAL(c.attribute("r").toStdString(), "5");
 }
 
 BOOST_AUTO_TEST_CASE( kindForElement_maps_tag_to_kind )
@@ -1128,8 +1453,33 @@ BOOST_AUTO_TEST_CASE( m02_absolute_transform_identity_when_no_transform )
     BOOST_CHECK(pe.absoluteTransform("missing").isIdentity());
 }
 
-BOOST_AUTO_TEST_CASE( m02_move_is_local_space_so_callers_must_map )
+// Negative control for the byte-equality guarantee above: prove the check is not vacuous by showing
+// that the retired destructive flatten really does mutate the document. Without this, the PASS in
+// m02_byte_equality_open_and_save_untouched would be meaningless -- a test that cannot fail proves
+// nothing. (Validated against real library parts too: sparkfun-electromechanical_buttonpad-4x4_pcb.svg
+// and two others each changed byte length at load under flattenInPlace().)
+BOOST_AUTO_TEST_CASE( m02_negative_control_flatten_really_does_mutate )
 {
+    PEDocument pe;
+    QDomDocument doc = m02Build(
+        "<svg xmlns='http://www.w3.org/2000/svg'>"
+        "<g transform='translate(5,5) scale(2)'>"
+        "<rect id='r1' x='1' y='2' width='3' height='4'/>"
+        "<circle id='c1' cx='10' cy='10' r='2'/>"
+        "</g></svg>",
+        pe);
+    const QString before = doc.toString();
+
+    pe.flattenInPlace();   // the retired load-time behaviour, invoked deliberately
+
+    BOOST_CHECK_MESSAGE(doc.toString() != before,
+                        "flattenInPlace() no longer mutates the DOM -- if this became non-destructive, "
+                        "delete it and the deprecation note rather than leaving dead API behind");
+    // And specifically lossily: the circle under scale(2) cannot keep a radius.
+    BOOST_CHECK(!pe.findById("c1").element.hasAttribute("r"));
+}
+
+BOOST_AUTO_TEST_CASE( m02_move_is_local_space_so_callers_must_map ){
     // Why the destructive flatten existed: moveGraphic applies a user-unit (absolute) delta straight to
     // the element's own attrs, which is only correct when the element is already absolute. Non-destructive
     // means moveBy stays in LOCAL space, so the caller must divide the absolute delta through
@@ -1155,4 +1505,67 @@ BOOST_AUTO_TEST_CASE( m02_move_is_local_space_so_callers_must_map )
     const QPointF absTopLeft = pe.absoluteTransform("r1").map(QPointF(6, 6));
     BOOST_CHECK_CLOSE(absTopLeft.x(), 12.0, 1e-6);
     BOOST_CHECK_CLOSE(absTopLeft.y(), 12.0, 1e-6);
+}
+
+// End-to-end visibility check for the toolbar "Add graphic" flow -- the thing repeatedly reported as
+// "click the button, nothing happens", and the thing that had NO headless coverage: every earlier fix
+// in this area was verified only by a human looking at a screen, so each one could be asserted and
+// still be wrong.
+//
+// It reproduces the arithmetic PEMainWindow::createPrimitiveRequested() performs -- take the centre of
+// the area the user is looking at (scene px), subtract the svg item's position, convert px -> svg user
+// units, build a 10x10 box around that -- and asserts the result is (a) non-null, (b) decodes to
+// non-empty geometry, and (c) lands inside the part's canvas. (b) matters most: initSvgTree() only
+// creates a live item for an element with width>0 && height>0, so an empty-bounds element is silently
+// dropped -- which is exactly how an edit "does nothing" while being perfectly persisted.
+//
+// Uses PEUnits directly with the app's default unit string ("mm", see PEUtils::Units) rather than
+// PEUtils itself, which pulls in GraphicsUtils and is not part of this headless suite.
+BOOST_AUTO_TEST_CASE(created_primitive_lands_inside_the_visible_canvas)
+{
+    QDomDocument doc;
+    BOOST_REQUIRE(static_cast<bool>(doc.setContent(
+        QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' width='300px' height='200px'>"
+                       "<g id='module'><rect id='body' x='0' y='0' width='300' height='200'/></g></svg>"))));
+
+    const QString unit = QStringLiteral("mm");
+
+    // The view shows the whole canvas, so mapToScene(viewport).center() is the canvas centre in px.
+    const QPointF viewCenterPx(150.0, 100.0);
+    const QPointF itemBasePos(0.0, 0.0);
+    const QPointF center(PEUnits::pxToUnits(viewCenterPx.x(), unit) - PEUnits::pxToUnits(itemBasePos.x(), unit),
+                         PEUnits::pxToUnits(viewCenterPx.y(), unit) - PEUnits::pxToUnits(itemBasePos.y(), unit));
+
+    const double half = 5.0;   // createPrimitiveRequested's default 10x10 box
+    const QRectF rect(center.x() - half, center.y() - half, 2 * half, 2 * half);
+    const QPointF a(center.x() - half, center.y() - half);
+    const QPointF b(center.x() + half, center.y() + half);
+
+    QDomElement built = PEPrimitive::make(doc, PEElementKind::Rect, QStringLiteral("mod.1"), QString(),
+                                         rect, a, b, center, half, center, half, half,
+                                         QList<QPointF>() << a << b,
+                                         QStringLiteral("M %1 %2 L %3 %4")
+                                             .arg(a.x()).arg(a.y()).arg(b.x()).arg(b.y()),
+                                         center, QString());
+    BOOST_REQUIRE_MESSAGE(!built.isNull(),
+                          "PEPrimitive::make returned null -- the toolbar button would be a silent no-op");
+
+    QPainterPath shape;
+    BOOST_REQUIRE_MESSAGE(PETransform::shapeFromElement(built, shape),
+                          "created element does not decode to a shape -- it cannot be painted");
+    const QRectF bb = shape.boundingRect();
+    BOOST_CHECK_MESSAGE(bb.width() > 0 && bb.height() > 0,
+                        QStringLiteral("created element has empty bounds %1x%2 "
+                                       "-- initSvgTree drops it, so the edit is invisible")
+                            .arg(bb.width()).arg(bb.height()).toStdString());
+
+    // It must sit inside the canvas, which is 300x200 px expressed in the svg's own user units.
+    const double canvasW = PEUnits::pxToUnits(300.0, unit);
+    const double canvasH = PEUnits::pxToUnits(200.0, unit);
+    BOOST_CHECK_MESSAGE(bb.center().x() > 0 && bb.center().x() < canvasW,
+                        QStringLiteral("shape x=%1 lies outside canvas width %2")
+                            .arg(bb.center().x()).arg(canvasW).toStdString());
+    BOOST_CHECK_MESSAGE(bb.center().y() > 0 && bb.center().y() < canvasH,
+                        QStringLiteral("shape y=%1 lies outside canvas height %2")
+                            .arg(bb.center().y()).arg(canvasH).toStdString());
 }
