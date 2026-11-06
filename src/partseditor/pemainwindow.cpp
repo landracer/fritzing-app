@@ -2150,15 +2150,15 @@ void PEMainWindow::reload(bool firstTime)
 
 	SvgCursorBuilder::instance()->removeCursor(this);
 
-	// PIECE 1: show ONLY the PCB view's svg items (chief + its Copper0 / Silkscreen1 siblings, all three
-	// renderers -- they are the whole PCB part). Everything on every other view stays hidden, and ALL
-	// PEGraphicsItem overlay items stay hidden. One surface at a time; verify before adding the next.
+	// PIECE 2: show EVERY view's own svg items -- the chief + its layerKin siblings on each view (PCB has 3
+	// renderers: Copper0/Copper1/Silkscreen1; icon/breadboard/schematic have their own set). So each tab now
+	// paints its own part render. ALL PEGraphicsItem overlay items stay hidden -- interactivity is added next,
+	// piece by piece, so a rendering regression can never be confused with an interaction one.
 	{
-		const bool onPcb = (m_currentGraphicsView != nullptr && m_currentGraphicsView->viewID() == ViewLayer::PCBView);
 		int shown = 0;
 		Q_FOREACH (ViewThing * vt, m_viewThings.values()) {
-			const bool thisIsPcb = (vt->sketchWidget != nullptr && vt->sketchWidget->viewID() == ViewLayer::PCBView);
-			const bool show = thisIsPcb;
+			const bool show = (vt->sketchWidget != nullptr);
+
 			if (vt->itemBase != nullptr) {
 				vt->itemBase->setVisible(show);
 				if (show) ++shown;
@@ -2177,7 +2177,7 @@ void PEMainWindow::reload(bool firstTime)
 				}
 			}
 		}
-		DebugDialog::debug(QString("PE_TRACE PIECE1: onPcb=%1 svgItemsShown=%2 (expect 3: Copper0/Copper1/Silkscreen1)").arg(onPcb).arg(shown));
+		DebugDialog::debug(QString("PE_TRACE PIECE2: svgItemsShown=%1 across all views (overlay items hidden)").arg(shown));
 	}
 
 }
