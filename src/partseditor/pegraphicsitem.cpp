@@ -196,16 +196,99 @@ QPointF PEGraphicsItem::offset() {
 	return m_offset;
 }
 
+// ------------------------------------------------------------------------------------------------
+// Resize grips.
+//
+// The marquee is inset from rect() by min(w,h)/16 when painted; hit-testing and handle drawing all go
+// through marqueeRect() so the three can never disagree. Positions are item-local pixels, but the edit
+// handed to PEMainWindow is a document-user-unit box, converted with pixelToDoc() using the same
+// doc/px ratio the handles are sized from -- so a drag produces the same result at any zoom.
+
+QRectF PEGraphicsItem::marqueeRect()
+{
+	QRectF r = rect();
+	double d = qMin(r.width(), r.height()) / 16;
+	r.adjust(d, d, -d, -d);
+	return r;
+}
+
+QVector<PEGraphicsItem::GripHandle> PEGraphicsItem::resizeGrips()
+{
+	QVector<GripHandle> grips;
+	const QRectF r = marqueeRect();
+	const double side = qMax(3.0, qMin(r.width(), r.height()) / 10.0);
+	const QPointF c = r.center();
+	auto at = [&](int mask, double x, double y) {
+		grips.append(GripHandle{ mask, QRectF(x - side / 2, y - side / 2, side, side) });
+	};
+	// Corners first: their rects overlap the edge handles' at the corners, and first match wins.
+	at(GripTopLeft,      r.left(),  r.top());
+	at(GripTopRight,     r.right(), r.top());
+	at(GripBottomLeft,   r.left(),  r.bottom());
+	at(GripBottomRight,  r.right(), r.bottom());
+	at(GripLeft,         r.left(),  c.y());
+	at(GripRight,        r.right(), c.y());
+	at(GripTop,          c.x(),     r.top());
+	at(GripBottom,       c.x(),     r.bottom());
+	return grips;
+}
+
+int PEGraphicsItem::hitResizeGrip(const QPointF & p)
+{
+	if (!m_showMarquee) return GripNone;
+	const QVector<GripHandle> grips = resizeGrips();
+	// Generous slop: handles are only a few pixels across and the pointer rarely lands dead centre.
+	// Corners are tested first by construction order below so a press at a corner picks the corner
+	// rather than whichever single edge happens to be scanned first.
+	for (int i = 0; i < grips.count(); ++i) {
+		if (grips.at(i).rect.adjusted(-3, -3, 3, 3).contains(p)) return grips.at(i).mask;
+	}
+	return GripNone;
+}
+
+QPointF PEGraphicsItem::pixelToDoc(const QPointF & p)
+{
+	const QRectF r = rect();
+	if (r.width() <= 0 || r.height() <= 0 || m_docBounds.width() <= 0 || m_docBounds.height() <= 0)
+		return p;                                   // no usable mapping: treat px as units
+	const double sx = m_docBounds.width()  / r.width();
+	const double sy = m_docBounds.height() / r.height();
+	return QPointF(m_docBounds.left() + p.x() * sx, m_docBounds.top() + p.y() * sy);
+}
+
+QRectF PEGraphicsItem::resizedBox(int grip, const QPointF & fromDoc, const QPointF & toDoc)
+{
+	QRectF box = m_resizeOriginDoc;
+	const double dx = toDoc.x() - fromDoc.x();
+	const double dy = toDoc.y() - fromDoc.y();
+	if (grip & GripLeft)  box.setLeft(box.left() + dx);
+	if (grip & GripRight) box.setRight(box.right() + dx);
+	if (grip & GripTop)   box.setTop(box.top() + dy);
+	if (grip & GripBottom)box.setBottom(box.bottom() + dy);
+	// A dragged edge may cross its opposite; normalise so a flipped drag stays a valid box instead of
+	// producing negative width/height that getPixelBounds would then reject as an empty element.
+	return box.normalized();
+}
+
 void PEGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
 	Q_UNUSED(option);
 	Q_UNUSED(widget);
 
-	// P10 (docs/design/vector-editor.md F.5): the live item self-renders the element's own geometry
-	// (fill + stroke) instead of painting a baked fill over a static raster. The rendered path and the
-	// hit-test shape both come from PETransform::shapeFromElement(m_element) -- the same attrs the
-	// command layer edits -- so display always equals model with no separate renderer coordinate space.
-	if (!m_element.isNull()) {
+	// THE DISPLAY MODEL (corrected after many wrong turns). ItemBase -- a QGraphicsSvgItem fed the whole
+	// part svg via FSvgRenderer -- is the AUTHORITATIVE renderer: it alone applies Fritzing's per-layer
+	// colourisation (copper0/copper1/silkscreen colours), the getFlipDoc mirroring and the merged PCB
+	// look. This overlay item CANNOT reproduce that (it reads only raw fill/stroke attrs), so painting
+	// the body on top of the correct backdrop smeared wrong-coloured outlines over it -- the reported
+	// "the old SVG shows underneath our work / a shape under the part". After an edit the edited svg is
+	// pushed into ItemBase via resetRenderer(), so the backdrop is current; painting here only ever
+	// duplicated -- and corrupted -- what QtSvg already draws correctly.
+	//
+	// Therefore the body is painted ONLY for the element under active manipulation (a live drag/resize
+	// ghost). On release the DOM commit + resetRenderer hands the element back to QtSvg and this item
+	// draws just selection chrome (marquee/handles/anchors/terminal), which QtSvg cannot. An idle
+	// element is drawn by exactly one renderer: the backdrop.
+	if (!m_element.isNull() && (m_draggingBody || m_draggingResize)) {
 		QPainterPath shape;
 		if (PETransform::shapeFromElement(m_element, shape)) {
 			shape.setFillRule(fillRuleOf(m_element));
@@ -295,6 +378,15 @@ void PEGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *op
 		painter->setPen(QPen(QColor(255, 255, 255), 0, Qt::DashLine));
 		painter->setBrush(Qt::NoBrush);
 		painter->drawRect(r);
+
+		// Resize handles. Painted from the same resizeGrips() geometry the hit-test uses, so what the
+		// user can grab is exactly what is drawn.
+		const QVector<GripHandle> grips = resizeGrips();
+		painter->setPen(QPen(QColor(0, 0, 0), 0, Qt::SolidLine));
+		painter->setBrush(Qt::white);
+		for (int g = 0; g < grips.count(); ++g) {
+			painter->drawRect(grips.at(g).rect);
+		}
 	}
 
 	if (save) painter->restore();
@@ -418,6 +510,22 @@ QPointF PEGraphicsItem::pendingTerminalPoint() {
 void PEGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent * event) {
 	m_dragTerminalPoint = false;
 
+	// A grip press must be claimed here, ahead of the path-anchor and body-drag branches below:
+	// otherwise a handle sitting on the marquee edge falls through to QGraphicsRectItem's movable
+	// drag and resizes nothing (which is why resizeGraphic had zero invocations in every session).
+	if (m_showMarquee && event->button() == Qt::LeftButton) {
+		const int grip = hitResizeGrip(event->pos());
+		if (grip != GripNone) {
+			m_draggingResize = true;
+			m_resizeGrip = grip;
+			m_resizeOriginDoc = m_docBounds;
+			m_resizeOriginPx = pixelToDoc(event->pos());
+			Q_EMIT highlightSignal(this);
+			event->accept();
+			return;
+		}
+	}
+
 	if (!m_interactive && !m_highlighted) {
 		// legacy overlay: a non-highlighted (unselected) overlay click-throughs to the next layer
 		event->ignore();
@@ -538,6 +646,27 @@ void PEGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent * event) {
 }
 
 void PEGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent * event) {
+	if (m_draggingResize) {
+		// Live preview: move() the item to the proposed box so the user sees the shape change while
+		// dragging, but do NOT touch the document until release. Committing per move event would push
+		// one undo command per pixel and rebuild the whole svg tree (initSvgTree) under the cursor.
+		const QRectF to = resizedBox(m_resizeGrip, m_resizeOriginPx, pixelToDoc(event->pos()));
+		if (to.width() > 0 && to.height() > 0) {
+			// Uniform doc->px mapping, applied to BOTH the size and the top-left offset. Scaling the
+			// size but translating by raw user units (as an earlier draft did) puts the preview in the
+			// wrong place whenever the part is not rendered 1:1, i.e. at any zoom other than 100%.
+			const double sx = (m_docBounds.width()  > 0) ? rect().width()  / m_docBounds.width()  : 1.0;
+			const double sy = (m_docBounds.height() > 0) ? rect().height() / m_docBounds.height() : 1.0;
+			const QPointF pxOrigin((to.left() - m_docBounds.left()) * sx,
+								   (to.top()  - m_docBounds.top())  * sy);
+			prepareGeometryChange();
+			setRect(QRectF(0, 0, to.width() * sx, to.height() * sy));
+			setPos((itemBase() ? itemBase()->pos() : QPointF(0, 0)) + m_offset + pxOrigin);
+			update();
+		}
+		return;
+	}
+
 	if (m_dragPathAnchor) {
 		if (m_docBounds.width() > 0 && m_docBounds.height() > 0) {
 			double sx = rect().width() / m_docBounds.width();
@@ -596,6 +725,32 @@ void PEGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent * event) {
 
 
 void PEGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent * event) {
+	if (m_draggingResize) {
+		// Commit: hand the final document-unit box to PEMainWindow, which applies it with
+		// resizeGraphic under a single undo command and rebuilds the items from the document. Restoring
+		// the item geometry first means the rebuild -- not our preview -- is the final authority on
+		// where the shape is drawn.
+		const QRectF to = resizedBox(m_resizeGrip, m_resizeOriginPx, pixelToDoc(event->pos()));
+		const bool changed = (m_resizeGrip != GripNone) && to.isValid()
+		                     && !m_resizeOriginDoc.isNull()
+		                     && (qAbs(to.width()  - m_resizeOriginDoc.width())  > 1e-9
+		                          || qAbs(to.height() - m_resizeOriginDoc.height()) > 1e-9);
+		const QRectF origin = m_resizeOriginDoc;
+		m_draggingResize = false;
+		m_resizeGrip = GripNone;
+		m_resizeOriginDoc = QRectF();
+		if (itemBase() != nullptr) {
+			const double sx = (origin.width()  > 0) ? rect().width()  / origin.width()  : 1.0;
+			const double sy = (origin.height() > 0) ? rect().height() / origin.height() : 1.0;
+			prepareGeometryChange();
+			setRect(QRectF(0, 0, origin.width() * sx, origin.height() * sy));
+			setPos(itemBase()->pos() + m_offset);
+		}
+		update();
+		if (changed) Q_EMIT graphicResizeTo(this, to);
+		return;
+	}
+
 	if (m_dragPathAnchor) {
 		m_dragPathAnchor = false;
 		QVector<QPointF> anchors = pathAnchors();
@@ -618,6 +773,18 @@ void PEGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent * event) {
 		// user-unit delta relative to the press point, and hand it to PEMainWindow via the same
 		// mouseReleasedSignal the connector flow uses. PEMainWindow applies it with moveGraphic/
 		// MoveGraphicCommand (which translates every kind's attrs, incl. <path>) so the edit is real+undoable.
+		//
+		// Undo the cosmetic move Qt performed on our item position. The drag above is QGraphicsRectItem's
+		// built-in ItemIsMovable drag, so while the button was down this item physically moved; but the
+		// authoritative edit is the one requested below, which rewrites the ELEMENT geometry attrs and
+		// then rebuilds every item from the document. Leaving the item displaced means the next
+		// SketchWidget::itemMovedSignal sees this overlay's own position as a PART move and re-issues a
+		// second, wrong moveGraphic (PEMainWindow::itemMovedSlot derives its delta from itemBase->pos()),
+		// so one drag produced two competing edits and the whole part appeared to slide. Reset to the
+		// position initSvgTree assigned before emitting, so the doc rebuild is the only mover.
+		if (itemBase() != nullptr) {
+			setPos(itemBase()->pos() + m_offset);
+		}
 		m_draggingBody = false;
 		const QPointF deltaScene = event->scenePos() - m_bodyDragOrigin;
 		m_bodyDragOrigin = QPointF();

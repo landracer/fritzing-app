@@ -54,6 +54,7 @@ HEADERS += \
     src/partseditor/pesvgimport.h \
     src/partseditor/peunits.h \
     src/partseditor/petransform.h \
+    src/partseditor/peviewlayermap.h \
     src/partseditor/pehistoryentrydialog.h \
     src/partseditor/pecommands.h \
     src/partseditor/peconnectorsview.h \
@@ -98,6 +99,7 @@ SOURCES += \
     src/partseditor/peblankpart.cpp \
     src/partseditor/pesvgimport.cpp \
     src/partseditor/peunits.cpp \
+    src/partseditor/peviewlayermap.cpp \
     src/partseditor/petransform.cpp \
     src/partseditor/pehistoryentrydialog.cpp \
     src/partseditor/pecommands.cpp \

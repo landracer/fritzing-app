@@ -22,6 +22,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #define PETOOLVIEW_H
 
 #include <QFrame>
+#include <QIcon>
 #include <QRadioButton>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -56,6 +57,10 @@ public:
 
 	void initConnectors(QList<QDomElement> * connectorList);
 	int currentConnectorIndex();
+
+	// Paint a crisp glyph for a shape tool ('rect'/'circle'/...) into an icon-sized pixmap. Public +
+	// static so it is unit-testable and reusable by the connector list without instantiating the view.
+	static QIcon makeToolIcon(const QString & kind, int size = 28);
 	void setCurrentConnector(const QDomElement &);
 	void setCurrentConnector(int index);
 	void setTerminalPointCoords(QPointF);

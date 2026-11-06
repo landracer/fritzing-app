@@ -20,6 +20,9 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "peprimitive.h"
 
+#include <algorithm>
+#include <QRegularExpression>
+
 #include <QStringList>
 
 namespace {
@@ -31,7 +34,8 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
                               QPointF circleCenter, double circleRadius,
                               QPointF ellipseCenter, double ellipseRx, double ellipseRy,
                               const QList<QPointF> & points, const QString & pathData,
-                              QPointF textPos, const QString & textContent)
+                              QPointF textPos, const QString & textContent,
+                              double strokeWidth)
 {
     QDomElement el;
     switch (kind) {
@@ -44,7 +48,7 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         // Visible default: Fritzing symbol graphics are black-on-white; the live self-rendering item
         // (P10) draws fill+stroke from these attrs, so a freshly created graphic must be visible.
         el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
-        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("stroke-width"), QString::number(strokeWidth));
         el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Line:
@@ -54,7 +58,7 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el.setAttribute(QStringLiteral("x2"), fmtNum(lineEnd.x()));
         el.setAttribute(QStringLiteral("y2"), fmtNum(lineEnd.y()));
         el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
-        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("stroke-width"), QString::number(strokeWidth));
         break;
     case PEElementKind::Circle:
         el = doc.createElement(QStringLiteral("circle"));
@@ -62,7 +66,7 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el.setAttribute(QStringLiteral("cy"), fmtNum(circleCenter.y()));
         el.setAttribute(QStringLiteral("r"), fmtNum(circleRadius));
         el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
-        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("stroke-width"), QString::number(strokeWidth));
         el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Ellipse:
@@ -72,7 +76,7 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el.setAttribute(QStringLiteral("rx"), fmtNum(ellipseRx));
         el.setAttribute(QStringLiteral("ry"), fmtNum(ellipseRy));
         el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
-        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("stroke-width"), QString::number(strokeWidth));
         el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Polyline:
@@ -84,7 +88,7 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         }
         el.setAttribute(QStringLiteral("points"), pairs.join(QStringLiteral(" ")));
         el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
-        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("stroke-width"), QString::number(strokeWidth));
         el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     }
@@ -92,7 +96,7 @@ QDomElement PEPrimitive::make(QDomDocument & doc, PEElementKind kind, const QStr
         el = doc.createElement(QStringLiteral("path"));
         el.setAttribute(QStringLiteral("d"), pathData);
         el.setAttribute(QStringLiteral("stroke"), QStringLiteral("#000000"));
-        el.setAttribute(QStringLiteral("stroke-width"), QStringLiteral("1"));
+        el.setAttribute(QStringLiteral("stroke-width"), QString::number(strokeWidth));
         el.setAttribute(QStringLiteral("fill"), QStringLiteral("none"));
         break;
     case PEElementKind::Text:
@@ -138,4 +142,60 @@ PEElementKind PEPrimitive::kindForElement(const QDomElement & element)
     if (tag == QLatin1String("path"))      return PEElementKind::Path;
     if (tag == QLatin1String("text"))      return PEElementKind::Text;
     return PEElementKind::Unknown;
+}
+
+
+// See header. A stroke-width is in the part's own user units, so a hardcoded constant renders as a
+// hairline on a large footprint and as a solid black blob on a small one. Scan the stroke widths the
+// part already uses and take the median of the positive ones, so one unusually fat outline does not
+// set the tone and "0" (the no-stroke convention) does not count as evidence.
+double PEPrimitive::typicalStrokeWidth(const QDomElement & root) {
+    const double kNominal = 0.25;   // sensible for an empty or all-zero layer
+    if (root.isNull()) return kNominal;
+
+    QList<double> widths;
+    const QDomNodeList all = root.elementsByTagName(QStringLiteral("*"));
+    for (int i = 0; i < all.count(); ++i) {
+        const QDomElement e = all.at(i).toElement();
+        if (e.isNull()) continue;
+        // An explicit attribute is the reliable place to look; style="..." is common enough that it
+        // is worth parsing too, but only its stroke-width property.
+        QString raw = e.attribute(QStringLiteral("stroke-width"));
+        if (raw.isEmpty()) {
+            const QString style = e.attribute(QStringLiteral("style"));
+            for (const QString & decl : style.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+                const QStringList kv = decl.split(QLatin1Char(':'), Qt::SkipEmptyParts);
+                if (kv.count() == 2 && kv.at(0).trimmed() == QLatin1String("stroke-width")) {
+                    raw = kv.at(1).trimmed();
+                    break;
+                }
+            }
+        }
+        if (raw.isEmpty()) continue;
+        bool ok = false;
+        const double w = raw.toDouble(&ok);
+        if (!ok || w <= 0) continue;
+        widths << w;
+    }
+    if (widths.isEmpty()) return kNominal;
+    std::sort(widths.begin(), widths.end());
+    return widths.at(widths.size() / 2);
+}
+
+
+// See header. Splits on any whitespace run, which is what the SVG grammar allows here (and what
+// hand-written part files actually contain -- tabs and line breaks are common).
+QRectF PEPrimitive::viewBoxFromAttribute(const QDomElement & svgRoot) {
+    if (svgRoot.isNull()) return QRectF();
+    const QStringList parts = svgRoot.attribute(QStringLiteral("viewBox"))
+                                  .simplified().split(QRegularExpression(QStringLiteral("\\s+")),
+                                                      Qt::SkipEmptyParts);
+    if (parts.count() != 4) return QRectF();
+    bool okX = false, okY = false, okW = false, okH = false;
+    const double x = parts.at(0).toDouble(&okX);
+    const double y = parts.at(1).toDouble(&okY);
+    const double w = parts.at(2).toDouble(&okW);
+    const double h = parts.at(3).toDouble(&okH);
+    if (!okX || !okY || !okW || !okH || w <= 0 || h <= 0) return QRectF();
+    return QRectF(x, y, w, h);
 }

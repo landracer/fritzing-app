@@ -30,6 +30,11 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QSplitter>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QPainterPath>
+#include <QPainter>
+#include <QPixmap>
+#include <QIcon>
+#include <QGridLayout>
 #include <QFile>
 #include <QApplication>
 
@@ -53,6 +58,89 @@ void PEDoubleSpinBox::stepBy(int steps)
 }
 
 //////////////////////////////////////
+
+// Paint a shape glyph for the tool palette. Everything is drawn with the widget's text colour so the
+// glyph reads correctly on both dark and light themes, on a transparent background, at any size. The
+// shapes deliberately echo what "Add graphic" actually creates so the icon is a literal preview.
+QIcon PEToolView::makeToolIcon(const QString & kind, int size) {
+	QPixmap pm(size, size);
+	pm.fill(Qt::transparent);
+	QPainter p(&pm);
+	p.setRenderHint(QPainter::Antialiasing, true);
+
+	// Contrast strategy: never trust a single palette colour, because the palette is often not fully
+	// resolved when the tool view is constructed, and a dark/light theme can put a dark glyph on a
+	// dark button. Draw a mid grey stroke (reads on both light AND dark button faces) with a subtle
+	// contrasting halo underneath, so the glyph is legible whatever the theme.
+	const QColor base = qApp->palette().color(QPalette::WindowText);
+	const bool lightTheme = base.value() < 128;
+	const QColor halo = lightTheme ? QColor(255, 255, 255, 150) : QColor(0, 0, 0, 150);
+	const QColor ink  = lightTheme ? QColor(40, 40, 40) : QColor(235, 235, 235);
+
+	// Note the floating-point division: 'size / 16' as ints yielded 1px at size 28 -- a hairline that
+	// looked blank at button size. Stroke scales with the icon and is clearly visible now.
+	qreal w = qMax(2.0, size / 9.0);
+
+	auto pens = [&](QColor c, qreal width) {
+		QPen pen(c);
+		pen.setWidthF(width);
+		pen.setJoinStyle(Qt::RoundJoin);
+		pen.setCapStyle(Qt::RoundCap);
+		return pen;
+	};
+	// Halo pass first (thicker, translucent), then the crisp ink pass; done by re-invoking the shape
+	// closure for each colour so every glyph gets the same treatment.
+	const qreal m = size * 0.16;                 // margin (was 0.18 -- glyphs read larger now)
+	const QRectF box(m, m, size - 2 * m, size - 2 * m);
+
+	auto drawShape = [&](const QColor & c, qreal width) {
+		p.setPen(pens(c, width));
+		p.setBrush(Qt::NoBrush);
+
+	if (kind == QLatin1String("rect")) {
+		p.drawRect(box);
+	} else if (kind == QLatin1String("circle")) {
+		p.drawEllipse(box);
+	} else if (kind == QLatin1String("ellipse")) {
+		p.drawEllipse(QRectF(m, size * 0.30, size - 2 * m, size * 0.40));
+	} else if (kind == QLatin1String("line")) {
+		p.drawLine(QPointF(m, size - m), QPointF(size - m, m));
+	} else if (kind == QLatin1String("path")) {
+		QPainterPath path;
+		path.moveTo(m, size - m);
+		path.cubicTo(size * 0.25, m, size * 0.75, size - m, size - m, m);
+		p.drawPath(path);
+	} else if (kind == QLatin1String("polyline")) {
+		QPolygonF poly;
+		poly << QPointF(m, size - m) << QPointF(size * 0.4, m) << QPointF(size * 0.62, size * 0.6) << QPointF(size - m, m);
+		p.drawPolyline(poly);
+	} else if (kind == QLatin1String("polygon")) {
+		QPolygonF poly;
+		const QPointF c = box.center();
+		const qreal r = box.width() / 2.0;
+		for (int i = 0; i < 6; ++i) {                       // hexagon
+			const qreal a = M_PI / 3.0 * i - M_PI / 2.0;
+			poly << QPointF(c.x() + r * qCos(a), c.y() + r * qSin(a));
+		}
+		p.drawPolygon(poly);
+	} else if (kind == QLatin1String("text")) {
+		QFont f = p.font();
+		f.setPixelSize(int(size * 0.62));
+		f.setBold(true);
+		p.setFont(f);
+		p.drawText(pm.rect(), Qt::AlignCenter, QStringLiteral("T"));
+	} else {
+		// Unknown kind: a neutral dot so the button is never blank.
+		p.setBrush(c);
+		p.drawEllipse(box.center(), size * 0.12, size * 0.12);
+	}
+	};
+
+	drawShape(halo, w + qMax(1.5, w * 0.9));   // soft outer halo for theme-proofing
+	drawShape(ink, w);                          // crisp glyph on top
+	p.end();
+	return QIcon(pm);
+}
 
 PEToolView::PEToolView(QWidget * parent) : QFrame (parent)
 {
@@ -181,29 +269,49 @@ PEToolView::PEToolView(QWidget * parent) : QFrame (parent)
 
 	splitter->addWidget(m_connectorInfoGroupBox);
 
-	// P3 create-tool: a row of buttons, each requesting a new primitive graphic of a kind.
-	auto * graphicToolsFrame = new QFrame;
+	// P3 create-tool, restyled: a graphical palette of shape tools, matching the visual language of
+	// every other editor's tool sidebar (icon per tool, hover tooltip). The glyphs are painted with
+	// QPainter into a QPixmap rather than shipped as image assets -- no new resource/licensing surface,
+	// they stay crisp at any DPI, and they recolour with the active palette so they read on dark and
+	// light themes alike.
+	auto * graphicToolsGroup = new QGroupBox(tr("Graphics"));
 	auto * graphicToolsLayout = new QVBoxLayout;
-	auto * graphicLabel = new QLabel(tr("Add graphic (then drag its nodes)"));
-	graphicToolsLayout->addWidget(graphicLabel);
-	auto * graphicRow = new QHBoxLayout;
-	const QList<QPair<QString, QString>> kinds {
-		{ "rect", tr("rect") }, { "circle", tr("circle") }, { "ellipse", tr("ellipse") },
-		{ "line", tr("line") }, { "path", tr("path") }, { "polyline", tr("polyline") }, { "polygon", tr("polygon") }
+	auto * graphicGrid = new QGridLayout;
+	graphicGrid->setSpacing(6);
+	graphicGrid->setContentsMargins(4, 4, 4, 4);
+
+	struct ToolSpec { const char * kind; const char * tip; };
+	const QList<ToolSpec> tools {
+		{ "rect",     QT_TRANSLATE_NOOP("PEToolView", "Rectangle") },
+		{ "circle",   QT_TRANSLATE_NOOP("PEToolView", "Circle") },
+		{ "ellipse",  QT_TRANSLATE_NOOP("PEToolView", "Ellipse") },
+		{ "line",     QT_TRANSLATE_NOOP("PEToolView", "Line") },
+		{ "path",     QT_TRANSLATE_NOOP("PEToolView", "Path") },
+		{ "polyline", QT_TRANSLATE_NOOP("PEToolView", "Polyline") },
+		{ "polygon",  QT_TRANSLATE_NOOP("PEToolView", "Polygon") },
+		{ "text",     QT_TRANSLATE_NOOP("PEToolView", "Text") },
 	};
-	for (const QPair<QString, QString> & k : kinds) {
-		auto * button = new QPushButton(k.second);
-		button->setProperty("kind", k.first);
+	int ti = 0;
+	for (const ToolSpec & t : tools) {
+		auto * button = new QPushButton;
+		button->setIcon(PEToolView::makeToolIcon(QString::fromLatin1(t.kind)));
+		button->setIconSize(QSize(28, 28));
+		button->setToolTip(tr(t.tip));
+		button->setAccessibleName(tr(t.tip));
+		button->setFixedSize(48, 48);
+		button->setProperty("kind", QString::fromLatin1(t.kind));
 		connect(button, SIGNAL(clicked()), this, SLOT(createPrimitiveSlot()));
-		graphicRow->addWidget(button);
+		graphicGrid->addWidget(button, ti / 4, ti % 4);
+		++ti;
 	}
-	graphicToolsLayout->addLayout(graphicRow);
+	graphicToolsLayout->addLayout(graphicGrid);
 	// P4: author a connector bound to the currently-selected graphic element.
 	auto * addConnButton = new QPushButton(tr("Add connector from selected graphic"));
+	addConnButton->setToolTip(tr("Create a connector that attaches to the currently selected graphic."));
 	connect(addConnButton, SIGNAL(clicked()), this, SLOT(addConnectorSlot()));
 	graphicToolsLayout->addWidget(addConnButton);
-	graphicToolsFrame->setLayout(graphicToolsLayout);
-	mainLayout->addWidget(graphicToolsFrame);
+	graphicToolsGroup->setLayout(graphicToolsLayout);
+	mainLayout->addWidget(graphicToolsGroup);
 
 	//this->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	//this->setWidget(splitter);

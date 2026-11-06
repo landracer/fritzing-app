@@ -21,6 +21,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pedocument.h"
 
 #include <QDomDocument>
+#include <QRegularExpression>
 #include <cstring>   // strlen for the "connector" prefix length
 
 #include "pepath.h"
@@ -203,12 +204,95 @@ bool PEElement::moveBy(QPointF delta) {
 // P7: resize a <rect> by replacing its box. Non-rect kinds store only a position (no width/height
 // to rescale), so resize is undefined for them at the attribute level -- return false.
 bool PEElement::resizeRect(QRectF to) {
-    if (kind != PEElementKind::Rect) return false;
-    element.setAttribute(QStringLiteral("x"), QString::number(to.x()));
-    element.setAttribute(QStringLiteral("y"), QString::number(to.y()));
-    element.setAttribute(QStringLiteral("width"), QString::number(to.width()));
-    element.setAttribute(QStringLiteral("height"), QString::number(to.height()));
-    return true;
+    // Fit the element to the bounding box @p to, per kind. This used to be rect-only and to return
+    // false for everything else, so a resize grip on a circle/line/ellipse silently did nothing even
+    // though the grips drew and the command ran. Each case maps the box onto that kind-s own attrs:
+    // a circle takes the inscribed diameter (uniform, so it stays round) and an ellipse the box
+    // extents, which is what their geometry means in SVG.
+    switch (kind) {
+    case PEElementKind::Rect:
+        element.setAttribute(QStringLiteral("x"), QString::number(to.x()));
+        element.setAttribute(QStringLiteral("y"), QString::number(to.y()));
+        element.setAttribute(QStringLiteral("width"), QString::number(to.width()));
+        element.setAttribute(QStringLiteral("height"), QString::number(to.height()));
+        return true;
+
+    case PEElementKind::Line:
+        // A line-s box IS its two endpoints, so the box corners map directly.
+        element.setAttribute(QStringLiteral("x1"), QString::number(to.left()));
+        element.setAttribute(QStringLiteral("y1"), QString::number(to.top()));
+        element.setAttribute(QStringLiteral("x2"), QString::number(to.right()));
+        element.setAttribute(QStringLiteral("y2"), QString::number(to.bottom()));
+        return true;
+
+    case PEElementKind::Circle: {
+        const double d = qMin(to.width(), to.height());
+        if (d <= 0) return false;
+        element.setAttribute(QStringLiteral("cx"), QString::number(to.center().x()));
+        element.setAttribute(QStringLiteral("cy"), QString::number(to.center().y()));
+        element.setAttribute(QStringLiteral("r"), QString::number(d / 2.0));
+        return true;
+    }
+
+    case PEElementKind::Ellipse: {
+        if (to.width() <= 0 || to.height() <= 0) return false;
+        element.setAttribute(QStringLiteral("cx"), QString::number(to.center().x()));
+        element.setAttribute(QStringLiteral("cy"), QString::number(to.center().y()));
+        element.setAttribute(QStringLiteral("rx"), QString::number(to.width() / 2.0));
+        element.setAttribute(QStringLiteral("ry"), QString::number(to.height() / 2.0));
+        return true;
+    }
+
+    case PEElementKind::Text: {
+        // Anchor the text at the new box top-left; its size is a font property, not geometry, so the
+        // height is not applied here.
+        bool ok = false;
+        const double fs = element.attribute(QStringLiteral("font-size")).toDouble(&ok);
+        Q_UNUSED(fs);
+        element.setAttribute(QStringLiteral("x"), QString::number(to.x()));
+        element.setAttribute(QStringLiteral("y"), QString::number(to.y()));
+        return true;
+    }
+
+    case PEElementKind::Polyline:
+    case PEElementKind::Polygon: {
+        // Scale the point list from the old box to the new one.
+        // bounds is the element-s box in document user units, filled in by PEDocument::build.
+        const QRectF from = bounds;
+        if (!from.isValid() || from.width() <= 0 || from.height() <= 0) return false;
+        const double sx = to.width()  / from.width();
+        const double sy = to.height() / from.height();
+        const QString raw = element.attribute(QStringLiteral("points"));
+        const QStringList pairs = raw.simplified().split(QRegularExpression("\\s+"),
+                                                     Qt::SkipEmptyParts);
+        QStringList out;
+        for (const QString & pair : pairs) {
+            const QStringList xy = pair.split(',');
+            if (xy.count() != 2) return false;
+            bool okX = false, okY = false;
+            const double x = xy.at(0).toDouble(&okX);
+            const double y = xy.at(1).toDouble(&okY);
+            if (!okX || !okY) return false;
+            out << QStringLiteral("%1,%2").arg(QString::number(to.left() + (x - from.left()) * sx),
+                                               QString::number(to.top()  + (y - from.top())  * sy));
+        }
+        if (out.isEmpty()) return false;
+        element.setAttribute(QStringLiteral("points"), out.join(QStringLiteral(" ")));
+        return true;
+    }
+
+    case PEElementKind::Path:
+        // A path-s geometry is a command sequence; refitting it to a box means rescaling every
+        // coordinate. PETransform already does the equivalent for transforms, so this is a real
+        // follow-up rather than something to fake here -- an unsupported kind must report failure so
+        // the caller does not write an unchanged file and claim an edit happened.
+        return false;
+
+    case PEElementKind::Group:
+    case PEElementKind::Unknown:
+    default:
+        return false;
+    }
 }
 
 void PEDocument::build(const QDomDocument & doc) {

@@ -54,7 +54,10 @@ QDomElement make(QDomDocument & doc, PEElementKind kind, const QString & id, con
                  QPointF circleCenter, double circleRadius,
                  QPointF ellipseCenter, double ellipseRx, double ellipseRy,
                  const QList<QPointF> & points, const QString & pathData,
-                 QPointF textPos, const QString & textContent);
+                 QPointF textPos, const QString & textContent,
+                 // Stroke width in the part's user units. Hardcoding 1 here produced a black blob on
+                 // small-footprint parts (see typicalStrokeWidth): the value is relative to viewBox.
+                 double strokeWidth = 0.25);
 
 // Convenience: append a freshly built primitive to 'parent' and return it (so it becomes a child
 // in document order, which is what PEDocument.build will then read).
@@ -65,6 +68,19 @@ QDomElement addTo(QDomDocument & doc, QDomElement & parent, PEElementKind kind,
 // Unknown for a group or unrecognized tag. Exposed so the live move/resize wiring can recover the
 // element's kind from the DOM node it found by id (the same mapping PEDocument.build uses internally).
 PEElementKind kindForElement(const QDomElement & element);
+
+// Pick a stroke width that looks right on THIS part. stroke-width is expressed in the part's own
+// user units, so one hardcoded value is a hairline on a 500-unit IC footprint and a black blob on a
+// 15-unit connector. Take a representative width from geometry that already exists (the median, so a
+// single fat outline does not set the tone); fall back to a nominal 0.25 for an empty layer.
+double typicalStrokeWidth(const QDomElement & root);
+
+// Parse an <svg> element's viewBox attribute into user units. Returns a NULL rect when absent or
+// malformed, because callers clamp new geometry against the result -- a plausible-looking fallback
+// would silently park shapes at the origin instead of reporting "no usable box". Reads only the four
+// numbers; when width/height + preserveAspectRatio also matter, prefer QSvgRenderer::viewBoxF().
+QRectF viewBoxFromAttribute(const QDomElement & svgRoot);
+
 
 }   // namespace PEPrimitive
 

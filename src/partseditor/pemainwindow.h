@@ -27,6 +27,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../model/modelpartshared.h"
 #include "../sketch/sketchwidget.h"
 #include "peconnectorsview.h"
+#include "peviewlayermap.h"
 
 class IconSketchWidget : public SketchWidget
 {
@@ -111,6 +112,9 @@ public Q_SLOTS:
 	void pegiPathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
 	// Fully-live slice: apply a body-drag user-unit delta to the graphic's geometry attrs (moveGraphic).
 	void pegiGraphicMoveDelta(PEGraphicsItem *, QPointF deltaUnits);
+	// Resize grip released: apply the new document-unit box to the graphic element (resizeGraphic).
+	// This is the only caller of resizeGraphic; before the grips existed the command was unreachable.
+	void pegiGraphicResizeTo(PEGraphicsItem *, QRectF to);
 	// P3 create-tool trigger / P4 connector authoring triggers (from PEToolView):
 	void createPrimitiveRequested(const QString & kind);
 	void addConnectorRequested();
@@ -168,6 +172,8 @@ protected:
 	QDomElement findConnector(const QString & id, int & index);
 	void changeConnectorElement(QDomElement & connector, ConnectorMetadata *);
 	void initSvgTree(SketchWidget *, ItemBase *, QDomDocument &);
+	void reloadBackdropForView(struct ViewThing * viewThing, const QString & fullSvg, const QString & newPath);
+	QString colourisePartSvg(const QString & svg);
 	void initConnectors(bool updateConnectorsView);
 	QString createSvgFromImage(const QString &origFilePath);
 	// QString makeSvgPath(const QString & referenceFile, SketchWidget * sketchWidget, bool useIndex);
@@ -181,7 +187,7 @@ protected:
 	void pathAnchorChangedAux(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after);
 	void showInOS(QWidget *parent, const QString &pathIn);
 	void switchedConnector(int, SketchWidget *);
-	PEGraphicsItem * makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z);
+	PEGraphicsItem * makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z, bool freelyEditable = true);
 	QRectF getPixelBounds(QDomElement & element);
 	bool canSave();
 	bool saveAs(bool overWrite);
@@ -283,6 +289,9 @@ protected:
 	QString m_prefix;
 	int m_fileIndex;
 	QHash<ViewLayer::ViewID, ViewThing *> m_viewThings;
+	// M1: per-view layer structure (which <g> a new graphic must go inside), recorded once per view
+	// document load. See docs/design/vector-editor.md F.6.
+	PEViewLayerMap m_viewLayerMap;
 	QString m_userPartsFolderPath;
 	QString m_userPartsFolderSvgPath;
 	bool m_canSave;

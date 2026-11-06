@@ -27,6 +27,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include <QWidget>
 #include <QDomElement>
 #include <QPointF>
+#include <QRectF>
 
 struct ConnectorMetadata {
 	Connector::ConnectorType connectorType;

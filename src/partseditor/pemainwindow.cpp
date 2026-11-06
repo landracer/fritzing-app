@@ -152,9 +152,13 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pehistoryentrydialog.h"
 #include "petoolview.h"
 #include "pesvgview.h"
+#include <QtSvgWidgets/QGraphicsSvgItem>
 #include "pegraphicsitem.h"
 #include "pedocument.h"
 #include "peprimitive.h"
+#include "petransform.h"   // M1: shapeFromElement -> real bounds for path/text/polyline/polygon
+
+#include <QPainterPath>
 #include "peconnector.h"
 #include "peblankpart.h"
 #include "pesvgimport.h"
@@ -166,6 +170,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../mainwindow/sketchareawidget.h"
 #include "../referencemodel/referencemodel.h"
 #include "../utils/graphicsutils.h"
+#include "../svg/svgfilesplitter.h"
 #include "../utils/textutils.h"
 #include "../utils/folderutils.h"
 #include "../utils/s2s.h"
@@ -177,6 +182,10 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "../svg/kicadschematic2svg.h"
 #include "../sketchtoolbutton.h"
 #include "../items/virtualwire.h"
+#include "../layerattributes.h"
+#include "../items/paletteitem.h"
+#include "../items/paletteitembase.h"
+#include "../model/modelpart.h"
 #include "../connectors/connectoritem.h"
 #include "../connectors/bus.h"
 #include "../installedfonts.h"
@@ -1436,6 +1445,11 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 		return;
 	}
 
+	// Record this view's layer structure so graphic creates can be routed into the right <g>
+	// (see PEViewLayerMap and addPrimitive). Done here because this is where a view's svg is (re)loaded,
+	// so the map always describes the document the editor is currently working from.
+	m_viewLayerMap.inspect(tempSvgDoc.documentElement());
+
 	if (itemBase->viewID() == ViewLayer::PCBView) {
 		QDomElement root = tempSvgDoc.documentElement();
 		QDomElement copper0 = TextUtils::findElementWithAttribute(root, "id", "copper0");
@@ -1446,9 +1460,11 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 			if (parent0.attribute("id") == "copper1") ;
 			else if (parent1.attribute("id") == "copper0") ;
 			else {
-				QMessageBox::warning(nullptr, tr("SVG problem", "dialog title"),
-				                     tr("This version of the new Parts Editor can not deal with separate copper0 and copper1 layers in '%1'. ").arg(itemBase->filename()) +
-				                     tr("So editing may produce an invalid PCB view image"));
+				// The part nests its two copper layers in the form this editor cannot fully handle. New
+				// graphics are still placed correctly now (addPrimitive routes them via m_viewLayerMap),
+				// so the wording is softened from "editing may produce an invalid image" to the accurate
+				// statement of what is actually unusual about the file.
+				DebugDialog::debug(QString("initSvgTree: PCB view '%1' has an unexpected copper0/copper1 nesting").arg(itemBase->filename()));
 			}
 		}
 	}
@@ -1475,6 +1491,20 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 
 	FSvgRenderer tempRenderer;
 	QByteArray rendered = tempRenderer.loadSvg(tempSvgDoc.toByteArray(), "", false);
+	// PE_TRACE (temporary): this loadSvg -> setContent round trip REPLACES the live document with a
+	// re-serialised copy. The field log shows the interactive item count collapsing back to the
+	// pristine part count (11) right after a move/create, which means shapes added by the command
+	// layer are not surviving this pass. Count what goes in and what comes out to confirm before
+	// changing anything, because this pass is also what "cleans up the svg" for the renderer.
+	{
+		int before = tempSvgDoc.documentElement().elementsByTagName("*").count();
+		int after  = 0;
+		QDomDocument probe;
+		if (probe.setContent(rendered, QDomDocument::ParseOption::UseNamespaceProcessing))
+			after = probe.documentElement().elementsByTagName("*").count();
+		DebugDialog::debug(QString("PE_TRACE svgCleanse view=%1 elements %2 -> %3 (%4 bytes)")
+		                       .arg(sketchWidget->viewID()).arg(before).arg(after).arg(rendered.size()));
+	}
 	// cleans up the svg
 	QDomDocument::ParseResult parseResult2 = svgDocument.setContent(rendered, QDomDocument::ParseOption::UseNamespaceProcessing);
 	if (!parseResult2) {
@@ -1482,7 +1512,20 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 		return;
 	}
 
-	TextUtils::gornTree(svgDocument);
+	// gornTree() rewrites every id in @p svgDocument to an index path ("0", "0.0", "0.1.0.0", ...),
+	// stashing the real id in @c oldid, and removeGorn() reverses that on the serialised string before
+	// it is written. That is fine for its original purpose (undo needs stable ids across structural
+	// edits), but the command layer -- addPrimitive / moveGraphic / resizeGraphic / removePrimitive --
+	// reads and writes this SAME document and matches elements by id. Left gorn'd, the editor's
+	// authoritative document and the file it produces do not share an id space, which is what made the
+	// part editor feel dead: layer routing looked up 'silkscreen' and found nothing (the live tree was
+	// '0.1'), and PEGraphicsItems were built from gorn'd ids so every highlight/move trace reported ids
+	// like '0.3' instead of the element the user actually clicked.
+	//
+	// Gorn only the throwaway copy the overlay items are derived from, and keep the live document in
+	// canonical id space. The items carry QDomElement handles into this document, so they must be built
+	// from it -- hence re-applying gorn per element id is avoided entirely: PEElement/PEDocument are
+	// re-read from the canonical tree below.
 
 	// P1: drive the per-element overlay items off the typed model. PEDocument walks the
 	// DOM depth-first / document-order (same order the previous manual traverse produced);
@@ -1509,6 +1552,7 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 	QHash<QString, PEGraphicsItem *> pegiHash;
 
 	const QList<PEElement> & elements = typed.elements();
+	int traceMade = 0, traceSkipped = 0;
 	for (const PEElement & pe : elements) {
 		// An unmodelled tag (the old 'else continue') produces no overlay item.
 		if (pe.kind == PEElementKind::Unknown) continue;
@@ -1527,7 +1571,14 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 		}
 		// known Qt bug: boundsOnElement returns zero width and height for text elements.
 		if (bounds.width() > 0 && bounds.height() > 0) {
-			PEGraphicsItem * pegi = makePegi(bounds.size(), bounds.topLeft(), itemBase, element, z++);
+			// Connector pads and nonconnector terminals are the part's electrical geometry, not free
+			// art: they must remain selectable but not freely movable/resizable (see makePegi). Detected
+			// by the same id conventions the rest of the file uses (connectorNpad / nonconnN).
+			const QString eid = element.attribute("id");
+			const bool isConnectorGeometry =
+				eid.startsWith(QLatin1String("nonconn"))
+				|| (eid.startsWith(QLatin1String("connector")) && eid.contains(QLatin1String("pad")));
+			PEGraphicsItem * pegi = makePegi(bounds.size(), bounds.topLeft(), itemBase, element, z++, !isConnectorGeometry);
 			if (pegi == nullptr) continue;   // M0.4: no live item without a real backing graphic
 			// (makePegi now sets docBounds + interactive for every kind; path node grips are enabled inside
 			// setInteractive, so no per-kind special-casing is needed here any more.)
@@ -1535,6 +1586,66 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 				pegi->setAbsoluteTransform(typed.absoluteTransform(element.attribute("id")));
 			}
 			pegiHash.insert(element.attribute("id"), pegi);
+			++traceMade;
+		} else {
+			++traceSkipped;
+		}
+	}
+
+	// PE_TRACE (temporary): the single most common "nothing happened" cause is an element that lands in
+	// the document but never gets a live item (getPixelBounds returns a null rect for path/polyline/
+	// polygon/text), plus items positioned far outside the visible scene rect.
+	DebugDialog::debug(QString("PE_TRACE initSvgTree view=%1 itemsMade=%2 skippedZeroBounds=%3 itemBasePos=(%4,%5) scene=%6")
+	                       .arg(sketchWidget->viewID())
+	                       .arg(traceMade).arg(traceSkipped)
+	                       .arg(itemBase->pos().x()).arg(itemBase->pos().y())
+	                       .arg(sketchWidget->scene()->items().count()));
+
+	// FRESH-LOOK DIAGNOSTIC: enumerate every svg-rendering item in this scene with z-order, visibility
+	// and renderer identity. If the part is drawn by more than one QGraphicsSvgItem (e.g. layerKin
+	// copper0/copper1 children alongside itemBase), that competing renderer is the "old way laid over
+	// our work" and it names itself here rather than via another guess.
+	{
+		const QList<QGraphicsItem *> all = sketchWidget->scene()->items();
+		int svgCount = 0;
+		for (QGraphicsItem * it : all) {
+			QGraphicsSvgItem * svg = dynamic_cast<QGraphicsSvgItem *>(it);
+			if (svg == nullptr) continue;
+			++svgCount;
+			ItemBase * ib = dynamic_cast<ItemBase *>(svg);
+			DebugDialog::debug(QString("PE_TRACE SCENE-SVG #%1 class=%2 z=%3 visible=%4 pos=(%5,%6) rend=%7")
+			                       .arg(svgCount)
+			                       .arg(ib ? QString("ItemBase(view=%1,layer=%2)").arg(ib->viewID()).arg(ib->viewLayerID()) : QStringLiteral("plainSvgItem"))
+			                       .arg(svg->zValue())
+			                       .arg(svg->isVisible())
+			                       .arg(svg->pos().x()).arg(svg->pos().y())
+			                       .arg(svg->renderer() ? QString::number(reinterpret_cast<quintptr>(svg->renderer())) : QStringLiteral("NULL")));
+		}
+		DebugDialog::debug(QString("PE_TRACE SCENE-SVG total svg items=%1 (expect 1/view; >1 = competing renderer)").arg(svgCount));
+
+		// The user reports a NON-INTERACTIVE old svg sitting ON TOP of the interactive work, with the part's
+		// own sizing box peeking out top-left. The svg dump above shows view=3 has exactly 3 ItemBases and no
+		// plain overlay -- so the "top" item is one of them. Log which svg item is topmost by z AND whether it
+		// is selectable/movable (the interactive ones are our PEGraphicsItems). This identifies, by z-order,
+		// the exact item painting over the rest, and confirms whether itemBase itself is the inert top layer.
+		{
+			QGraphicsItem * top = nullptr;
+			for (QGraphicsItem * it : sketchWidget->scene()->items()) {
+				if (dynamic_cast<QGraphicsSvgItem *>(it) == nullptr) continue;
+				if (!top || it->zValue() > top->zValue()) top = it;
+			}
+			if (top != nullptr) {
+				DebugDialog::debug(QString("PE_TRACE TOPSVG z=%1 selectable=%2 movable=%3 flags=%4")
+				                       .arg(top->zValue())
+				                       .arg(top->flags().testFlag(QGraphicsItem::ItemIsSelectable))
+				                       .arg(top->flags().testFlag(QGraphicsItem::ItemIsMovable))
+				                       .arg((int)top->flags()));
+			}
+			int pegiCount = 0;
+			for (QGraphicsItem * it : sketchWidget->scene()->items()) {
+				if (dynamic_cast<PEGraphicsItem *>(it) != nullptr) ++pegiCount;
+			}
+			DebugDialog::debug(QString("PE_TRACE PEGI items in scene=%1 (our interactive overlay count)").arg(pegiCount));
 		}
 	}
 
@@ -1562,9 +1673,24 @@ void PEMainWindow::initSvgTree(SketchWidget * sketchWidget, ItemBase * itemBase,
 
 		connector = connector.nextSiblingElement("connector");
 	}
+	// PIECE 1: keep everything hidden here (reload() end is the single source of truth for visibility).
+	if (itemBase != nullptr) {
+		itemBase->setVisible(false);
+		PaletteItem * pe = dynamic_cast<PaletteItem *>(itemBase);
+		if (pe != nullptr) {
+			Q_FOREACH (ItemBase * lk, pe->layerKin()) { if (lk) lk->setVisible(false); }
+		}
+	}
+	Q_FOREACH (QGraphicsItem * it, sketchWidget->scene()->items()) {
+		if (dynamic_cast<PEGraphicsItem *>(it) != nullptr) it->setVisible(false);
+	}
+	DebugDialog::debug(QString("PE_TRACE PIECE1 initSvgTree view=%1: all hidden (reload controls visibility)").arg(sketchWidget->viewID()));
 }
 
 void PEMainWindow::highlightSlot(PEGraphicsItem * pegi) {
+	DebugDialog::debug(QString("PE_TRACE highlightSlot id=%1 interactive=%2")
+	                       .arg(pegi ? pegi->element().attribute("id") : QString("NULL"))
+	                       .arg(pegi ? pegi->interactive() : false));
 	if (m_peToolView != nullptr) {
 		bool enableTerminalPointControls = anyMarquee();
 		bool vis = anyVisible();
@@ -1979,12 +2105,40 @@ void PEMainWindow::reload(bool firstTime)
 	m_connectorsView->setSMD(modelPart->flippedSMD());
 
 	Q_FOREACH (ViewThing * viewThing, m_viewThings.values()) {
-		// TODO: may have to revisit this and move all pegi items
-		//viewThing->itemBase->setMoveLock(true);
-		//viewThing->itemBase->setItemIsSelectable(false);
 		if (viewThing->itemBase == nullptr) { continue; }
+		// The whole-part QtSvg item (itemBase) is a BACKDROP, not an editable object. Left interactive and
+		// on its default z it intercepts every click and paints the full part over the per-element overlay
+		// (PEGraphicsItem) -- the user's "old SVG with zero interaction sitting on top, our work hidden
+		// underneath it, sizing box top-left." (These were commented out by the original author; the symptom
+		// proves they must be on.) Strip all mouse interaction + selection and push it BELOW the overlay items
+		// so the live PEGraphicsItems are the top, clickable layer. The backdrop still paints (so the part is
+		// visible) but never steals a click nor draws over a selected/live element.
+		viewThing->itemBase->setAcceptHoverEvents(false);
+		viewThing->itemBase->setEnabled(false);
+		viewThing->itemBase->setFlag(QGraphicsItem::ItemIsSelectable, false);
+		viewThing->itemBase->setFlag(QGraphicsItem::ItemIsMovable, false);
+		viewThing->itemBase->setFlag(QGraphicsItem::ItemIsFocusable, false);
+		viewThing->itemBase->setZValue(-1000.0);   // strictly under the pegi overlay (PegiZ = 5000)
 		viewThing->itemBase->setAcceptsMousePressLegEvent(false);
 		viewThing->itemBase->setSwappable(false);
+		// The backdrop's per-layer layerKin siblings (Copper0 / Silkscreen1 for a PCB part) are SEPARATE
+		// QGraphicsSvgItems with their own z -- setZValue/flags on the chief do NOT propagate to them, so
+		// they would still sit above the overlay and keep the same "old svg on top" symptom. Apply the exact
+		// same inert-backdrop treatment to every member of the family.
+		{
+			PaletteItem * pe = dynamic_cast<PaletteItem *>(viewThing->itemBase);
+			if (pe != nullptr) {
+				Q_FOREACH (ItemBase * lk, pe->layerKin()) {
+					if (lk == nullptr) continue;
+					lk->setAcceptHoverEvents(false);
+					lk->setEnabled(false);
+					lk->setFlag(QGraphicsItem::ItemIsSelectable, false);
+					lk->setFlag(QGraphicsItem::ItemIsMovable, false);
+					lk->setFlag(QGraphicsItem::ItemIsFocusable, false);
+					lk->setZValue(-1000.0);
+				}
+			}
+		}
 		viewThing->sketchWidget->hideConnectors(true);
 		viewThing->everZoomed = false;
 	}
@@ -1995,6 +2149,36 @@ void PEMainWindow::reload(bool firstTime)
 	QTimer::singleShot(10, this, SLOT(initZoom()));
 
 	SvgCursorBuilder::instance()->removeCursor(this);
+
+	// PIECE 1: show ONLY the PCB view's svg items (chief + its Copper0 / Silkscreen1 siblings, all three
+	// renderers -- they are the whole PCB part). Everything on every other view stays hidden, and ALL
+	// PEGraphicsItem overlay items stay hidden. One surface at a time; verify before adding the next.
+	{
+		const bool onPcb = (m_currentGraphicsView != nullptr && m_currentGraphicsView->viewID() == ViewLayer::PCBView);
+		int shown = 0;
+		Q_FOREACH (ViewThing * vt, m_viewThings.values()) {
+			const bool thisIsPcb = (vt->sketchWidget != nullptr && vt->sketchWidget->viewID() == ViewLayer::PCBView);
+			const bool show = thisIsPcb;
+			if (vt->itemBase != nullptr) {
+				vt->itemBase->setVisible(show);
+				if (show) ++shown;
+				PaletteItem * pe = dynamic_cast<PaletteItem *>(vt->itemBase);
+				if (pe != nullptr) {
+					Q_FOREACH (ItemBase * lk, pe->layerKin()) {
+						if (lk == nullptr) continue;
+						lk->setVisible(show);
+						if (show) ++shown;
+					}
+				}
+			}
+			if (vt->sketchWidget != nullptr) {
+				Q_FOREACH (QGraphicsItem * it, vt->sketchWidget->scene()->items()) {
+					if (dynamic_cast<PEGraphicsItem *>(it) != nullptr) it->setVisible(false);
+				}
+			}
+		}
+		DebugDialog::debug(QString("PE_TRACE PIECE1: onPcb=%1 svgItemsShown=%2 (expect 3: Copper0/Copper1/Silkscreen1)").arg(onPcb).arg(shown));
+	}
 
 }
 
@@ -2130,10 +2314,13 @@ void PEMainWindow::pegiMouseReleased(PEGraphicsItem *) {
 
 void PEMainWindow::relocateConnector(PEGraphicsItem * pegi)
 {
-	QString newGorn = pegi->element().attribute("gorn");
+	// The svg is no longer gorn'd for the lifetime of the edit session (see initSvgTree), so elements are
+	// addressed by their real id. The gorn indirection existed to keep ids stable across structural
+	// undo; connector relocation only needs to name two existing elements, which their ids already do.
+	QString newGorn = pegi->element().attribute("id");
 	QDomDocument * svgDoc = m_viewThings.value(m_currentGraphicsView->viewID())->document;
 	QDomElement svgRoot = svgDoc->documentElement();
-	QDomElement newGornElement = TextUtils::findElementWithAttribute(svgRoot, "gorn", newGorn);
+	QDomElement newGornElement = TextUtils::findElementWithAttribute(svgRoot, "id", newGorn);
 	if (newGornElement.isNull()) {
 		return;
 	}
@@ -2147,14 +2334,14 @@ void PEMainWindow::relocateConnector(PEGraphicsItem * pegi)
 	}
 
 	QDomElement oldGornElement = TextUtils::findElementWithAttribute(svgRoot, "id", svgID);
-	QString oldGorn = oldGornElement.attribute("gorn");
+	QString oldGorn = oldGornElement.attribute("id");
 	QString oldGornTerminal;
 	if (!terminalID.isEmpty()) {
 		QDomElement element = TextUtils::findElementWithAttribute(svgRoot, "id", terminalID);
-		oldGornTerminal = element.attribute("gorn");
+		oldGornTerminal = element.attribute("id");
 	}
 
-	if (newGornElement.attribute("gorn").compare(oldGornElement.attribute("gorn")) == 0) {
+	if (newGornElement.attribute("id").compare(oldGornElement.attribute("id")) == 0) {
 		// no change
 		return;
 	}
@@ -2173,15 +2360,15 @@ void PEMainWindow::relocateConnectorSvg(SketchWidget * sketchWidget, const QStri
 	QDomDocument * svgDoc = viewThing->document;
 	QDomElement svgRoot = svgDoc->documentElement();
 
-	QDomElement oldGornElement = TextUtils::findElementWithAttribute(svgRoot, "gorn", oldGorn);
+	QDomElement oldGornElement = TextUtils::findElementWithAttribute(svgRoot, "id", oldGorn);
 	QDomElement oldGornTerminalElement;
 	if (!oldGornTerminal.isEmpty()) {
-		oldGornTerminalElement = TextUtils::findElementWithAttribute(svgRoot, "gorn", oldGornTerminal);
+		oldGornTerminalElement = TextUtils::findElementWithAttribute(svgRoot, "id", oldGornTerminal);
 	}
-	QDomElement newGornElement = TextUtils::findElementWithAttribute(svgRoot, "gorn", newGorn);
+	QDomElement newGornElement = TextUtils::findElementWithAttribute(svgRoot, "id", newGorn);
 	QDomElement newGornTerminalElement;
 	if (!newGornTerminal.isEmpty()) {
-		newGornTerminalElement = TextUtils::findElementWithAttribute(svgRoot, "gorn", newGornTerminal);
+		newGornTerminalElement = TextUtils::findElementWithAttribute(svgRoot, "id", newGornTerminal);
 	}
 
 	if (!oldGornElement.isNull()) {
@@ -2872,8 +3059,44 @@ void PEMainWindow::addPrimitive(SketchWidget * sketchWidget, const QString & par
 	QDomNode imported = svgDoc->importNode(newElement, true);
 
 	QDomElement svgRoot = svgDoc->documentElement();
-	QDomElement parent = parentSvgID.isEmpty() ? svgRoot : TextUtils::findElementWithAttribute(svgRoot, "id", parentSvgID);
-	if (parent.isNull()) parent = svgRoot;
+	QDomElement parent;
+	if (!parentSvgID.isEmpty()) {
+		parent = TextUtils::findElementWithAttribute(svgRoot, "id", parentSvgID);
+	} else {
+		// Recovery rather than refusal. Refusing outright turned "Add graphic" into a silent no-op for
+		// any part whose layer structure the map does not recognise, which is strictly worse than the
+		// pre-M1 behaviour (the shape landed at the svg root and was at least visible). Re-inspect first,
+		// since the live map can lag a document reload; failing that, append at the <svg> root as this
+		// code always did. Root-append is imperfect -- the shape sits outside the layer groups -- but it
+		// is visible and undoable, and the log line still records that routing did not happen.
+		m_viewLayerMap.inspect(svgRoot);
+		parent = m_viewLayerMap.resolveParent(svgRoot, sketchWidget->viewID());
+		// PE_TRACE: routing has now failed twice (once on the live map, once after re-inspecting this
+		// very document). Dump the live tree so the difference between "the map is wrong" and "the
+		// in-memory document is not the part svg on disk" is settled by data instead of more reading.
+		{
+			QString kids;
+			for (QDomElement c = svgRoot.firstChildElement(); !c.isNull(); c = c.nextSiblingElement())
+				kids += QString("%1(id='%2') ").arg(c.tagName()).arg(c.attribute("id"));
+			DebugDialog::debug(QString("PE_TRACE addPrimitive live root tag=%1 id='%2' children: %3")
+			                       .arg(svgRoot.tagName()).arg(svgRoot.attribute("id")).arg(kids));
+		}
+		if (parent.isNull()) {
+			DebugDialog::debug(QString("addPrimitive: no known layer group for view %1"
+			                           " [mapEmpty=%2 mapHasView=%3 rootId='%4' rootChildren=%5];"
+			                           " falling back to svg root")
+			                           .arg(ViewLayer::viewIDNaturalName(sketchWidget->viewID()))
+			                           .arg(m_viewLayerMap.isEmpty())
+			                           .arg(m_viewLayerMap.contains(sketchWidget->viewID()))
+			                           .arg(svgRoot.attribute("id"))
+			                           .arg(svgRoot.childNodes().count()));
+			parent = svgRoot;
+		}
+	}
+	if (parent.isNull()) {
+		DebugDialog::debug(QString("addPrimitive: requested parent '%1' not found -- refusing to add graphic").arg(parentSvgID));
+		return;
+	}
 	parent.appendChild(imported);
 
 	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
@@ -2884,6 +3107,24 @@ void PEMainWindow::addPrimitive(SketchWidget * sketchWidget, const QString & par
 	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
 
 	// Re-init the overlay items so the new element gets a PEGraphicsItem.
+	//
+	// ROOT CAUSE of "click Add circle and nothing happens" (and the same for moveGraphic,
+	// resizeGraphic, editPathAnchor and removePrimitive): the edited document was written to a NEW temp
+	// path (makeSvgPath2 embeds m_fileIndex, which createPrimitiveRequested bumps per creation), but
+	// itemBase kept pointing at the ORIGINAL svg file -- and initSvgTree() re-reads itemBase->filename()
+	// and rebuilds its own QDomDocument from that file, discarding the in-memory document we just
+	// edited. So every edit was correctly persisted to disk and then never displayed: the canvas kept
+	// showing the pre-edit file. setFilename() redirects the item (and the fzp image attribute already
+	// updated above) at the file we actually wrote, so the re-read picks up the edit.
+	viewThing->itemBase->setFilename(newPath);
+	// The QGraphicsSvgItem backdrop (itemBase) renders from a QSvgRenderer that setFilename does
+	// NOT reload -- it only stores the path. Without an explicit resetRenderer(), the backdrop keeps
+	// painting the PRE-EDIT part svg forever, so a moved/resized shape appears BOTH in its old spot
+	// (stale backdrop) and its new spot (live overlay item) -- the reported "artifacts / hidden under
+	// the part / doubling". resetRenderer reloads the shared renderer from the string we just wrote
+	// (it, not reloadRenderer, also handles a size change). Done BEFORE initSvgTree so the rebuilt
+	// overlay items sit over a current backdrop.
+	reloadBackdropForView(viewThing, removeGorn(svg), newPath);
 	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
 
 	updateChangeCount(sketchWidget, changeDirection);
@@ -2891,6 +3132,7 @@ void PEMainWindow::addPrimitive(SketchWidget * sketchWidget, const QString & par
 
 void PEMainWindow::removePrimitive(SketchWidget * sketchWidget, const QString & elementXml, int changeDirection)
 {
+	DebugDialog::debug(QString("PE_TRACE removePrimitive xml=%1").arg(elementXml.simplified().left(80)));
 	if (elementXml.isEmpty()) return;
 	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
 	if (viewThing == nullptr || viewThing->document == nullptr) return;
@@ -2913,6 +3155,16 @@ void PEMainWindow::removePrimitive(SketchWidget * sketchWidget, const QString & 
 	QDomElement fzpRoot = m_fzpDocument.documentElement();
 	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
 
+	// Point the item at the file we actually wrote before re-reading (see addPrimitive).
+	viewThing->itemBase->setFilename(newPath);
+	// The QGraphicsSvgItem backdrop (itemBase) renders from a QSvgRenderer that setFilename does
+	// NOT reload -- it only stores the path. Without an explicit resetRenderer(), the backdrop keeps
+	// painting the PRE-EDIT part svg forever, so a moved/resized shape appears BOTH in its old spot
+	// (stale backdrop) and its new spot (live overlay item) -- the reported "artifacts / hidden under
+	// the part / doubling". resetRenderer reloads the shared renderer from the string we just wrote
+	// (it, not reloadRenderer, also handles a size change). Done BEFORE initSvgTree so the rebuilt
+	// overlay items sit over a current backdrop.
+	reloadBackdropForView(viewThing, removeGorn(svg), newPath);
 	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
 
 	updateChangeCount(sketchWidget, changeDirection);
@@ -2920,8 +3172,99 @@ void PEMainWindow::removePrimitive(SketchWidget * sketchWidget, const QString & 
 
 // P7 live wiring: move/resize a graphic element (by svg id) -> rewrite its geometry attrs, then
 // re-render the view. Mirrors editPathAnchor (find the element by id, mutate, rewrite svg + fzp).
+// Colourise a part svg the SAME way the rest of Fritzing does, then hand it to the single backdrop
+// renderer. PROVEN root cause (docs/internal/pe-findings.md): the parts editor repainted the part after
+// every edit from the RAW svg, so copper pads lost their copper colour (headless proof: raw render -> gold=0)
+// -- the washed "old SVG over our new stuff". The real app colourises in FSvgRenderer::loadAux via
+// SvgFileSplitter::fixColorRecurse(group, <layer colour>, {black,#000000}) where <layer colour> is keyed on
+// the layer (setUpImage: copper1->Copper1Color, copper0->Copper0Color, silkscreen->Silkscreen*Color). We
+// apply the identical transform per recognised layer group so the one QGraphicsSvgItem paints a live,
+// correctly-coloured part -- no second copy, no raw paint, no reload(). Black (#000000) is preserved (it is
+// the silkscreen/technical ink the app keeps), matching loadAux's exception list.
+QString PEMainWindow::colourisePartSvg(const QString & svg) {
+	QDomDocument doc;
+	if (!doc.setContent(svg, QDomDocument::ParseOption::UseNamespaceProcessing)) {
+		return svg;
+	}
+	QDomElement root = doc.documentElement();
+	if (root.isNull()) return svg;
+
+	QStringList exceptions;
+	exceptions << "black" << "#000000";
+
+	// layer xml id -> the colour Fritzing paints that layer. Mirrors ItemBase::setUpImage's PCB switch.
+	auto colorise = [&](const char * layerId, const QString & color) {
+		QDomElement g = TextUtils::findElementWithAttribute(root, "id", QString::fromLatin1(layerId));
+		if (!g.isNull()) SvgFileSplitter::fixColorRecurse(g, color, exceptions);
+	};
+	colorise("copper1",     ViewLayer::Copper1Color);
+	colorise("copper0",     ViewLayer::Copper0Color);
+	colorise("silkscreen",  ViewLayer::Silkscreen1Color);
+	colorise("silkscreen0", ViewLayer::Silkscreen0Color);
+
+	return doc.toString();
+}
+
+void PEMainWindow::reloadBackdropForView(ViewThing * viewThing, const QString & fullSvg, const QString & newPath) {
+	if (viewThing == nullptr || viewThing->itemBase == nullptr) return;
+	ItemBase * chief = viewThing->itemBase;
+
+	// PROVEN from the live scene dump (docs/internal/pe-findings.md): the PCB part is NOT one renderer.
+	// The SCENE-SVG trace showed view=3 holding THREE ItemBases -- layer 20 (Copper0), 23 (Copper1) and 25
+	// (Silkscreen1): the chief is a PaletteItem and Copper0 / Silkscreen1 are its layerKin siblings, EACH
+	// with its own QSvgRenderer. setUpImage (verified: paletteitembase.cpp:453) repaints ONLY the item it is
+	// called on -- it does NOT recurse into layerKin. So every earlier fix that touched just the chief left
+	// Copper0 and Silkscreen1 painting the PRE-EDIT svg: those stale siblings are the "old SVG over our new
+	// stuff" and the giant black silkscreen circles. Refresh EVERY member of the family. setUpImage reads
+	// bytes off disk via the modelPart imageFileName, so point the chief's modelPart at the file we just
+	// wrote, unprocess connectors per member (setUpImage re-processes them for that view/layer), then
+	// setUpImage each member with its OWN layer attributes. Reuses the existing items -> zoom/pan + overlay
+	// survive (unlike reload()), and reproduces the exact colourised per-layer render of the initial load.
+	PaletteItem * pi = dynamic_cast<PaletteItem *>(chief);
+	if (pi != nullptr && pi->modelPart() != nullptr && !newPath.isEmpty() && viewThing->sketchWidget != nullptr) {
+		ModelPart * mp = pi->modelPart();
+		const ViewLayer::ViewID viewID = chief->viewID();
+		mp->setImageFileName(viewID, newPath);
+
+		QList<ItemBase *> family;
+		family << chief;
+		Q_FOREACH (ItemBase * lk, pi->layerKin()) {
+			if (lk != nullptr && lk != chief) family << lk;
+		}
+
+		bool allRefreshed = true;
+		Q_FOREACH (ItemBase * member, family) {
+			PaletteItemBase * pib = dynamic_cast<PaletteItemBase *>(member);
+			if (pib == nullptr) { allRefreshed = false; continue; }
+			Q_FOREACH (Connector * connector, mp->connectors()) {
+				connector->unprocess(viewID, member->viewLayerID());
+			}
+			LayerAttributes layerAttributes;
+			member->initLayerAttributes(layerAttributes, viewID, member->viewLayerID(),
+			                            member->viewLayerPlacement(), true, !member->selectionShape().isEmpty());
+			if (!pib->setUpImage(mp, viewThing->sketchWidget->viewLayers(), layerAttributes)) {
+				allRefreshed = false;
+			}
+		}
+
+		// If any member could not go through the colourising path, at least repaint every member from the
+		// edited svg with the layer colours applied, so nothing is left showing the pre-edit part.
+		if (!allRefreshed) {
+			const QString colourised = colourisePartSvg(fullSvg);
+			Q_FOREACH (ItemBase * member, family) {
+				member->resetRenderer(colourised);
+			}
+		}
+		return;
+	}
+
+	// Non-PaletteItem fallback (single renderer): colourised raw paint beats a stale backdrop.
+	chief->resetRenderer(colourisePartSvg(fullSvg));
+}
+
 void PEMainWindow::moveGraphic(SketchWidget * sketchWidget, const QString & svgID, QPointF delta, int changeDirection)
 {
+	DebugDialog::debug(QString("PE_TRACE moveGraphic svgID=%1").arg(svgID));
 	if (svgID.isEmpty()) return;
 	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
 	if (viewThing == nullptr || viewThing->document == nullptr) return;
@@ -2945,6 +3288,18 @@ void PEMainWindow::moveGraphic(SketchWidget * sketchWidget, const QString & svgI
 	QDomElement fzpRoot = m_fzpDocument.documentElement();
 	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
 
+	// Point the item at the file we actually wrote before re-reading: initSvgTree() rebuilds from
+	// itemBase->filename(), so without this the view reloads the stale pre-edit svg and the move --
+	// though correctly persisted -- is never displayed. (See addPrimitive for the full analysis.)
+	viewThing->itemBase->setFilename(newPath);
+	// The QGraphicsSvgItem backdrop (itemBase) renders from a QSvgRenderer that setFilename does
+	// NOT reload -- it only stores the path. Without an explicit resetRenderer(), the backdrop keeps
+	// painting the PRE-EDIT part svg forever, so a moved/resized shape appears BOTH in its old spot
+	// (stale backdrop) and its new spot (live overlay item) -- the reported "artifacts / hidden under
+	// the part / doubling". resetRenderer reloads the shared renderer from the string we just wrote
+	// (it, not reloadRenderer, also handles a size change). Done BEFORE initSvgTree so the rebuilt
+	// overlay items sit over a current backdrop.
+	reloadBackdropForView(viewThing, removeGorn(svg), newPath);
 	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
 
 	updateChangeCount(sketchWidget, changeDirection);
@@ -2952,6 +3307,7 @@ void PEMainWindow::moveGraphic(SketchWidget * sketchWidget, const QString & svgI
 
 void PEMainWindow::resizeGraphic(SketchWidget * sketchWidget, const QString & svgID, QRectF to, int changeDirection)
 {
+	DebugDialog::debug(QString("PE_TRACE resizeGraphic svgID=%1").arg(svgID));
 	if (svgID.isEmpty()) return;
 	ViewThing * viewThing = m_viewThings.value(sketchWidget->viewID());
 	if (viewThing == nullptr || viewThing->document == nullptr) return;
@@ -2964,9 +3320,17 @@ void PEMainWindow::resizeGraphic(SketchWidget * sketchWidget, const QString & sv
 	}
 
 	PEElement pe;
-	pe.kind = PEElementKind::Rect;   // resize is defined for a <rect> at the attribute level
+	// Derive the kind from the element instead of asserting Rect. Hardcoding Rect meant resizeRect's
+	// kind check rejected every circle/line/ellipse before it could look at the attrs, so dragging a
+	// resize grip on those shapes silently did nothing.
+	pe.kind = PEPrimitive::kindForElement(target);
 	pe.element = target;
-	if (!pe.resizeRect(to)) return;
+	pe.bounds = getPixelBounds(target);   // polyline/polygon resize scales from the current box
+	if (!pe.resizeRect(to)) {
+		DebugDialog::debug(QString("resizeGraphic: tag %1 (kind %2) does not support resize -- element %3")
+		                       .arg(target.tagName()).arg(static_cast<int>(pe.kind)).arg(svgID));
+		return;
+	}
 
 	QString newPath = m_userPartsFolderSvgPath + makeSvgPath2(sketchWidget);
 	FolderUtils::ensureDirectoryExists(newPath);
@@ -2975,6 +3339,16 @@ void PEMainWindow::resizeGraphic(SketchWidget * sketchWidget, const QString & sv
 	QDomElement fzpRoot = m_fzpDocument.documentElement();
 	setImageAttribute(fzpRoot, newPath, sketchWidget->viewID());
 
+	// Point the item at the file we actually wrote before re-reading (see addPrimitive).
+	viewThing->itemBase->setFilename(newPath);
+	// The QGraphicsSvgItem backdrop (itemBase) renders from a QSvgRenderer that setFilename does
+	// NOT reload -- it only stores the path. Without an explicit resetRenderer(), the backdrop keeps
+	// painting the PRE-EDIT part svg forever, so a moved/resized shape appears BOTH in its old spot
+	// (stale backdrop) and its new spot (live overlay item) -- the reported "artifacts / hidden under
+	// the part / doubling". resetRenderer reloads the shared renderer from the string we just wrote
+	// (it, not reloadRenderer, also handles a size change). Done BEFORE initSvgTree so the rebuilt
+	// overlay items sit over a current backdrop.
+	reloadBackdropForView(viewThing, removeGorn(svg), newPath);
 	initSvgTree(sketchWidget, viewThing->itemBase, *svgDoc);
 
 	updateChangeCount(sketchWidget, changeDirection);
@@ -2995,6 +3369,8 @@ void PEMainWindow::pegiPathAnchorChanged(PEGraphicsItem * pegi, int segmentIndex
 
 void PEMainWindow::createPrimitiveRequested(const QString & kind)
 {
+    DebugDialog::debug(QString("PE_TRACE createPrimitiveRequested kind=%1 currentView=%2")
+                       .arg(kind).arg(m_currentGraphicsView == nullptr ? "NULL" : "set"));
     if (m_currentGraphicsView == nullptr) {
         // No graphic canvas is active (e.g. still on the Welcome/landing tab). Say so instead of
         // silently doing nothing -- a silent return made the tool buttons feel dead/non-functional.
@@ -3013,32 +3389,85 @@ void PEMainWindow::createPrimitiveRequested(const QString & kind)
     else if (kind == "text") k = PEElementKind::Text;
     if (k == PEElementKind::Unknown) return;
 
-    // Place the new graphic centered on the area the user is currently looking at. The scene is in
-    // px (the svg graphic item renders at 90 dpi); the geometry attrs are mm user units, so convert
-    // the visible-center px (relative to the svg item origin) into units -- so it lands in view.
+    // Place the new graphic inside the part, centred on what the user is looking at.
+    //
+    // The previous version took mapToScene(viewportRect()).boundingRect().center() and ran it through
+    // PEUtils::convertUnits(), i.e. px->mm at 90 dpi. Two things were wrong with that, and they are
+    // what put a shape half off a 15x13mm board (a saved file showed cy=7.05 with y1=-2.01):
+    //   * The scene px are the px of a VIEW THAT IS ZOOMED AND PANNED. mapToScene of the widget rect
+    //     is the currently-visible region, so the "centre" moved with zoom and pan, and its distance
+    //     from the part origin scaled with the zoom level.
+    //   * convertUnits assumes 90-dpi svg px. The overlay lives in the item's own px space, which is
+    //     already a scaled rendering of the viewBox, so dividing by 3.5277 again double-scaled it.
+    // The correct mapping is the one Qt already owns: ask the svg item to map the view centre into ITS
+    // coordinate system, which is the same px space getPixelBounds()/PEGraphicsItem use, then convert
+    // px->units exactly once. Clamp into the part's own bounding box so a shape can never be created
+    // off-canvas where the user cannot click it.
     ViewThing * viewThing = m_viewThings.value(m_currentGraphicsView->viewID());
     if (viewThing == nullptr || viewThing->document == nullptr || viewThing->itemBase == nullptr) return;
-    const QRectF visible = m_currentGraphicsView->mapToScene(m_currentGraphicsView->viewport()->rect()).boundingRect();
-    const QPointF center = PEUtils::convertUnits(visible.center() - viewThing->itemBase->pos());
-    const double half = 5.0;   // 10x10 default box, centered on `center`
-    const QRectF rect(center.x() - half, center.y() - half, 2 * half, 2 * half);
-    const QPointF a(center.x() - half, center.y() - half);
-    const QPointF b(center.x() + half, center.y() + half);
+
+    const QPointF viewCentrePx =
+        viewThing->itemBase->mapFromScene(m_currentGraphicsView->mapToScene(m_currentGraphicsView->viewport()->rect().center()));
+    QPointF center = PEUtils::convertUnits(viewCentrePx);
+
+    // Keep the whole box on the board: a shape placed partly off the viewBox is invisible or only
+    // half clickable, which is exactly the "cannot click the shape" complaint. The board is the part's
+    // viewBox in user units -- NOT getPixelBounds(root), which reads geometry attrs and returns null
+    // for an <svg> element.
+    // Read the extent off a renderer where possible: QSvgRenderer already resolves viewBox vs
+    // width/height vs preserveAspectRatio the same way the on-screen item does, so the clamp cannot
+    // disagree with what the user sees. Fall back to parsing the raw attribute, and if that fails too,
+    // do NOT clamp -- inventing a 100x100 box would silently park shapes near the origin instead.
+    QRectF board;
+    {
+        FSvgRenderer vbRenderer;
+        if (vbRenderer.load(viewThing->originalSvgPath)) board = vbRenderer.viewBoxF();
+    }
+    if (!board.isValid() || board.width() <= 0 || board.height() <= 0) {
+        board = PEPrimitive::viewBoxFromAttribute(viewThing->document->documentElement());
+    }
+    const bool canClamp = board.isValid() && board.width() > 0 && board.height() > 0;
+
+    const double half = 5.0;   // default 10x10 box in user units, centred on `center`
+    double boxHalf = half;
+    if (canClamp && (board.width() < 2 * boxHalf || board.height() < 2 * boxHalf)) {
+        // Board smaller than the default box: shrink to fit rather than clamp the centre into a
+        // corner, which would park every shape at the edge of a small part.
+        boxHalf = qMax(0.5, qMin(board.width(), board.height()) / 4.0);
+        center = board.center();
+    } else if (canClamp) {
+        center.setX(qBound(board.left() + boxHalf, center.x(), board.right() - boxHalf));
+        center.setY(qBound(board.top() + boxHalf, center.y(), board.bottom() - boxHalf));
+    }
+    DebugDialog::debug(QString("PE_TRACE place centre=(%1,%2) boxHalf=%3 board=(%4,%5 %6x%7) clamped=%8")
+                           .arg(center.x()).arg(center.y()).arg(boxHalf)
+                           .arg(board.x()).arg(board.y()).arg(board.width()).arg(board.height())
+                           .arg(canClamp));
+    const QRectF rect(center.x() - boxHalf, center.y() - boxHalf, 2 * boxHalf, 2 * boxHalf);
+    const QPointF a(center.x() - boxHalf, center.y() - boxHalf);
+    const QPointF b(center.x() + boxHalf, center.y() + boxHalf);
 
     // Unique graphic id: module id + the (per-part) graphic counter, which we bump below on success.
     QString id = QString("%1.%2").arg(m_originalModuleID).arg(m_fileIndex);
 
+    // Match the stroke width the part already draws with. PEPrimitive::make used to hardcode 1, which
+    // is 1 USER UNIT -- on this 15 x 13 mm connector whose own tracks are 0.2-0.44 wide, that is 3-5x
+    // too fat, and a 10-unit circle with a 1-unit black stroke reads as a solid blob once zoomed out.
+    const double strokeWidth = PEPrimitive::typicalStrokeWidth(viewThing->document->documentElement());
     QDomElement built = PEPrimitive::make(*viewThing->document,
                                           k, id, QString(), rect, a, b,
                                           center, 5.0, center, 5.0, 5.0,
                                           QList<QPointF>() << a << b,
                                           QString("M %1 %2 L %3 %4").arg(QString::number(a.x()), QString::number(a.y()), QString::number(b.x()), QString::number(b.y())),
-                                          center, QString());
+                                          center, QString(), strokeWidth);
     if (built.isNull()) return;
 
     QDomDocument frag;
     frag.appendChild(frag.importNode(built, true));
     QString xml = frag.toString();
+    DebugDialog::debug(QString("PE_TRACE created element id=%1 tag=%2 center=(%3,%4) strokeWidth=%5 viewBox='%6'")
+                       .arg(id).arg(built.tagName()).arg(center.x()).arg(center.y()).arg(strokeWidth)
+                       .arg(viewThing->document->documentElement().attribute("viewBox")));
     auto * command = new AddPrimitiveCommand(this, m_currentGraphicsView, QString(), xml, nullptr);
     command->setText(tr("Add %1").arg(kind));
     // Bump the counter now so the next created graphic gets a fresh id (was: every graphic reused
@@ -3180,7 +3609,7 @@ void PEMainWindow::showInOS() {
 	showInOS(this, viewThing->itemBase->filename());
 }
 
-PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z)
+PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z, bool freelyEditable)
 {
 	// M0.4/M0.5 guard: every live item must be backed by a real modeled graphic. An item built over a
 	// null QDomElement renders nothing (shapeFromElement has no attrs), cannot be edited
@@ -3204,7 +3633,16 @@ PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase *
 	pegiItem->setElement(element);
 	pegiItem->setOffset(topLeft);
 	pegiItem->setDocBounds(QRectF(topLeft, size));   // element bounds in user units (px<->doc mapping for grips/drag)
-	pegiItem->setInteractive(true);
+	// A connector pad / nonconnector is part of the part's electrical geometry, not a free graphic.
+	// It stays selectable (the connector workflow needs to click it) but must NOT get move/resize grips:
+	// when every pad was independently draggable the user dragging "the part" actually detached single
+	// pads out of the copper layer, which is the reported "layering is wrong / part looks broken".
+	if (freelyEditable) {
+		pegiItem->setInteractive(true);
+	} else {
+		pegiItem->setFlag(QGraphicsItem::ItemIsSelectable, true);
+		pegiItem->setFlag(QGraphicsItem::ItemIsFocusable, true);
+	}
 	connect(pegiItem, SIGNAL(highlightSignal(PEGraphicsItem *)), this, SLOT(highlightSlot(PEGraphicsItem *)));
 	connect(pegiItem, SIGNAL(mouseReleasedSignal(PEGraphicsItem *)), this, SLOT(pegiMouseReleased(PEGraphicsItem *)));
 	connect(pegiItem, SIGNAL(mousePressedSignal(PEGraphicsItem *, bool &)), this, SLOT(pegiMousePressed(PEGraphicsItem *, bool &)), Qt::DirectConnection);
@@ -3213,6 +3651,7 @@ PEGraphicsItem * PEMainWindow::makePegi(QSizeF size, QPointF topLeft, ItemBase *
 	connect(pegiItem, SIGNAL(pathAnchorMoved(PEGraphicsItem *, int, QPointF)), this, SLOT(pegiPathAnchorMoved(PEGraphicsItem *, int, QPointF)));
 	connect(pegiItem, SIGNAL(pathAnchorChanged(PEGraphicsItem *, int, QPointF, QPointF)), this, SLOT(pegiPathAnchorChanged(PEGraphicsItem *, int, QPointF, QPointF)));
 	connect(pegiItem, SIGNAL(graphicMoveDelta(PEGraphicsItem *, QPointF)), this, SLOT(pegiGraphicMoveDelta(PEGraphicsItem *, QPointF)));
+	connect(pegiItem, SIGNAL(graphicResizeTo(PEGraphicsItem *, QRectF)), this, SLOT(pegiGraphicResizeTo(PEGraphicsItem *, QRectF)));
 	return pegiItem;
 }
 
@@ -3225,6 +3664,18 @@ void PEMainWindow::pegiGraphicMoveDelta(PEGraphicsItem * pegi, QPointF deltaUnit
 	if (svgID.isEmpty()) return;
 	auto * command = new MoveGraphicCommand(this, m_currentGraphicsView, svgID, deltaUnits, nullptr);
 	command->setText(tr("Move graphic"));
+	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
+}
+
+void PEMainWindow::pegiGraphicResizeTo(PEGraphicsItem * pegi, QRectF to)
+{
+	if (m_currentGraphicsView == nullptr || pegi == nullptr) return;
+	QString svgID = pegi->element().attribute("id");
+	if (svgID.isEmpty()) return;
+	// 'before' is taken from the element being resized so undo restores the exact prior box.
+	QRectF before = getPixelBounds(pegi->element());
+	auto * command = new ResizeGraphicCommand(this, m_currentGraphicsView, svgID, before, to, nullptr);
+	command->setText(tr("Resize graphic"));
 	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
 }
 
@@ -3271,7 +3722,22 @@ QRectF PEMainWindow::getPixelBounds(QDomElement & element)
 		const double ry = element.attribute(QStringLiteral("ry")).toDouble(&ok); if (!ok) return QRectF();
 		return QRectF(cx - rx, cy - ry, 2 * rx, 2 * ry);
 	}
-	// path/text/unknown: not box-bounded at the attribute level; the caller skips zero-area bounds.
+	// M1: path / text / polyline / polygon store no axis-aligned box in their attributes, so the
+	// attribute-level read above cannot bound them. This used to return a null rect, and because
+	// initSvgTree() only creates a live item when width>0 && height>0, those four element kinds got
+	// appended to the SVG but never displayed -- which is exactly why the "Add graphic" path / polyline /
+	// polygon buttons looked dead (and why created text was invisible). Decode the actual geometry
+	// instead: P10's shapeFromElement already produces the QPainterPath the item self-renders from, so
+	// its bounding rect is the one honest bound and it agrees with what gets painted.
+	QPainterPath shape;
+	if (PETransform::shapeFromElement(element, shape)) {
+		const QRectF r = shape.boundingRect();
+		if (r.width() > 0 && r.height() > 0) return r;
+		// A straight horizontal / vertical line (or a text run) legitimately has zero height or width.
+		// It is real, visible geometry, so pad it to a hairline box rather than dropping it.
+		if (!r.isNull()) return r.adjusted(-0.01, -0.01, 0.01, 0.01);
+	}
+
 	return QRectF();
 }
 
@@ -4541,26 +5007,19 @@ void PEMainWindow::itemMovedSlot(ItemBase * itemBase) {
 	if (itemBase == nullptr) return;
 	if (itemBase->viewID() != m_currentGraphicsView->viewID()) return;
 
+	// Graphic moves are owned by PEGraphicsItem::graphicMoveDelta -> pegiGraphicMoveDelta, which knows
+	// exactly which element was dragged and carries a user-unit delta. This slot cannot recover either:
+	// every interactive graphic in a view shares one itemBase, so "the first pegi whose itemBase()
+	// matches" is an arbitrary element, and itemBase->pos() is the PART's scene position, not the drag
+	// delta. Treating it as one re-issued a bogus moveGraphic for whichever element came first on every
+	// drop -- the second, competing edit behind "something moves around". Reposition the overlays so
+	// they follow the part, and stop there.
 	QList<PEGraphicsItem *> pegiList = getPegiList(m_currentGraphicsView);
 	Q_FOREACH (PEGraphicsItem * pegi, pegiList) {
 		if (pegi->itemBase() != itemBase) continue;
 		// keep the overlay grip on top of the moved graphic
 		pegi->setPos(itemBase->pos() + pegi->offset());
 	}
-	// command-cover the move: find the moved graphic element (a top-level graphic whose pegi tracks
-	// it) and translate its geometry attrs by the item's position delta, so the move is undoable.
-	QDomElement element;
-	Q_FOREACH (PEGraphicsItem * pegi, pegiList) {
-		if (pegi->itemBase() == itemBase) { element = pegi->element(); break; }
-	}
-	if (element.isNull()) return;
-	QString svgID = element.attribute("id");
-	if (svgID.isEmpty()) return;
-	SketchWidget * sketchWidget = m_currentGraphicsView;
-	QPointF delta = itemBase->pos();
-	auto * command = new MoveGraphicCommand(this, sketchWidget, svgID, delta, nullptr);
-	command->setText(tr("Move graphic"));
-	m_undoStack->waitPush(command, SketchWidget::PropChangeDelay);
 }
 
 void PEMainWindow::resizedSlot(ItemBase * itemBase) {

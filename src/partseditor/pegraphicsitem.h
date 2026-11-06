@@ -58,6 +58,37 @@ public:
 	// P3 live path editing: draggable anchor (node) grips if this element is a <path>.
 	int pathAnchorCount();
 	QVector<QPointF> pathAnchors();          // document user-unit anchors, segment order
+
+	// Resize grips. The marquee drawn for a selected interactive graphic gets eight draggable handles
+	// (four corners + four edge midpoints). Geometry is kept in one place so paint, hit-test and drag
+	// cannot drift apart the way the previous per-call coordinate maths did.
+	// Bitmask of the marquee edges a held handle moves. Every value MUST be a distinct bit: an
+	// earlier draft used GripLeft = 0, which made `grip & GripLeft` permanently false so left/top
+	// drags silently did nothing. GripNone is the only non-bit value and is tested for explicitly.
+	enum Grip {
+		GripNone        = -1,
+		GripLeft        = 1 << 0,
+		GripRight       = 1 << 1,
+		GripTop         = 1 << 2,
+		GripBottom      = 1 << 3,
+		GripTopLeft     = GripTop    | GripLeft,
+		GripTopRight    = GripTop    | GripRight,
+		GripBottomLeft  = GripBottom | GripLeft,
+		GripBottomRight = GripBottom | GripRight
+	};
+	// The marquee rect in item-local pixels (inset by the same amount paint() insets it).
+	QRectF marqueeRect();
+	// The eight draggable handles as (mask, rect) pairs. Held as a table rather than an array indexed
+	// by the mask, because corner masks are combinations (Top|Left) and would alias each other as
+	// indices.
+	struct GripHandle { int mask; QRectF rect; };
+	QVector<GripHandle> resizeGrips();
+	// Which grip mask the item-local pixel point p is on, GripNone if none.
+	int hitResizeGrip(const QPointF & p);
+	// Item-local pixels -> document user units, using the same doc<->px scale the grips are drawn with.
+	QPointF pixelToDoc(const QPointF & p);
+	// Apply a held grip dragged to item-local pixel p to the box captured at drag start.
+	QRectF resizedBox(int grip, const QPointF & fromDoc, const QPointF & toDoc);
 	void showPathAnchors(bool);
 	bool showingPathAnchors();
 	void setGrabbedAnchor(int);
@@ -100,6 +131,11 @@ Q_SIGNALS:
 	// Fully-live slice: the whole (interactive) graphic was body-dragged; deltaUnits is the move in
 	// document user units. PEMainWindow applies it to the element's geometry attrs (moveGraphic).
 	void graphicMoveDelta(PEGraphicsItem *, QPointF deltaUnits);
+	// Resize grips: a corner/edge handle of the selection marquee was dragged. 'to' is the element's
+	// new bounding box in document user units; PEMainWindow applies it with resizeGraphic so the edit
+	// is undoable. Before this there was no way to invoke resizeGraphic at all -- m_grabbedAnchor only
+	// exists for <path> node editing, so rect/circle/line/ellipse had no resize affordance.
+	void graphicResizeTo(PEGraphicsItem *, QRectF to);
 
 protected Q_SLOTS:
 	void restoreColor();
@@ -130,6 +166,15 @@ protected:
 	bool m_interactive = false;   // fully-live slice: movable+selectable object (not a child overlay)
 	QPointF m_bodyDragOrigin;     // scene px point where a body-drag started (empty = not dragging)
 	bool m_draggingBody = false;  // true while the whole element is being dragged (vs a grip/anchor)
+
+	// Resize grips. m_resizeGrip is a bitmask of the marquee edges/corners being dragged
+	// (see GripXxx); -1 means no grip is held. m_resizeOriginDoc is the element bounding box at drag
+	// start and m_resizeOriginPx the pointer's document-unit point at drag start, so the delta is
+	// measured in user units rather than pixels and is therefore zoom-independent.
+	int   m_resizeGrip = -1;
+	bool  m_draggingResize = false;
+	QRectF m_resizeOriginDoc;
+	QPointF m_resizeOriginPx;
 	class ItemBase * m_itemBase = nullptr;
 };
 
