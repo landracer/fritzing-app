@@ -22,6 +22,11 @@ tests/auto/test_*/test_textutils
 tests/auto/test_*/test_svg2gerber
 tests/auto/test_*/test_ngspice_simulator
 tests/auto/test_*/test_project_properties
+tests/auto/test_*/test_breadboard_routing_score
+tests/auto/test_*/test_breadboard_route_graph
+tests/auto/test_*/test_folderutils
+tests/auto/test_*/test_pedocument
+tests/auto/test_*/test_peviewlayermap
 
 phoenix.pro.user
 /phoenix-build-*
@@ -88,3 +93,4 @@ experiments/**/node_modules/
 experiments/netlist-to-fzz/bigmuff.fz
 artifacts/
 .vscode/
+bt/
