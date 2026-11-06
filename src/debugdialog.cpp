@@ -252,8 +252,13 @@ void DebugDialog::debug(QString message, DebugLevel debugLevel, QObject * ancest
 	}
 
 	if (m_file.fileName().isEmpty()) {
+		// The log target must be a FILE. QStandardPaths::AppDataLocation resolves to a directory
+		// (~/.local/share/Fritzing/Fritzing), so setting the file name to it made every open() below
+		// fail silently and all debug output was discarded -- DebugDialog::debug() looked like it worked
+		// (and qDebug() still went to the console) but nothing ever reached the log, so problems could
+		// not be diagnosed from a user's session at all. Append the intended file name.
 		QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-		// path += "/debug.txt";
+		path += QStringLiteral("/debug.txt");
 		m_file.setFileName(path);
 	}
 	
@@ -261,6 +266,10 @@ void DebugDialog::debug(QString message, DebugLevel debugLevel, QObject * ancest
 		QTextStream out(&m_file);
 		out << message << "\n";
 		m_file.close();
+	} else {
+		// Never swallow this: a log that silently cannot write is worse than no log, because every
+		// diagnosis attempt based on it produces false negatives.
+		qWarning() << "DebugDialog: cannot write log to" << m_file.fileName() << m_file.errorString();
 	}
 	auto* de = new DebugEvent(message, debugLevel, ancestor);
 	QCoreApplication::postEvent(singleton, de);

@@ -1358,9 +1358,15 @@ void MainWindow::createHelpMenuActions() {
 	connect(m_reportBugAct, SIGNAL(triggered()), this, SLOT(reportBug()));
 
 	m_enableDebugAct = new QAction(tr("Enable debugging log"), this);
-	m_enableDebugAct->setStatusTip(tr("Report a but you've found in Fritzing"));
+	m_enableDebugAct->setStatusTip(tr("Write a debug log to help report a bug you've found in Fritzing"));
 	m_enableDebugAct->setCheckable(true);
-	m_enableDebugAct->setChecked(DebugDialog::enabled());
+	// Restore the previous session's choice. Debug logging is off in release builds (m_enabled is
+	// initialised under QT_NO_DEBUG), and an off-by-default diagnostic that resets on every launch is
+	// worthless for reproducing a bug: the user has to remember to turn it on BEFORE the thing they
+	// want captured happens. Persisting it means one enabling covers every later session.
+	QSettings settings;
+	m_enableDebugAct->setChecked(DebugDialog::enabled() || settings.value("enableDebugLog", false).toBool());
+	if (m_enableDebugAct->isChecked()) DebugDialog::setEnabled(true);
 	connect(m_enableDebugAct, SIGNAL(triggered()), this, SLOT(enableDebug()));
 
 	m_partsEditorHelpAct = new QAction(tr("Parts Editor Help"), this);
@@ -2427,6 +2433,8 @@ void MainWindow::partsEditorHelp() {
 void MainWindow::enableDebug() {
 	bool enabled = m_enableDebugAct->isChecked();
 	DebugDialog::setEnabled(enabled);
+	QSettings settings;
+	settings.setValue("enableDebugLog", enabled);
 	if (!m_windowMenu->actions().contains(m_toggleDebuggerOutputAct)) {
 		m_windowMenu->insertSeparator(m_windowMenuSeparator);
 		m_windowMenu->insertAction(m_windowMenuSeparator, m_toggleDebuggerOutputAct);
