@@ -94,3 +94,7 @@ experiments/netlist-to-fzz/bigmuff.fz
 artifacts/
 .vscode/
 bt/
+
+# local scratch / removed-from-project PE code kept out of git
+src/partseditor/obsolete/
+docs/internal/pe-findings.md
