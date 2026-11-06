@@ -258,6 +258,81 @@ UI (`PEUtils::Units` is still a fixed `"mm"`), group-as-unit selection (see §B.
 re-encode that preserves each segment's original abs/rel encoding (P8 normalizes every coordinate to
 absolute — geometry is exact; encoding normalization is the one lossy-in-text-but-true-in-geometry trade).
 
+## F.6 M0 close-out and the decision to rebuild the surface (M1)
+
+M0 is closed (8 commits, suite green). It delivered real, proven fixes — the backwards transform chain
+(P8), non-destructive load, stale-item cleanup, the `shapeFromElement` bounds fallback, and the
+stale-`itemBase`-filename bug that made every edit invisible. All of it is kept and reused.
+
+But M0 also established that the remaining problems are **architectural, not bugs**, and cannot be
+patched away. Verified evidence:
+
+1. **One counter indexes four views' files.** `m_fileIndex` is shared by breadboard/schematic/pcb/icon
+   *and* by `saveFzp()` (`pemainwindow.cpp:1922` does `m_fileIndex++`). `makeSvgPath2()` builds each
+   view's path from the *current* value at write time (`:1891`), so editing one view shifts the others'
+   notion of "which file is mine." Symptom: cross-tab desync.
+2. **Persistence is write-a-new-temp-file-and-repoint-the-item.** Every edit writes `newPath` and calls
+   `itemBase->setFilename()`; `initSvgTree()` then tears the scene down and re-parses from disk. There is
+   no single canonical document, so view and model drift by construction.
+3. **Graphics are appended to no layer.** `createPrimitiveRequested` hardcodes `parentSvgId = QString()`
+   (`:3080`), so `addPrimitive` falls back to `svgRoot`. Real Fritzing PCB parts nest `copper1 > copper0`
+   with layer-specific fills; graphics outside the layer groups render against them. `initSvgTree()`
+   already concedes this: *"can not deal with separate copper0 and copper1 layers... editing may produce
+   an invalid PCB view image."* Symptom: PCB artifacts.
+4. **No interaction model.** Click button → 10×10 box at view centre. No drag-to-create, no selection
+   persistence across the scene rebuild, no resize except rect, no text rendering.
+
+**Decision (user-approved): Option A — rebuild the editor surface on the existing engine.** Keep and
+reuse the tested engine (`PEDocument`, `PETransform`, `PEPrimitive`, `PEUnits`, `PEPath`); replace the
+`PEMainWindow`-centric scaffolding underneath it.
+
+### Target architecture
+
+```
+PEPartDocument        (model, Q_OBJECT)  ONE per edited part. Owns the QDomDocument, the canonical file
+                                         path per view, and the layer map. Single source of truth.
+                                         Emits granular change signals. NEVER re-reads itself from disk.
+  signals: elementAdded(view,id) / elementChanged(view,id) / elementRemoved(view,id) / documentReloaded()
+  slots:   addPrimitive(view, xml) / moveElement(view,id,delta) / resizeElement(view,id,rect)
+           / removeElement(view,id)
+  commit(): write the canonical file once per user action, not per mutation.
+
+PEViewLayerMap        Value type: viewID -> { rootLayerId, copperLayerIds, moduleIds }. Built once at
+                      load from the loaded SVG. Turns "which <g> does this graphic belong in?" into a
+                      lookup instead of a hardcoded empty string.
+
+PEViewSync            One per SketchWidget. Subscribes to PEPartDocument signals and applies the granular
+                      change to its own PEGraphicsItem set. Replaces initSvgTree()'s teardown-and-reparse
+                      for edits; full rebuild only on documentReloaded().
+
+PEDocumentController  Undo/redo boundary. Commands call PEPartDocument, never the view.
+```
+
+Invariants that make the reported bugs structurally impossible:
+
+- **One path per view, fixed at load.** Never re-derived from a shared mutable counter; new paths are
+  minted only at explicit save-as.
+- **Model never reads itself back.** Edits mutate the in-memory `QDomDocument`; views apply the same
+  change from the signal. Disk is an output, never part of the input loop.
+- **Layer target is explicit.** Every create carries a `viewID`; `PEViewLayerMap` resolves the parent
+  `<g>`. Creating into an unknown layer is an error, not a silent append to root.
+- **Selection survives edits.** `PEViewSync` patches items in place, so `selectedItems()` is not
+  destroyed by every mutation.
+
+### Migration sequence (each step lands green)
+
+1. **Extract `PEPartDocument` + `PEViewLayerMap`** from `PEMainWindow`'s members; `PEMainWindow`
+   delegates. Behaviour-preserving, so existing bugs remain visible as a regression baseline.
+2. **Granular signals + `PEViewSync`**; `initSvgTree()` demoted to full-reload-only. *This step alone
+   should eliminate the desync and the PCB artifacts.*
+3. **Selection persistence + drag-to-create + resize-all-kinds**, now that items are stable.
+4. **Text rendering** — still the biggest gap for schematic symbols.
+5. Remove the `PE_TRACE` diagnostics added during M0.
+
+Headless QtTest coverage driving real `QMouseEvent`s through `PEGraphicsItem` is written at step 2 and
+grows from there. Its absence is why three rounds of "still broken" were only diagnosable by
+instrumenting a live build.
+
 ## G. Open design decisions
 - **RESOLVED (Session 24, §B.1):** the live canvas uses real editable `QGraphicsItem`s, not the static
   `QSvgRenderer` preview + overlay hit-rects. **§B.2 resolved as (b) flatten-and-drop-at-load**, landed as
@@ -316,3 +391,19 @@ absolute — geometry is exact; encoding normalization is the one lossy-in-text-
 
 
 
+
+## I. Session update — resize across shape kinds, and the artifact lead (Nov 3)
+
+* `PEElement::resizeRect` is now **per-kind**: a rect writes the box, a line maps the box corners onto
+  its endpoints, a circle takes the *inscribed* diameter (so it stays round), an ellipse the box
+  extents, text re-anchors, and polyline/polygon scale their point list relative to their current
+  bounds. `<path>` still reports failure deliberately — refitting a path to a box means rescaling a
+  command sequence, and a silent no-op that *claims* success is the failure mode being removed.
+* The caller stopped asserting `kind = Rect`, which is what made the non-rect branch unreachable in
+  practice.
+* **Field finding (leading suspect for the remaining artifacts):** `initSvgTree` round-trips the
+  document through `FSvgRenderer::loadSvg()` and then `svgDocument.setContent(rendered)` — it replaces
+  the live document with a re-serialised, "cleaned" copy. The field log shows the interactive item
+  count for a part view collapsing back to the pristine part count (11) immediately after a create or
+  move, i.e. command-added shapes are not surviving. A trace now logs `elements A -> B` across that
+  pass. See `docs/internal/pe-findings.md`.
