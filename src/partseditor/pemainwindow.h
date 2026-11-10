@@ -18,83 +18,60 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 ********************************************************************/
 
-
 #ifndef PEMAINWINDOW_H_
 #define PEMAINWINDOW_H_
 
+#include <QList>
+#include <QDomDocument>
 
 #include "../mainwindow/mainwindow.h"
 #include "../model/modelpartshared.h"
-#include "../sketch/sketchwidget.h"
+#include "../utils/misc.h"
 #include "peconnectorsview.h"
-#include "peviewlayermap.h"
+#include "pesvgeditor.h"
 
-class IconSketchWidget : public SketchWidget
-{
-	Q_OBJECT
-
-public:
-	IconSketchWidget(ViewLayer::ViewID, QWidget *parent=0);
-
-	void addViewLayers();
-};
-
-struct ViewThing {
-	ItemBase * itemBase = nullptr;
-	QDomDocument * document = nullptr;
-	int svgChangeCount = 0;
-	bool everZoomed = false;
-	SketchWidget * sketchWidget = nullptr;
-	QString referenceFile;
-	QString originalSvgPath;
-	bool firstTime = false;
-	bool busMode = false;
-};
-
-class ReferenceModel;
-class PaletteItem;
 class PEMetadataView;
-class PEConnectorsView;
 class PEToolView;
-class PESvgView;
-class PEGraphicsItem;
-class Wire;
-class WireAction;
-class IconSketchWidget;
+class PaletteItem;
+
+// The Parts Editor, rebuilt around the sole-renderer (docs/design/pe-integration-plan.md). The central view
+// area is a QTabWidget: a single PESvgEditor page that paints whichever part view is current directly from
+// its QDomDocument, plus Metadata and Connectors pages. There is NO SketchWidget/ItemBase/ViewThing spine:
+// each per-view QDomDocument (m_breadboardDocument / m_schematicDocument / m_pcbDocument / m_iconDocument)
+// is the sole model of that graphic; PEViewWriter serializes it on save. The Metadata and Connectors docks
+// are DOM-in/DOM-out and are reused as-is, driven straight from m_fzpDocument.
 class PEMainWindow : public MainWindow
 {
 	Q_OBJECT
 
 public:
 	PEMainWindow(ReferenceModel * referenceModel, QWidget * parent);
-	~PEMainWindow();
+	~PEMainWindow() override;
 
+	// Sole-renderer entry point. Loads the part's fzp into m_fzpDocument and each view's graphic into the
+	// corresponding view QDomDocument (resolving the <layers image> svg), then shows the current view in
+	// the PESvgEditor. Returns false if nothing could be loaded.
 	bool setInitialItem(PaletteItem *);
+
+	// Clean metadata DOM mutations (operate on m_fzpDocument, re-feed PEMetadataView).
 	void changeTags(const QStringList &, bool updateDisplay);
 	void changeHistory(const QList<HistoryEntry> &, bool updateDisplay);
 	void changeProperties(const QHash<QString, QString> &, bool updateDisplay);
 	void changeMetadata(const QString & name, const QString & value, bool updateDisplay);
+	// Clean connector DOM mutation (operate on m_fzpDocument, re-feed the connector editors).
 	void changeConnectorMetadata(ConnectorMetadata *, bool updateDisplay);
-	void changeSvg(SketchWidget *, const QString & filename, int changeDirection);
-	void relocateConnectorSvg(SketchWidget *, const QString & id, const QString & terminalID, const QString & oldGorn, const QString & oldGornTerminal, const QString & newGorn, const QString & newGornTerminal, int changeDirection);
-	void moveTerminalPoint(SketchWidget *, const QString & id, QSizeF, QPointF, int changeDirection);
-	// P3 live wiring: path node-edit (anchor) and primitive add/remove DOM writeback + re-render.
-	void editPathAnchor(SketchWidget *, const QString & svgID, int segmentIndex, QPointF anchor, int changeDirection);
-	void addPrimitive(SketchWidget *, const QString & parentSvgID, const QString & elementXml, int changeDirection);
-	void removePrimitive(SketchWidget *, const QString & elementXml, int changeDirection);
-	// P7 live wiring: move/resize a graphic element (by svg id) -> rewrite its geometry attrs + re-render.
-	void moveGraphic(SketchWidget *, const QString & svgID, QPointF delta, int changeDirection);
-	void resizeGraphic(SketchWidget *, const QString & svgID, QRectF to, int changeDirection);
-	void restoreFzp(const QString & filename);
-	bool editsModuleID(const QString &);
-	void addBusConnector(const QString & busID, const QString & connectorID);
-	void removeBusConnector(const QString & busID, const QString & connectorID, bool display);
-	void changeSMD(const QString & smd, const QString & filename, int changeDirection);
-	void changeReferenceFile(ViewLayer::ViewID viewID, const QString referenceFile);
-	void changeOriginalFile(ViewLayer::ViewID viewID, const QString originalFile, int changeCount);
 
-Q_SIGNALS:
-	void addToMyPartsSignal(ModelPart *, const QStringList &);
+	// Restore m_fzpDocument from a saved temp fzp (used by ChangeFzpCommand undo/redo), refreshing the display.
+	void restoreFzp(const QString & fzpPath);
+
+	bool editsModuleID(const QString &);
+
+	// PE-specific window setup. The base MainWindow::init wires the legacy SketchWidget/graphics-view/welcome/
+	// programming/layer-palette/bin-manager spine (all null here, hence the crash on PE open). PE overrides it:
+	// it only needs the central tab host and the DOM-driven metadata + connectors docks. The graphic is a single
+	// PESvgEditor page added by setInitialView, so there is no legacy view/welcome/programming surface to build.
+	void init(ReferenceModel * referenceModel, bool lockFiles) override;
+
 
 public Q_SLOTS:
 	void metadataChanged(const QString & name, const QString & value);
@@ -103,108 +80,60 @@ public Q_SLOTS:
 	void historyChanged(const QList<HistoryEntry> &);
 	void connectorMetadataChanged(struct ConnectorMetadata *);
 	void removedConnectors(QList<ConnectorMetadata *> &);
-	void highlightSlot(PEGraphicsItem *);
-	void pegiMousePressed(PEGraphicsItem *, bool & ignore);
-	void pegiMouseReleased(PEGraphicsItem *);
-	void pegiTerminalPointMoved(PEGraphicsItem *, QPointF);
-	void pegiTerminalPointChanged(PEGraphicsItem *, QPointF before, QPointF after);
-	void pegiPathAnchorMoved(PEGraphicsItem *, int segmentIndex, QPointF anchor);
-	void pegiPathAnchorChanged(PEGraphicsItem *, int segmentIndex, QPointF before, QPointF after);
-	// Fully-live slice: apply a body-drag user-unit delta to the graphic's geometry attrs (moveGraphic).
-	void pegiGraphicMoveDelta(PEGraphicsItem *, QPointF deltaUnits);
-	// Resize grip released: apply the new document-unit box to the graphic element (resizeGraphic).
-	// This is the only caller of resizeGraphic; before the grips existed the command was unreachable.
-	void pegiGraphicResizeTo(PEGraphicsItem *, QRectF to);
-	// P3 create-tool trigger / P4 connector authoring triggers (from PEToolView):
-	void createPrimitiveRequested(const QString & kind);
-	void addConnectorRequested();
-	// P6 library-at-hand / create-from-blank / svg-import triggers (File menu):
-	void createBlankPart();
-	void importSvgFile();
 	void switchedConnector(int);
 	void removedConnector(const QDomElement &);
-	void terminalPointChanged(const QString & how);
-	void terminalPointChanged(const QString & coord, double value);
-	void getSpinAmount(double & amount);
-	void pickModeChanged(bool);
-	void busModeChanged(bool);
 	void connectorCountChanged(int);
-	void deleteBusConnection();
-	void newWireSlot(Wire *);
-	void wireChangedSlot(Wire*, const QLineF & oldLine, const QLineF & newLine, QPointF oldPos, QPointF newPos, ConnectorItem * from, ConnectorItem * to);
 	void connectorsTypeChanged(Connector::ConnectorType);
-	void smdChanged(const QString &);
-	void showing(SketchWidget *);
-	void updateExportMenu();
-	void updateEditMenu();
-	void s2sMessageSlot(const QString & message);
 
 protected:
-	void closeEvent(QCloseEvent * event);
-	bool event(QEvent *);
-	void initLockedFiles(bool lockFiles);
-	void initSketchWidgets(bool withIcons);
-	void initProgrammingWidget();
-	void initDock();
-	void moreInitDock();
-	void setInitialView();
-	void createActions();
-	void createMenus();
-	void connectPairs();
-	QMenu *breadboardItemMenu();
-	QMenu *schematicItemMenu();
-	QMenu *pcbItemMenu();
-	QMenu *pcbWireMenu();
-	QMenu *schematicWireMenu();
-	QMenu *breadboardWireMenu();
+	// Sole-renderer central area: a QTabWidget hosting the single PESvgEditor graphic page.
+	void initSketchWidgets(bool withIcons) override;
+	void setInitialView() override;
+
+	void closeEvent(QCloseEvent *) override;
+
+protected:
+	bool save();
+	bool saveAs();
+	bool saveAs(bool overWrite);
+	void tabWidget_currentChanged(int index) override;
+	void updateWindowMenu() override;
+	void updateEditMenu() override;
+
+protected:
 	void setTitle();
-	void createViewMenuActions(bool showWelcome);
-	void createFileMenuActions();
-	void createViewMenu();
-	void createEditMenu();
 	QHash<QString, QString> getOldProperties();
-	// Read/write the flat <history> children of an FZP module root. readHistory synthesizes
-	// a single oldest entry from <date>/<author> for legacy parts that have no <history> yet;
-	// writeHistory rewrites the <history> children sorted oldest->newest and mirrors the newest entry
-	// into the top-level <author>/<date> for backward compat.
+	// Read/write the flat <history> children of an FZP module root. readHistory synthesizes a single oldest
+	// entry from <date>/<author> for legacy parts that have no <history> yet; writeHistory rewrites the
+	// <history> children sorted oldest->newest and mirrors the newest into the top-level <author>/<date>.
 	static QList<HistoryEntry> readHistory(const QDomElement & root);
 	static void writeHistory(QDomElement & root, const QList<HistoryEntry> & history);
-	QDomElement findConnector(const QString & id, int & index);
-	void changeConnectorElement(QDomElement & connector, ConnectorMetadata *);
-	void initSvgTree(SketchWidget *, ItemBase *, QDomDocument &);
-	void reloadBackdropForView(struct ViewThing * viewThing, const QString & fullSvg, const QString & newPath);
-	QString colourisePartSvg(const QString & svg);
-	void initConnectors(bool updateConnectorsView);
-	QString createSvgFromImage(const QString &origFilePath);
-	// QString makeSvgPath(const QString & referenceFile, SketchWidget * sketchWidget, bool useIndex);
-	QString makeSvgPath2(SketchWidget * sketchWidget);
-	QString saveFzp();
-	void reload(bool firstTime);
-	void createFileMenu();
-	void updateChangeCount(SketchWidget * sketchWidget, int changeDirection);
-	PEGraphicsItem * findConnectorItem();
-	void terminalPointChangedAux(PEGraphicsItem * pegi, QPointF before, QPointF after);
-	void pathAnchorChangedAux(PEGraphicsItem * pegi, int segmentIndex, QPointF before, QPointF after);
-	void showInOS(QWidget *parent, const QString &pathIn);
-	void switchedConnector(int, SketchWidget *);
-	PEGraphicsItem * makePegi(QSizeF size, QPointF topLeft, ItemBase * itemBase, QDomElement & element, double z, bool freelyEditable = true);
-	QRectF getPixelBounds(QDomElement & element);
-	bool canSave();
-	bool saveAs(bool overWrite);
-	void setBeforeClosingText(const QString & filename, QMessageBox & messageBox);
-	QString getPartTitle();
-	void killPegi();
+	// Load a part's fzp into m_fzpDocument.
 	bool loadFzp(const QString & path);
+	QDomElement findConnector(const QString & id, int & index);
 	void removedConnectorsAux(QList<QDomElement> & connectors);
-	//QString getFzpReferenceFile();
-	QString getSvgReferenceFile(const QString & filename);
-	QString makeDesc(const QString & referenceFile);
-	void insertDesc(const QString & referenceFile, QString & svg);
-	void updateRaiseWindowAction();
+	void changeConnectorElement(QDomElement & connector, ConnectorMetadata *);
+
+	// Return a reference to the view QDomDocument for @p viewID (the sole model of that graphic).
+	QDomDocument & viewDocument(ViewLayer::ViewID viewID);
+	// Resolve the <layers image> target for @p viewID relative to the loaded fzp and load it into both the
+	// view QDomDocument and the PESvgEditor.
+	bool loadViewDocument(ViewLayer::ViewID viewID);
+	void setCurrentViewId(ViewLayer::ViewID viewID);
+
+	QString makeSvgFileName(const QDomElement & moduleIDElement);
+	QString saveFzp();
+	void initConnectors(bool updateConnectorsView);
+	void fillInMetadata(const QDomElement & connector, ConnectorMetadata & cmd);
+	void setConnectorSMD(bool toSMD, QDomElement & connector);
+	void updateAssignedConnectors();
+	void setImageAttribute(QDomElement & layers, const QString & image);
+	void setImageAttribute(QDomElement & fzpRoot, const QString & svgPath, ViewLayer::ViewID viewID);
+	QString makeNewVariant(const QString & family);
+	QString makeDirName();
+	QString getPartTitle();
+	QString getSvgReferenceFile();
 	bool writeXml(const QString & path, const QString & text, bool temp);
-	void displayBuses();
-	QDomElement findBus(const QDomElement &, const QString &);
-	QDomElement findNodeMemberBus(const QDomElement & buses, const QString & connectorID);
 	void replaceProperty(const QString & key, const QString & value, QDomElement & properties);
 	QWidget * createTabWidget();
 	void addTab(QWidget * widget, const QString & label);
@@ -212,86 +141,31 @@ protected:
 	void setCurrentTabIndex(int);
 	QWidget * currentTabWidget();
 	void changeSpecialProperty(const QString & name, const QString & value);
-	bool eventFilter(QObject *, QEvent *);
-	void relocateConnector(PEGraphicsItem * pegi);
-	void clearPickMode();
-	void deleteBuses();
-	QList<PEGraphicsItem *> getPegiList(SketchWidget *);
-	void fillInMetadata(const QDomElement & connector, ConnectorMetadata & cmd);
-	void setConnectorSMD(bool toSMD, QDomElement & connector);
-	bool activeLayerWidgetAlwaysOn();
-	void updateFileMenu();
-	void reuseImage(ViewLayer::ViewID);
-	void setImageAttribute(QDomElement & layers, const QString & image);
-	void setImageAttribute(QDomElement & fzpRoot, const QString & svgPath, ViewLayer::ViewID viewID);
-	QString makeNewVariant(const QString & family);
-	void connectorWarning();
-	bool anyMarquee();
-	bool anyVisible();
-	QString makeDirName();
-	void initWelcomeView();
-
-protected Q_SLOTS:
-	void initZoom();
-	void showMetadataView();
-	void showConnectorsView();
-	void showIconView();
-	void loadImage();
-	bool save();
-	bool saveAs();
-	void showInOS();
-	void tabWidget_currentChanged(int index);
-	void backupSketch();
-	void updateWindowMenu();
-	void updateWireMenu();
-	void closeLater();
-	void resetNextPick();
-	void reuseBreadboard();
-	void reuseSchematic();
-	void reusePCB();
-	void convertToTenth();
-	void hideOtherViews();
-	void updateLayerMenu(bool resetLayout = false);
-	void updateAssignedConnectors();
-	void itemAddedSlot(ModelPart *, ItemBase *, ViewLayer::ViewLayerPlacement, const ViewGeometry &, long id, SketchWidget * dropOrigin);
-	void itemMovedSlot(ItemBase *);
-	void clickedItemCandidateSlot(QGraphicsItem *, bool & ok);
-	void resizedSlot(ItemBase *);
+	bool canSave();
 
 
 protected:
+	// m_fzpDocument is the authoritative module metadata. Each view QDomDocument is the authoritative
+	// graphic for that view, edited in place by the PESvgEditor and serialized by PEViewWriter on save.
 	QDomDocument m_fzpDocument;
 	QDomDocument m_iconDocument;
 	QDomDocument m_breadboardDocument;
 	QDomDocument m_schematicDocument;
 	QDomDocument m_pcbDocument;
 
-	QAction * m_showMetadataViewAct = nullptr;
-	QAction * m_showConnectorsViewAct = nullptr;
-	QAction * m_showIconAct = nullptr;
-	QAction * m_showInOSAct = nullptr;
-	WireAction * m_deleteBusConnectionAct = nullptr;
-	QAction * m_reuseBreadboardAct = nullptr;
-	QAction * m_reuseSchematicAct = nullptr;
-	QAction * m_reusePCBAct = nullptr;
-	QAction * m_newBlankPartAct = nullptr;   // P6 create-from-blank
-	QAction * m_importSvgAct = nullptr;      // P6 svg-import
-	QAction * m_hideOtherViewsAct = nullptr;
-	QAction * m_convertToTenthAct = nullptr;
-
-	QPointer<SketchAreaWidget> m_iconWidget;
-	QPointer<IconSketchWidget> m_iconGraphicsView;
 	PEMetadataView * m_metadataView = nullptr;
 	PEConnectorsView * m_connectorsView = nullptr;
 	PEToolView * m_peToolView = nullptr;
-	PESvgView * m_peSvgView = nullptr;
+
+	// The one sole-renderer surface (the central tab's graphic page).
+	PESvgEditor * m_editor = nullptr;
+
 	QString m_guid;
 	QString m_prefix;
 	int m_fileIndex;
-	QHash<ViewLayer::ViewID, ViewThing *> m_viewThings;
-	// M1: per-view layer structure (which <g> a new graphic must go inside), recorded once per view
-	// document load. See docs/design/vector-editor.md F.6.
-	PEViewLayerMap m_viewLayerMap;
+	// View ids in tab order (Breadboard, Schematic, PCB, Icon) -- iterated consistently across the class.
+	QList<ViewLayer::ViewID> m_viewOrder;
+	ViewLayer::ViewID m_currentViewId;
 	QString m_userPartsFolderPath;
 	QString m_userPartsFolderSvgPath;
 	bool m_canSave;
@@ -299,13 +173,10 @@ protected:
 	QString m_originalModuleID;
 	bool m_gaveSaveWarning;
 	QStringList m_filesToDelete;
-	QList< QPointer<QWidget> > m_inFocusWidgets;
-	bool m_inPickMode;
-	bool m_useNextPick;
 	QList<QDomElement> m_connectorList;
-
 	QString m_removedConnector;
 };
 
 
 #endif /* PEMAINWINDOW_H_ */
+

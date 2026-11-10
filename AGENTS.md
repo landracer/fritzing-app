@@ -19,14 +19,23 @@ State-of-record at the time of writing:
 - **Feature line:** `feature/qt6-modern-fixed` was promoted (fast-forward) into **`develop`** —
   the canonical line. It carries the Qt-6 float, the **panelizer** wizard + engine, the opt-in
   **Gerber preview**, and a fully green test suite.
-- **Welcome landing page (newest):** the app now opens on a Welcome tab (`src/sketch/welcomeview.*`)
+- **Welcome landing page:** the app now opens on a Welcome tab (`src/sketch/welcomeview.*`)
   — recents list on the left, a live SVG-rendered **board preview** + gerber-production status on the
   right, and recents housekeeping (Remove / Purge-all). Opening a file loads into the *current* blank
   window (second file → new window). Full arc + learnings: `docs/internal/panelizer-progress.md`,
   Session 9.
+- **Parts Editor sole-renderer (newest, standalone):** a clean PCB render/edit surface —
+  `src/partseditor/pesvgeditor.*` (`PESvgEditor`), `pesvgpartloader.*` (loads a part via `.fzp`, colourises
+  the DOM in place, nested-copper confined), `peprimitivegeom.*` (per-kind move/resize geometry) — driven by
+  the standalone `tools/peditor` app. It renders one `QGraphicsSvgItem` per addressable leaf and supports
+  select / drag-move / undo/redo, bypassing the legacy `ItemBase`/`PEGraphicsItem` double-renderer. **Not yet
+  wired into `PEMainWindow`** — steps 1–5 (PCB) proven standalone. Design + status: `docs/design/pe-sole-renderer.md`;
+  engine logic golden-tested in `tests/auto/test_pesvgeditor`. **Integration plan (rewrite-not-retrofit,
+slices A–H): `docs/design/pe-integration-plan.md`** — the next-task entry point.
 - **Tests:** all wired test suites build and pass on Qt 6.11.2 (see §5). `test_folderutils` was wired
   into `auto.pro` and the Boost-suite `.pro` files were converted to all-explicit `$$absolute_path()`
   source/headers (the path-keying hazard that made the aggregate `-j` build fail nondeterministically).
+  `test_pesvgeditor` (QtTest, `QTEST_GUILESS_MAIN`) was added for the sole-renderer engine.
 
 ## 2. How the project is laid out
 
@@ -50,6 +59,9 @@ Top-level:
   - `docs/design/vector-editor.md` — spec for turning the parts editor into a de-facto parts/symbol
     design editor (library-at-hand + in-app vector editing + SVG round-trip; svgedit/Inkscape are
     references; phased P0–P11 — P8/P9/P10 landed the live self-rendering flattened surface, P11 pending).
+  - `docs/design/pe-integration-plan.md` — the rewrite-not-retrofit plan for wiring the new `PESvgEditor`
+    sole-renderer into `PEMainWindow`: explicit keep-vs-rewrite boundary, DOM-writer save design, and
+    landable slices A–H. **Start the integration task here.**
   - `docs/internal/panelizer-progress.md` — newest-first working log for the panelizer/gerber effort.
   - `docs/internal/issue-triage-log.md` — newest-first log of upstream issues we investigated and **shot
     down** (closed as FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION), with root cause
@@ -106,10 +118,16 @@ make -j"$(nproc)"
 # QtTest suites (headless):
 ./test_panelizer/test_panelizer         -platform offscreen
 ./test_gerberpreview/test_gerberpreview -platform offscreen
+./test_peviewlayermap/test_peviewlayermap -platform offscreen
+# QtTest suite with a GUI-less QGuiApplication-free main (QTEST_GUILESS_MAIN): takes NO -platform arg.
+./test_pesvgeditor/test_pesvgeditor
 ```
 
-- **Boost suites:** "no assertion failures were found" == pass.
-- **QtTest suites:** print a `Totals: N passed, 0 failed` line.
+- **Boost suites:** "no assertion failures were found" == pass. `test_pedocument` is a Boost suite
+  despite the `test_pe*` prefix — run it bare (no `-platform offscreen`; that arg is QtTest-only).
+- **QtTest suites:** print a `Totals: N passed, 0 failed` line. `test_pesvgeditor` uses
+  `QTEST_GUILESS_MAIN` (pure DOM/colourise logic, no widgets), so run it **without** `-platform
+  offscreen` — a GUI-less binary treats an unknown `-platform` token as bad args and prints usage.
 - `test_qsysinfo` is **intentionally not wired** into `auto.pro` — its golden hardcodes one specific
   machine (OS/kernel/arch), so it can only ever pass on that host. Do not wire it in; if revived,
   rewrite it to assert behavior, not a machine-specific golden.
@@ -133,13 +151,19 @@ make -j"$(nproc)"
   relatively (`SOURCES += test_<name>.cpp`) so the `.moc` rule keys correctly; keep every *other* source
   absolute per the hazard above. `tests/auto/test_peviewlayermap/` is the worked example.
 - **Toolchain drift — check `qmake6 -query QT_VERSION` before trusting "suite green".** AGENTS.md
-  recorded Qt 6.11.2 as the tested floor; the box has since moved to **Qt 6.12.0** (all 13 suites are
+  recorded Qt 6.11.2 as the tested floor; the box has since moved to **Qt 6.12.0** (all 14 suites are
   green on it). Do not conclude that a Qt bump broke the Boost suites from one failing build: the
   `TextUtils::*` / `vtable for ...` link failures above have been observed with `textutils.o` compiling
   to **0 bytes**, then reproduced fine on the very same toolchain. That empty-object outcome is the
   hazard in the bullet above, not a Qt-version defect, and attributing it to the toolchain sends you
-  down the wrong path. The reliable discipline either way: **always rebuild from scratch in a new
-  directory** — a stale prebuilt binary keeps reporting PASS after relinking and will mislead you.
+  down the wrong path. A **second** way to get a 0-byte `.o` (seen adding `test_pesvgeditor`): a
+  `make` that is killed mid-compile (e.g. a foreground build hitting a tool/exec timeout) leaves a
+  truncated 0-byte object that a later `make` treats as up-to-date, so the *next* aggregate build links
+  with `undefined reference to main` / missing `TextUtils::*` even though nothing in the sources is
+  wrong. Diagnose by `stat -c%s …/textutils.o` (0 bytes vs the real ~780 KB) and, crucially, the
+  reliable discipline either way: **always rebuild from scratch in a new directory** — a stale or
+  half-written object, or a stale prebuilt binary, keeps reporting PASS (or FAIL) after relinking and
+  will mislead you.
 
 ## 6. Domain knowledge: copper "ground fill" (mass fill) & the DRC
 

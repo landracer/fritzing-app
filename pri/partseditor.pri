@@ -55,8 +55,12 @@ HEADERS += \
     src/partseditor/peunits.h \
     src/partseditor/petransform.h \
     src/partseditor/peviewlayermap.h \
+    src/partseditor/pesvgeditor.h \
+    src/partseditor/pesvgpartloader.h \
+    src/partseditor/peprimitivegeom.h \
     src/partseditor/pehistoryentrydialog.h \
     src/partseditor/pecommands.h \
+    src/partseditor/peviewwriter.h \
     src/partseditor/peconnectorsview.h \
     src/partseditor/pesvgview.h \
     src/partseditor/petoolview.h \
@@ -100,9 +104,13 @@ SOURCES += \
     src/partseditor/pesvgimport.cpp \
     src/partseditor/peunits.cpp \
     src/partseditor/peviewlayermap.cpp \
+    src/partseditor/pesvgeditor.cpp \
+    src/partseditor/pesvgpartloader.cpp \
+    src/partseditor/peprimitivegeom.cpp \
     src/partseditor/petransform.cpp \
     src/partseditor/pehistoryentrydialog.cpp \
     src/partseditor/pecommands.cpp \
+    src/partseditor/peviewwriter.cpp \
     src/partseditor/peconnectorsview.cpp \
     src/partseditor/pesvgview.cpp \
     src/partseditor/petoolview.cpp \

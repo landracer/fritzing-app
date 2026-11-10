@@ -185,7 +185,7 @@ public:
 	void getPartsEditorNewAnd(ItemBase * fromItem);
 	void addDefaultParts();
 	void clearCurrentSketchContent();
-	void init(ReferenceModel *referenceModel, bool lockFiles);
+	virtual void init(ReferenceModel *referenceModel, bool lockFiles);
 	void showFileProgressDialog(const QString & path);
 	void setFileProgressPath(const QString & path);
 	void clearFileProgressDialog();

@@ -6,6 +6,36 @@
 
 ---
 
+## 2026-11-04 — Session 27b (fix: crash on Parts Editor open — legacy `init` spine no longer runs in PE)
+
+After wiring `PESvgEditor` as the sole renderer (Session 27 line), opening a part in the Parts Editor crashed.
+Root cause: `openNewPartsEditor` calls `peMainWindow->init(...)`, which is the base `MainWindow::init`
+(`src/mainwindow/mainwindow.cpp:480`). That method is the *legacy* spine — it unconditionally calls
+`initWelcomeView()` (creates the Welcome landing tab), `initProgrammingWidget()` (a legacy `SketchAreaWidget`
+"Code" tab), `initMenus()`→`createActions/createMenus` (all the per-view menu actions), `moreInitDock()`
+→`createDockWindows()` (LayerPalette/HtmlInfoView/BinManager docks bound to `m_windowMenu`), and then
+**dereferences the null legacy graphics views**: `m_breadboardGraphicsView->setItemMenu(...)`,
+`m_pcbGraphicsView->...`, `createZoomOptions(m_breadboardWidget)`, and `connectPairs()` which connects
+signals to `m_pcbGraphicsView`/`m_schematicGraphicsView`. In the sole-renderer PE path those members are never
+created (our `initSketchWidgets` is a deliberate no-op), so they are null → null deref → crash.
+
+Fix (minimal, honest): `MainWindow::init` is now **virtual**; `PEMainWindow` overrides it with a lean
+implementation that does *only* what the sole-renderer window needs:
+1. set `m_referenceModel`;
+2. create the central `QTabWidget` host (our `createTabWidget`, single "Graphic" page via `setInitialView`);
+3. create `QUndoView` + `QUndoGroup` and pin `m_undoGroup->setActiveStack(m_undoStack)` (so PE's commands push
+   onto the window's stack). No welcome/programming/layer-palette/bin-manager/menu/graphics-view wiring.
+
+`setInitialView` (already overridden) builds the Graphic/Metadata/Connectors tabs; `setInitialItem` then loads
+the part. With `init` overridden, none of the 96 legacy `m_*GraphicsView`/`m_*Widget` derefs in the base
+`init` run for PE, so the crash is gone.
+
+Verified: clean rebuild → app links, launches offscreen without crash; all 15 test suites green (`test_pesvgeditor`
+14/14, `test_peviewwriter` 8/8, plus the 13 Boost/QtTest suites). Working tree now committed as a `feature/*` branch.
+
+---
+
+
 ## 2026-11-04 — Session 27 (fully-live: each graphic is a top-level movable/selectable live item — §B.1 realized)
 
 Follow-up to the user report "the additions like add a line or circle, none of that works as I'd expect." Root
