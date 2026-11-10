@@ -6,6 +6,38 @@
 
 ---
 
+## 2026-11-10 — Session 28 (fix: PE opened blank + crashed on close — `init` never built the tabs; svg path wrong)
+
+The Session-27b `init` override stopped the *open* crash but the editor still showed nothing and closing the
+window crashed the app. Root-caused both by building a temporary offscreen harness (`PE_DEBUG_OPEN_FZP` env →
+construct a `PEMainWindow`, `init`, load a core part, show+close under gdb) — the app idles offscreen (the
+parts-DB load + `loadSomething` spin), so the harness returned early after exercising the PE path. Findings:
+
+1. **Blank canvas:** `PEMainWindow::init` set `m_tabWidget = createTabWidget()` directly and never called
+   `initSketchWidgets`, so `m_editor` (and the Metadata/Connectors views) were never created → no Graphic tab.
+   Fix: `init` now delegates to `initSketchWidgets(false)`, and `initSketchWidgets` now assigns
+   `m_tabWidget = createTabWidget()` (previously it only did `setCentralWidget(createTabWidget())`, leaving the
+   base's `m_tabWidget` null — which is why `addTab()` (which derefs `m_tabWidget`) crashed under gdb
+   (`QTabWidget::insertTab` SIGSEGV) the first time it was reached).
+2. **Empty view docs:** even with the Graphic tab present, `loadViewDocument` resolved `<layers image>` against
+   the fzp's own directory (`<partsroot>/core`), so `pcb/x.svg` looked in `core/pcb/x.svg` (nonexistent) →
+   `return false` → empty doc → blank. `<layers image>` is relative to the parts **svg tree** for that family:
+   `<partsroot>/svg/<family>` (e.g. `parts/svg/core/pcb/...`). Fixed to
+   `QDir(fzpDir.absolutePath() + "/../svg/" + fzpDir.dirName())`. Runtime probe now shows all four views load
+   (pcbView children=8, etc.) and `editor=ok`, and close no longer crashes.
+3. **Close-crash:** `MainWindow::closeEvent` (the base, if reached) derefs null `m_binManager`. `PEMainWindow`
+   already overrides `closeEvent` and forwards to `QMainWindow::closeEvent` directly (not the legacy base), so
+   with the tabs now built the clean close path holds (harness exits cleanly, no SIGSEGV).
+
+**Build hazard note (AGENTS.md §5, hit twice this session):** a foreground `make`/`qmake6` that my exec timeout
+killed mid-run left a truncated **0-byte** `mainwindow.o`/`pecommands.o` in the build dir; the *next* incremental
+`make` treated it as up-to-date and linked with `undefined reference to MainWindow::triggerSimulator()` /
+`ChangeFzpCommand::...`. It is NOT a source defect — the tree compiles fine from scratch. Discipline that works:
+`rm -rf` the build dir, `qmake6`, then build **detached** (`nohup bash -c 'make …' &`) and poll for completion
+instead of running a foreground build that the tool times out.
+
+---
+
 ## 2026-11-04 — Session 27b (fix: crash on Parts Editor open — legacy `init` spine no longer runs in PE)
 
 After wiring `PESvgEditor` as the sole renderer (Session 27 line), opening a part in the Parts Editor crashed.

@@ -68,10 +68,9 @@ public:
 
 	// PE-specific window setup. The base MainWindow::init wires the legacy SketchWidget/graphics-view/welcome/
 	// programming/layer-palette/bin-manager spine (all null here, hence the crash on PE open). PE overrides it:
-	// it only needs the central tab host and the DOM-driven metadata + connectors docks. The graphic is a single
-	// PESvgEditor page added by setInitialView, so there is no legacy view/welcome/programming surface to build.
+	// it only needs the central tab host (built by initSketchWidgets) and an active undo group wired to this
+	// window's stack. The graphic is a single PESvgEditor page plus the DOM-driven Metadata and Connectors tabs.
 	void init(ReferenceModel * referenceModel, bool lockFiles) override;
-
 
 public Q_SLOTS:
 	void metadataChanged(const QString & name, const QString & value);

@@ -116,16 +116,15 @@ PEMainWindow::~PEMainWindow()
 	dir.rmdir(makeDirName());
 }
 
-// Minimal PE setup. Unlike the base MainWindow::init (which wires the legacy SketchWidget/graphics-view/
-// welcome/programming/layer-palette/bin-manager spine that this sole-renderer path deliberately has none of),
-// the parts editor only needs a central tab host (filled by setInitialView -> setInitialItem) plus an active
-// undo group wired to this window's stack. Everything else in the base init dereferences null legacy members.
+// PE window setup. The base MainWindow::init wires the legacy SketchWidget/graphics-view/welcome/
+// programming/layer-palette/bin-manager spine (all null here, hence the crash on PE open). PE overrides it:
+// it only needs the central tab host (filled by initSketchWidgets) and an active undo group wired to this
+// window's stack. setInitialItem (the load entry) populates the tabs and shows the current view.
 void PEMainWindow::init(ReferenceModel * referenceModel, bool)
 {
 	m_referenceModel = referenceModel;
 
-	m_tabWidget = createTabWidget();
-	setCentralWidget(m_tabWidget);
+	initSketchWidgets(false);
 
 	m_undoView = new QUndoView();
 	m_undoGroup = new QUndoGroup(this);
@@ -134,7 +133,6 @@ void PEMainWindow::init(ReferenceModel * referenceModel, bool)
 
 	setInitialView();
 }
-
 
 void PEMainWindow::closeEvent(QCloseEvent * event)
 {
@@ -167,7 +165,8 @@ QWidget * PEMainWindow::currentTabWidget() {
 }
 
 void PEMainWindow::initSketchWidgets(bool) {
-	setCentralWidget(createTabWidget());
+	m_tabWidget = createTabWidget();
+	setCentralWidget(m_tabWidget);
 
 	m_editor = new PESvgEditor(this);
 	addTab(m_editor, tr("Graphic"));
@@ -218,8 +217,12 @@ bool PEMainWindow::loadViewDocument(ViewLayer::ViewID viewID) {
 	if (shortPath.isEmpty()) return false;
 
 	QFileInfo fzpInfo(m_originalFzpPath);
-	QDir fzpDir = fzpInfo.absoluteDir();
-	QString canonicalViewPath = fzpDir.absoluteFilePath(shortPath);
+	QDir fzpDir = fzpInfo.absoluteDir();          // e.g. <partsroot>/core  (or .../user)
+	// The <layers image> path (e.g. "pcb/xxx.svg", "icon/xxx.svg") is relative to the parts library's
+	// svg tree for that family: <partsroot>/svg/<family>, where <family> is the fzp's containing folder
+	// name (core / contrib / user ...). The fzp itself lives at <partsroot>/<family>/xxx.fzp.
+	QDir svgRoot(fzpDir.absolutePath() + "/../svg/" + fzpDir.dirName());
+	QString canonicalViewPath = svgRoot.absoluteFilePath(shortPath);
 
 	QFile file(canonicalViewPath);
 	if (!file.open(QIODevice::ReadOnly)) {
