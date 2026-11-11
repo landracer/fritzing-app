@@ -6,6 +6,35 @@
 
 ---
 
+## 2026-11-10 — Session 29 (feature: PE shows ALL four views as tabs, not just Breadboard)
+
+After the Session-28 fix the PE opened and the (single) graphic tab rendered — but only the **Breadboard** view
+was visible, because the design had exactly **one** `PESvgEditor` ("Graphic" tab) whose content silently swapped to
+whatever `m_currentViewId` was (default Breadboard), with **no way to switch views**. Rebuilt around **Option A:
+one `PESvgEditor` tab per view** (Breadboard / Schematic / PCB / Icon) — matching the original Fritzing PE layout
+(a `QTabWidget` of view tabs) while keeping the sole-renderer implementation (no SketchWidget/ItemBase).
+
+Changes (`src/partseditor/pemainwindow.{h,cpp}`):
+- Replaced the single `PESvgEditor * m_editor` with `QHash<ViewLayer::ViewID, PESvgEditor *> m_editors`.
+  `initSketchWidgets` now loops `m_viewOrder`, builds one editor per view, tags it with a `peViewId` dynamic
+  property, stores it in `m_editors`, and `addTab`s it (tab label from `viewName(viewID)`). Tab order: the four
+  view tabs, then Metadata, then Connectors (verified offscreen: `tabCount=6`).
+- `loadViewDocument(viewID)` feeds the parsed view DOM into *that view's* editor (`editorFor(viewID)`), not a
+  shared one. `setCurrentViewId(viewID)` now *switches tabs* — finds the tab whose editor's `peViewId` matches and
+  `setCurrentIndex` to it + `fitToWindow`. `tabWidget_currentChanged(index)` maps the current editor tab back to
+  its `peViewId` → updates `m_currentViewId` and fits.
+- **Save correctness:** the SVG now serializes from the editor's *live* document (`editorFor(viewID)->document()`),
+  not the stale `m_*Document` master (each `PESvgEditor::setDocument` stores a *copy*, and edits mutate that copy —
+  so the master would have gone stale). `PEViewWriter::writeViewSvg` already documents "the QDomDocument the
+  PESvgEditor edits in place" as the source of truth; this matches it.
+
+Verified offscreen via a temporary `debugOpenFzp`/`debugLoadFzp` harness (since removed): loading a real core fzp
+gives `tabCount=6` with all four editor tabs holding non-null, populated docs (children 2/1/3/2) → every view
+renders, not just Breadboard. All debug scaffolding removed (`src/fapplication.{cpp,h}` back to 0 changes vs HEAD);
+no `debugOpenFzp`/`debugLoadFzp`/`PE_DEBUG` remain in code. App builds clean from scratch; full test suite green.
+
+---
+
 ## 2026-11-10 — Session 28 (fix: PE opened blank + crashed on close — `init` never built the tabs; svg path wrong)
 
 The Session-27b `init` override stopped the *open* crash but the editor still showed nothing and closing the

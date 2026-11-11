@@ -35,9 +35,9 @@ class PEToolView;
 class PaletteItem;
 
 // The Parts Editor, rebuilt around the sole-renderer (docs/design/pe-integration-plan.md). The central view
-// area is a QTabWidget: a single PESvgEditor page that paints whichever part view is current directly from
-// its QDomDocument, plus Metadata and Connectors pages. There is NO SketchWidget/ItemBase/ViewThing spine:
-// each per-view QDomDocument (m_breadboardDocument / m_schematicDocument / m_pcbDocument / m_iconDocument)
+// area is a QTabWidget: one PESvgEditor tab per view (Breadboard / Schematic / PCB / Icon), each painting its
+// own QDomDocument directly, plus Metadata and Connectors tabs. There is NO SketchWidget/ItemBase/ViewThing
+// spine: each per-view QDomDocument (m_breadboardDocument / m_schematicDocument / m_pcbDocument / m_iconDocument)
 // is the sole model of that graphic; PEViewWriter serializes it on save. The Metadata and Connectors docks
 // are DOM-in/DOM-out and are reused as-is, driven straight from m_fzpDocument.
 class PEMainWindow : public MainWindow
@@ -49,8 +49,8 @@ public:
 	~PEMainWindow() override;
 
 	// Sole-renderer entry point. Loads the part's fzp into m_fzpDocument and each view's graphic into the
-	// corresponding view QDomDocument (resolving the <layers image> svg), then shows the current view in
-	// the PESvgEditor. Returns false if nothing could be loaded.
+	// corresponding view QDomDocument (resolving the <layers image> svg), feeding each into its own PESvgEditor
+	// tab, then shows the current view. Returns false if nothing could be loaded.
 	bool setInitialItem(PaletteItem *);
 
 	// Clean metadata DOM mutations (operate on m_fzpDocument, re-feed PEMetadataView).
@@ -69,7 +69,7 @@ public:
 	// PE-specific window setup. The base MainWindow::init wires the legacy SketchWidget/graphics-view/welcome/
 	// programming/layer-palette/bin-manager spine (all null here, hence the crash on PE open). PE overrides it:
 	// it only needs the central tab host (built by initSketchWidgets) and an active undo group wired to this
-	// window's stack. The graphic is a single PESvgEditor page plus the DOM-driven Metadata and Connectors tabs.
+	// window's stack. The graphic area is one PESvgEditor tab per view plus the DOM-driven Metadata and Connectors tabs.
 	void init(ReferenceModel * referenceModel, bool lockFiles) override;
 
 public Q_SLOTS:
@@ -115,8 +115,14 @@ protected:
 
 	// Return a reference to the view QDomDocument for @p viewID (the sole model of that graphic).
 	QDomDocument & viewDocument(ViewLayer::ViewID viewID);
+	// The PESvgEditor tab hosting @p viewID, or nullptr if none.
+	PESvgEditor * editorFor(ViewLayer::ViewID viewID);
+	// The ViewID a graphic tab's PESvgEditor was created for (set via setViewId), else InvalidView.
+	static ViewLayer::ViewID editorViewId(const QWidget * tab);
+	// Human-readable tab/label name for a view id (Breadboard / Schematic / PCB / Icon).
+	QString viewName(ViewLayer::ViewID viewID);
 	// Resolve the <layers image> target for @p viewID relative to the loaded fzp and load it into both the
-	// view QDomDocument and the PESvgEditor.
+	// view QDomDocument and that view's PESvgEditor.
 	bool loadViewDocument(ViewLayer::ViewID viewID);
 	void setCurrentViewId(ViewLayer::ViewID viewID);
 
@@ -156,8 +162,9 @@ protected:
 	PEConnectorsView * m_connectorsView = nullptr;
 	PEToolView * m_peToolView = nullptr;
 
-	// The one sole-renderer surface (the central tab's graphic page).
-	PESvgEditor * m_editor = nullptr;
+	// One sole-renderer surface per view (Breadboard / Schematic / PCB / Icon), each a tab, each editing
+	// its own view QDomDocument. Keyed by ViewID; tab order follows m_viewOrder.
+	QHash<ViewLayer::ViewID, PESvgEditor *> m_editors;
 
 	QString m_guid;
 	QString m_prefix;

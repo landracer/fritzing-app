@@ -168,8 +168,15 @@ void PEMainWindow::initSketchWidgets(bool) {
 	m_tabWidget = createTabWidget();
 	setCentralWidget(m_tabWidget);
 
-	m_editor = new PESvgEditor(this);
-	addTab(m_editor, tr("Graphic"));
+	// One PESvgEditor per view (Breadboard / Schematic / PCB / Icon), each its own tab in m_viewOrder
+	// order. Each editor owns its view QDomDocument (the sole model of that graphic); loadViewDocument
+	// feeds them below and setCurrentViewId switches tabs. No shared editor / no hidden document swap.
+	Q_FOREACH (ViewLayer::ViewID viewID, m_viewOrder) {
+		PESvgEditor * editor = new PESvgEditor(this);
+		editor->setProperty("peViewId", static_cast<int>(viewID));
+		m_editors.insert(viewID, editor);
+		addTab(editor, viewName(viewID));
+	}
 
 	m_metadataView = new PEMetadataView(m_referenceModel, this);
 	addTab(m_metadataView, tr("Metadata"));
@@ -207,6 +214,26 @@ QDomDocument & PEMainWindow::viewDocument(ViewLayer::ViewID viewID) {
 	}
 }
 
+PESvgEditor * PEMainWindow::editorFor(ViewLayer::ViewID viewID) {
+	return m_editors.value(viewID, nullptr);
+}
+
+ViewLayer::ViewID PEMainWindow::editorViewId(const QWidget * tab) {
+	bool ok = false;
+	int v = tab->property("peViewId").toInt(&ok);
+	return ok ? static_cast<ViewLayer::ViewID>(v) : ViewLayer::UnknownView;
+}
+
+QString PEMainWindow::viewName(ViewLayer::ViewID viewID) {
+	switch (viewID) {
+	case ViewLayer::BreadboardView: return tr("Breadboard");
+	case ViewLayer::SchematicView:  return tr("Schematic");
+	case ViewLayer::PCBView:        return tr("PCB");
+	case ViewLayer::IconView:       return tr("Icon");
+	default:                        return tr("Graphic");
+	}
+}
+
 bool PEMainWindow::loadViewDocument(ViewLayer::ViewID viewID) {
 	QDomElement root = m_fzpDocument.documentElement();
 	QDomElement views = root.firstChildElement("views");
@@ -236,15 +263,23 @@ bool PEMainWindow::loadViewDocument(ViewLayer::ViewID viewID) {
 		return false;
 	}
 
-	if (m_editor) m_editor->setDocument(viewDocument(viewID), ViewLayer::viewIDXmlName(viewID));
+	if (PESvgEditor * editor = editorFor(viewID))
+		editor->setDocument(viewDocument(viewID), ViewLayer::viewIDXmlName(viewID));
 	return true;
 }
 
 void PEMainWindow::setCurrentViewId(ViewLayer::ViewID viewID) {
 	m_currentViewId = viewID;
-	if (m_editor) {
-		m_editor->setDocument(viewDocument(viewID), ViewLayer::viewIDXmlName(viewID));
-		m_editor->fitToWindow();
+	// The tab *is* the view switcher: find the tab hosting this view's editor and make it current.
+	QTabWidget * tabs = qobject_cast<QTabWidget *>(m_tabWidget);
+	if (!tabs) return;
+	for (int i = 0; i < tabs->count(); ++i) {
+		QWidget * w = tabs->widget(i);
+		if (qobject_cast<PESvgEditor *>(w) && editorViewId(w) == viewID) {
+			tabs->setCurrentIndex(i);
+			if (PESvgEditor * editor = editorFor(viewID)) editor->fitToWindow();
+			return;
+		}
 	}
 }
 
@@ -623,7 +658,11 @@ bool PEMainWindow::writeXml(const QString & path, const QString & xml, bool temp
 
 void PEMainWindow::tabWidget_currentChanged(int index) {
 	MainWindow::tabWidget_currentChanged(index);
-	if (index == 0 && m_editor) m_editor->fitToWindow();
+	QWidget * w = qobject_cast<QTabWidget *>(m_tabWidget)->widget(index);
+	if (PESvgEditor * editor = qobject_cast<PESvgEditor *>(w)) {
+		m_currentViewId = editorViewId(w);
+		editor->fitToWindow();
+	}
 }
 
 ////////////////////////////////////////////////////
@@ -1092,8 +1131,12 @@ bool PEMainWindow::saveAs(bool overWrite)
 
 	Q_FOREACH (ViewLayer::ViewID viewID, m_viewOrder) {
 		if (viewDocument(viewID).isNull()) continue;
+		// The authoritative graphic is what the view's editor currently holds (it edits its own copy);
+		// fall back to the master doc only if somehow no editor exists for that view.
+		PESvgEditor * editor = editorFor(viewID);
+		const QDomDocument & liveDoc = editor ? editor->document() : viewDocument(viewID);
 		QString svgFileName = makeSvgFileName(fzpRoot.firstChildElement("moduleID"));
-		if (!PEViewWriter::writeViewSvg(viewDocument(viewID), svgBasePath + svgFileName)) {
+		if (!PEViewWriter::writeViewSvg(liveDoc, svgBasePath + svgFileName)) {
 			QMessageBox::critical(this, tr("Unable to write file", "dialog title"),
 			                      tr("Unable to write the part's SVG view to %1.").arg(svgBasePath + svgFileName));
 			return false;
