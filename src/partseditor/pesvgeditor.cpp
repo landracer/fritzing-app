@@ -118,10 +118,11 @@ QDomElement PESvgEditor::selectedElement() const
 	if (m_selectedId.isEmpty()) return QDomElement();
 	return PEPrimGeom::findById(m_doc.documentElement(), m_selectedId);
 }
-// Collect the addressable graphics to render as items: a graphic is addressable when it has an id
-// AND a computable local bounds (so it can be hit-tested + moved). Layer groups are descended into;
-// a graphic that happens to contain children (rare) is treated as an opaque leaf and rendered whole
-// by its id. `visibleLayers` (when non-empty) restricts which top-level layer groups are considered.
+// The view's whole graphic is painted by a single backdrop QGraphicsSvgItem over the full document, so
+// ALL art shows — including `<path>`/`<line>` artwork that (unlike pads/pins) has no id. On top of that
+// backdrop, each *addressable leaf* (a graphic with an id + computable bounds) also gets its own item so
+// it can be hit-tested and moved in place; those overlap their backdrop copy exactly, so no visual change.
+// `visibleLayers` (when non-empty) restricts which top-level layer groups are drawn (fzp-declared layers).
 void PESvgEditor::rebuildScene()
 {
 	m_scene->clear();                 // deletes items AND m_selection (they are scene items)
@@ -142,9 +143,22 @@ void PESvgEditor::rebuildScene()
 
 	const QDomElement root = m_doc.documentElement();
 
-	// Recursive descent: for each element under a (visible) layer group, if it is a modelled graphic
-	// with id + bounds, make it an item and do NOT descend further (render it whole). Otherwise
-	// (a group, or a container) descend. This yields exactly the leaves the editor can select/move.
+	// Backdrop: render each visible top-level layer group (or the whole doc) as one item so the part
+	// paints in full. Doing it per layer group (by id) keeps the visibleLayers filter meaningful.
+	for (QDomElement e = root.firstChildElement(); !e.isNull(); e = e.nextSiblingElement()) {
+		const QString gid = e.attribute(QStringLiteral("id"));
+		if (!m_visibleLayers.isEmpty() && !gid.isEmpty() && !m_visibleLayers.contains(gid)) {
+			continue;   // layer filter (fzp-declared layers for the active view)
+		}
+		if (gid.isEmpty() || !m_renderer->elementExists(gid)) continue;
+		auto * backdrop = new QGraphicsSvgItem();
+		backdrop->setSharedRenderer(m_renderer);
+		backdrop->setElementId(gid);
+		backdrop->setZValue(-1);   // under the addressable leaf items
+		m_scene->addItem(backdrop);
+	}
+
+	// Addressable leaves (id + valid bounds) get their own selectable/movable item on top.
 	std::function<void(const QDomElement &)> walk = [&](const QDomElement & e) {
 		for (QDomElement c = e.firstChildElement(); !c.isNull(); c = c.nextSiblingElement()) {
 			const QString id = c.attribute(QStringLiteral("id"));
@@ -155,10 +169,6 @@ void PESvgEditor::rebuildScene()
 				auto * item = new QGraphicsSvgItem();
 				item->setSharedRenderer(m_renderer);
 				item->setElementId(id);
-				// QGraphicsSvgItem renders setElementId(id) at the item's LOCAL origin, filling a
-				// boundingRect() of size boundsOnElement(id) anchored at (0,0). So to place each leaf at
-				// its true document position (and give hit-testing / the outline a matching scene rect),
-				// move the item to boundsOnElement's top-left. Without this every leaf paints at (0,0).
 				const QRectF bb = m_renderer->boundsOnElement(id);
 				if (bb.isValid()) item->setPos(bb.topLeft());
 				item->setData(0, id);        // id carried on the item for hit-testing
@@ -171,10 +181,9 @@ void PESvgEditor::rebuildScene()
 
 	for (QDomElement e = root.firstChildElement(); !e.isNull(); e = e.nextSiblingElement()) {
 		const QString id = e.attribute(QStringLiteral("id"));
-		if (!m_visibleLayers.isEmpty() && !m_visibleLayers.contains(id)) {
+		if (!m_visibleLayers.isEmpty() && !id.isEmpty() && !m_visibleLayers.contains(id)) {
 			continue;   // layer filter (fzp-declared layers for the active view)
 		}
-		// Top-level layer group: descend into it. A graphic at top level (unusual) is handled inside.
 		walk(e);
 	}
 

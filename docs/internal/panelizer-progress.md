@@ -6,6 +6,30 @@
 
 ---
 
+## 2026-11-10 — Session 30 (fix: breadboard/schematic rendered blank — non-id'd artwork was never itemised)
+
+After Session 29 the four view tabs existed and **PCB** rendered, but **Breadboard/Schematic showed blank**.
+Root cause (confirmed by an offscreen harness that itemised each view and rendered it to PNG): `PESvgEditor::
+rebuildScene` only created a `QGraphicsSvgItem` for elements that **have an `id`**. In a real part the *visible*
+artwork differs per view:
+- PCB's visible content is the **pads** (`<circle id="connectorNpad">`) → id'd, valid bounds → itemised → visible.
+- Breadboard's board body / logo / silkscreen are `<path>`/`<line>` with **no id**, and its only id'd leaves are
+  the (invisible `fill=none`) pin rings → almost nothing itemised → blank.
+- Schematic's visible rect/lines likewise mostly lack ids (its id'd `connectorNterminal` rects are `0×0`) → blank.
+
+Fix: `rebuildScene` now draws a **backdrop** `QGraphicsSvgItem` per top-level layer group (`setElementId(group.id)`
+renders the whole `<g>` subtree, so id-less artwork paints), at `z = -1`; the id'd **addressable leaves** still get
+their own on-top items for select/move exactly as before. Overlap is exact so there is no visual artefact, and the
+`m_visibleLayers` filter still governs which layer groups show.
+
+Verified offscreen (same harness, since removed): all four tabs now produce a **valid scene rect** and render full
+artwork to PNG — breadboard shows the red board body + flame logo + pin labels, schematic the symbol + pin lines +
+"E-Paper Eval Board" text, pcb the outline + silkscreen + gold pads, icon correct. No scaffolding left in code
+(`src/fapplication.{cpp,h}` back to 0 changes vs HEAD; `debugOpenFzp`/`debugLoadFzp`/`debugDumpScene`/`PE_DEBUG`
+gone). App builds clean from scratch; full test suite green.
+
+---
+
 ## 2026-11-10 — Session 29 (feature: PE shows ALL four views as tabs, not just Breadboard)
 
 After the Session-28 fix the PE opened and the (single) graphic tab rendered — but only the **Breadboard** view
