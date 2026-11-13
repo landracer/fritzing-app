@@ -88,13 +88,16 @@ Rather than bolt the new renderer onto the live `PEMainWindow` (which kept feedi
 reload-mutated `m_pcbDocument`), the sole-renderer was proven in a **fully separate Qt app** that shares
 *nothing* with `pemainwindow.cpp`, `ItemBase`, `SketchWidget` or the PE reload path:
 
-- **`src/partseditor/pesvgeditor.{h,cpp}` — `PESvgEditor`**: one `QSvgRenderer` over the part SVG plus one
-  `QGraphicsSvgItem` per **addressable leaf** graphic (`setSharedRenderer` + `setElementId`), not per layer
-  group. A bare `QGraphicsSvgItem` paints its element at the *item-local* origin, so each leaf item is
-  explicitly `setPos(renderer->boundsOnElement(id).topLeft())`; without that every leaf would stack at scene
-  (0,0). Positioning per leaf this way is what makes an individual pad hit-testable and movable while the
-  nested `<g id='copper0'><g id='copper1'>…` layers still render in the right place. This is the render
-  primitive the PE will adopt.
+- **`src/partseditor/pesvgeditor.{h,cpp}` — `PESvgEditor`** + **`peitemplan.{h,cpp}` — `PEItemPlan::plan`**: one
+  `QSvgRenderer` over the part SVG, and a **hybrid** itemization (decided by `PEItemPlan::plan`, pure DOM,
+  headless-golden-tested). `plan` walks the DOM once: a group that *contains* editable id'd primitives is
+  **descended** so each pad/pin becomes its own selectable leaf item; a group whose subtree has **no** editable
+  graphic (breadboard body, pcb's non-id'd `<path>`/`<text>` art) is rendered **whole** as one non-selectable
+  item. Never both for the same subtree → no element is painted twice (this is what kills the pcb pad
+  double-draw). An editable leaf's `QGraphicsSvgItem` paints its element at the item-local origin, so it is
+  explicitly `setPos(renderer->boundsOnElement(id).topLeft())`; without that it would stack at scene (0,0).
+  Positioning per leaf is what makes an individual pad hit-testable and movable while the nested
+  `<g id='copper0'><g id='copper1'>…` layers still render in the right place. This is the render primitive the PE adopts.
 - **`src/partseditor/pesvgpartloader.{h,cpp}` — `PESvgPartLoader`**: opens a **part**, not a raw file. It
   reads a `.fzp`, resolves `<views><pcbView|breadboardView|schematicView><layers image="…">` against the
   parts `svg/<family>` tree, and — for the PCB view — colourises each recognised layer group with an

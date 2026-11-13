@@ -6,6 +6,349 @@
 
 ---
 
+## 2026-11-12 — Session 39 (tooling/feature scope review → roadmap handoff; NOT an implementation session)
+
+User QA'd the new sole-renderer editor and listed what's still missing to make it *useful*. This session did **not**
+implement the fixes — it root-caused each gap and wrote the handoff roadmap the next session builds against.
+**The master plan now lives in `docs/design/pe-editor-roadmap.md` — read that first.**
+
+Findings (root causes, verified against code):
+- **Resize jumps instead of resizing.** `PESvgEditor::handleMove` *translates* the item for a grip-drag (same as a
+  body-move), and `handleRelease` commits `PEPrimGeom::resizeRect(el, origin+totalDelta)`. So a corner-drag moves the
+  whole shape by the delta rather than growing it from the grabbed edge. Fix: during a resize-drag compute the live box
+  from `m_resizeOrigin` + per-edge delta and preview the *resized* geometry (not a translate), commit on release.
+- **No zoom UI.** `PESvgEditorView` has no `wheelEvent`; only `fitToWindow()`. Need Ctrl+wheel (or plain wheel) zoom
+  anchored under the cursor + a zoom slider, and to keep `kGripPx/viewScale` chrome sizing correct across zoom.
+- **No measurement system.** `peunits.{h,cpp}` already converts px↔in/mm at 90 dpi (`pxToUnits`/`pxToUnitsStr`);
+  it is NOT surfaced in the UI. Need a unit readout/selector (in/mm/mil) for the selection box + cursor coordinates.
+- **No drag-in alignment guides.** Nothing snaps/aligns a dragged element to sibling geometry (center/edge alignment,
+  gap-even spacing) or to a grid. New pure helper + golden tests.
+- **No create/toolbox path.** Slice D (create-primitive + add-connector DOM-native) never landed — there is no way to
+  *add* a rect/circle/line/path/text or drop an existing shape/footprint/part into the view. The old create tooling
+  is dead in `src/partseditor/obsolete/` (`resizablerectitem`, `cornerhandler`, old `partseditorview*`) — reference
+  only, must be re-implemented DOM-native against `PESvgEditor`.
+- **Metadata + Icon tabs blank, and Schematic svg not showing (root cause found).**
+  `PEMainWindow::setInitialItem(nullptr)` falls back to `m_referenceModel->retrieveModelPart("generic_ic_dip_8_300mil")`
+  — **that exact moduleId is not in the bundled tree** (the real generic is `generic_sip_2_300mil`, plus
+  `generic_small_6V_solar_panel_2`), so with no palette item the load returns early / has no data → Metadata blank and
+  the Icon tab has nothing to render. (When a real part *is* opened, all 4 `<iconView>/<breadboardView>/
+  <schematicView>/<pcbView>` load via `loadViewDocument` reading each `<layers image="…/xxx.svg">` resolved against
+  `<partsroot>/svg/<family>`.) Fix path: pick a real default moduleId, and confirm `setInitialItem`→`loadViewDocument`
+  actually populates each `viewDocument(viewID)` and calls `editor->setDocument` for schematic too.
+
+**State:** all Slice A–H work still on `feature/vector-editor`, **uncommitted** (user holds commits). Suite green as
+before (`test_pesvgeditor` 36/36, etc.). Next session: open `docs/design/pe-editor-roadmap.md`, work slices R1→R6.
+
+---
+
+## 2026-11-12 — Session 38 (Slice G + H: all four views hosted in-app; legacy branch confirmed gone; review/debug build)
+
+With Slice F (save + raw source of truth) landed, this session *hooked the pieces together* in the real app and
+confirmed the integration is complete — the editor is no longer a standalone-only surface.
+
+**What was already in place (A–E landed):** `PEMainWindow` (`src/partseditor/pemainwindow.cpp`) now overrides
+`init`/`initSketchWidgets` to build a central `QTabWidget` with **one `PESvgEditor` per view** (`m_viewOrder` =
+Breadboard / Schematic / PCB / Icon), each owning its own `QDomDocument` (the sole model of that graphic), plus the
+reused **Metadata** and **Connectors** tabs and the docks. `setInitialItem` still uses `ModelPart`/`ReferenceModel`
+*only to locate the `.fzp`* (path, moduleId, properties) — the graphic never goes through `SketchWidget`/`ItemBase`.
+`loadViewDocument(viewID)` reads each view's `<layers image>` svg into that view's doc and hands it to its editor via
+`setDocument` (raw DOM + per-view filter — **not** `colouriseForView`); `setCurrentViewId` switches tabs + `fitToWindow`.
+
+**Slice G (breadboard + schematic parity) — verified:** the host is view-agnostic: `loadViewDocument`/`viewDocument`
+switch on `ViewLayer::ViewID` identically for all four, so breadboard/schematic render+edit through the exact same
+`PESvgEditor`/`PEPrimGeom` spine proven for PCB. The save path (`saveAs`) iterates `m_viewOrder`, writing each view's
+*live* editor doc via `PEViewWriter::writeViewSvg` and repointing that view's `<layers image>` — so every view round-trips.
+
+**Slice H (retire the legacy path) — confirmed done:** `git grep` for `PEGraphicsItem`/`loadPartFromClass`/
+`PEBlankPart`/`PESvgImport` in `src/partseditor` returns **only comment mentions**, and `pri/partseditor.pri` references
+**none** of the old cluster files (they were deleted in Slice E). The only surviving `SketchWidget` hits are the
+`initSketchWidgets(bool)` override *name* (kept so the base-class seam compiles) and explanatory comments.
+
+**Review/debug build (this session):**
+- Built a **debug** (`CONFIG+=debug`, `-g`) full app from a fresh dir → `DONE_DBG_0`, **no compile/link errors**,
+  **no warnings** on the changed files (`pesvgeditor`, `pesvgpartloader`, `mainwindow`). Debug binary `Fritzing` ≈ 250 MB.
+- Smoke-launched the debug binary under **Xvfb :99 + xcb**: the app **stays up, no crash** — splash "Fritzing EDA"
+  renders, bin loading proceeds (the "Unable to find 2 part(s)" popup is a *data* message from the bundled part
+  library, not a code fault).
+- Integrity sweep: **no diagnostic residue** (`editor_diag`/`TEMP DIAG`/`polygonFillsLikeClosedPath` gone); the only
+  `closeSubpath` hits are legitimate `QPainterPath::closeSubpath` calls; `petransform.cpp` is **net-neutral** (the
+  speculative polygon change stayed reverted); `colouriseForView` exists only as its own definition — **not called on
+  the load path**.
+- Full test aggregate green from a fresh dir (unchanged from Session 37): `test_pesvgeditor` **36/36**, panelizer 6,
+  gerberpreview 8, peviewlayermap 11, peviewwriter 8; all Boost suites "No errors detected".
+
+**State:** the sole-renderer Parts Editor (render + select + move + resize + node-edit + undo/redo + save) is wired
+end-to-end in the real app across all four views, on `feature/vector-editor`, still **uncommitted** per workflow. The
+remaining verification is interactive **human QA** (drive a real part through select→move→resize→node-edit→undo→Save→reopen
+in the GUI) — the spine is proven headless/golden and the app launches clean.
+
+---
+
+## 2026-11-12 — Session 37 (Slice F: Save wired + raw-source-of-truth DOM)
+
+Made the standalone `peditor` actually **persist** edits. Before this, every move/resize/node-edit lived only in
+memory — close the app and it was gone. `peditor` had Undo/Redo but no Save at all, and `PESvgEditor` had no
+write path.
+
+**Decision (raw source of truth).** The editor must treat the on-disk `.svg` as the single source of truth so a
+Save is a *lossless* round-trip. Investigated: the old `PESvgPartLoader::loadPart` recoloured the loaded DOM on
+load (`colouriseForView` → `fixColorRecurse`/`setStrokeOrFill`). But library svgs **already author** each layer's
+colour per layer-group (e.g. the copper group's pads are authored `stroke:#f7bd13`/`rgb(255,191,0)`), so that
+load-time recolour was rewriting already-correct colours — and worse, a naive Save would have baked the *view*
+colour into the file. So `loadPart` now returns the svg in its **raw on-disk bytes** (no recolour on load);
+`PEItemPlan`'s per-view layer filter still selects which layer group is shown. Colourisation (`colouriseForView`)
+is retained (its 3 goldens still pass) but is no longer applied on the load path.
+
+**Controller (`pesvgeditor.cpp/.h`).** Added `bool PESvgEditor::saveToPath(path)` — serialise the owned DOM with
+`toString(0)` (byte-faithful, no re-indent) and write UTF-8 via the app's `TextUtils::writeUtf8` (the same helper
+the app's own model/save uses); on success set `m_filepath`, clear `m_dirty`, re-emit `dirtyChanged(false)`/
+`undoRedoChanged()`, emit the new `saved(path)` signal; on empty-path/write-failure return false and leave state
+untouched.
+
+**GUI (`tools/peditor/main.cpp`).** File menu gained **Save** (Ctrl+S → writes back to the opened file) and
+**Save As…** (Ctrl+Shift+S → `QFileDialog::getSaveFileName`). A `closeEvent` now prompts Save/Discard/Cancel when
+dirty. `saveDocument()` helper drives `saveToPath` and updates the status bar; the dirty `*` title already tracked
+`dirtyChanged`.
+
+**Raw-open path.** `openSvg` (raw `.svg`) and `loadFzp` (fzp → svg) now both hand the editor the RAW DOM +
+`visibleLayers` filter. Confirmed the raw-load still **renders correctly** (pads show, per-view filter intact) —
+verified with a real `Xvfb :99` xcb capture (offscreen is flaky for raster here).
+
+**Golden tests (`test_pesvgeditor`).** `save_roundTripsThroughDisk` — load a circle pad at (10,10), move it to
+(30,10) via a real DOM edit, `saveToPath` to a `QTemporaryDir` file, **re-parse** the file into a fresh doc and
+assert `localBounds == (27,7,6,6)` (cx=30) and `fill == #cc0000` (byte-faithful, no colour leaked); `saved` spy
+fires once with the path. `save_failsWithoutFilepath` — no currentFilepath + no path arg → returns false, no
+`saved` signal. Suite grew 34 → **36**, all green.
+
+**Gotcha hit:** `pesvgeditor.cpp` now includes `../utils/textutils.h` (relative form, matching every other app
+source) — the bare `#include "textutils.h"` broke the app build's include path. Fixed before merging.
+
+**Verification (fresh dirs):** full `Fritzing` app compiles+links clean; aggregate `auto.pro` builds all suites
+green (test_pesvgeditor **36/36**, panelizer 6, gerberpreview 8, peviewlayermap 11, peviewwriter 8; Boost suites
+"No errors detected"). Standalone `peditor` builds clean and Save round-trips under xcb.
+
+---
+
+## 2026-11-11 — Session 36 (Slice E: dead-code sweep — delete the entire legacy QtSvg-isolation cluster)
+
+Slices A–D landed the self-paint renderer + chrome and made `PEMainWindow` drive `PESvgEditor`. That left the
+*old* double-render machinery orphaned. This session proved that reachability and removed it.
+
+**Reachability audit (evidence before deletion).** From the live root `PEMainWindow`: it uses `PESvgEditor`,
+`PEConnectorsView`, `PEMetadataView`, `PEViewWriter`, `PEHistoryEntryDialog`, `PECommands` — and the connector
+handling routes through `../connectors/connector.h` (the app-wide `Connector`), **not** the partseditor
+`PEConnector`. The legacy cluster was reachable only via one chain: `PEMainWindow` → `m_peToolView` (`PEToolView`)
+→ `PEGraphicsItem` → `PEDocument`/`PEElement` → `PEPrimitive`/`PEBlankPart`/`PESvgImport`. But `m_peToolView` was
+**never assigned** `new PEToolView` anywhere (only a null-guarded `if (m_peToolView) ... initConnectors` at
+pemainwindow.cpp:686 that can never fire) — so the whole cluster is unreachable dead code. `peditor` (standalone)
+uses only the new units. Confirmed by grep: every mention of the orphan classes outside the cluster's own files was
+a comment or that dead field.
+
+**Deleted (`git rm`):** `pegraphicsitem.{h,cpp}`, `pesvgview.{h,cpp}`, `pedocument.{h,cpp}`, `peprimitive.{h,cpp}`,
+`peconnector.{h,cpp}`, `peblankpart.{h,cpp}`, `pesvgimport.{h,cpp}`, `petoolview.{h,cpp}`, and the
+`tests/auto/test_pedocument/` suite.
+
+**Kept live:** `pesvgeditor`, `peselfpaintitem`, `peitemplan`, `peprimitivegeom`, `petransform`, `pepath`,
+`pesvgpartloader`, `peviewwriter`, `peconnectorsview`, `pemetadataview`, `peutils`, `peunits`, `peviewlayermap`,
+`pehistoryentrydialog`, `pecommands`, `hashpopulatewidget`, `tageditorwidget`, `kicadmoduledialog`,
+`baseremovebutton`.
+
+**`pemainwindow` cleanup:** removed the vestigial `class PEToolView;` fwd-decl + `PEToolView * m_peToolView` member
++ the dead `if (m_peToolView) m_peToolView->initConnectors(...)` line + `#include "petoolview.h"`.
+
+**Coverage preserved:** `test_pedocument` was a *mixed* suite — orphan `PEDocument`/`PEElement`/`PEPrimitive` model
+tests **and** the live `PEPath` decode goldens. Before deleting the suite I ported the 4 live `PEPath` cases
+(`path_decodes_commands_and_args`→`pePath_decodesCommandsAndArgs`, `path_is_relative_aware`→`pePath_isRelativeAware`,
+`path_round_trip_is_stable`→`pePath_roundTripIsStable`, `path_invalid_is_not_ok`→`pePath_invalidIsNotOk`) into
+`test_pesvgeditor` (Boost→QtTest). `PEPath` stays live (now driving `PEPrimGeom::editPathAnchor`), so no coverage
+was lost — `test_pesvgeditor` grew to **34** tests.
+
+**Cleanup:** `pri/partseditor.pri` trimmed to the live unit set (note: `peunits.cpp` kept — live `peutils.cpp` calls
+it); `tests/auto/auto.pro` SUBDIRS dropped `test_pedocument`.
+
+**Verification (fresh dirs):** full `Fritzing` app links clean + launches offscreen; aggregate `auto.pro` builds all
+14 remaining suites green — QtTest `test_pesvgeditor` **34/34**, `test_panelizer` 6, `test_gerberpreview` 8,
+`test_peviewlayermap` 11, `test_peviewwriter` 8; all Boost suites "No errors detected".
+
+---
+
+
+Slices A–C made the self-paint render + hit-test + move/undo correct. This session lifted `PEGraphicsItem`'s
+selection **chrome** onto the self-paint surface: a dashed marquee, 8 resize grips for `<rect>`, and decoded
+**path anchors** as draggable node grips — all committing through the existing `PEPrimGeom` ops, undo-tested.
+
+**Pure half (`peprimitivegeom`):** ported `PEElement::pathAnchors`/`editPathAnchor` (pedocument.cpp) into
+`PEPrimGeom::pathAnchors(el)` (decoded segment end-anchors, absolute user units) and
+`PEPrimGeom::editPathAnchor(el, index, anchor)` (rewrite one segment's anchor in place, **preserving the source's
+abs/rel convention** — a relative segment's new args are `anchor - cursor`, so a round-trip stays lossy-free and
+the `d` stays lowercase when it started that way). Backed by `PEPath` (already linked in `pri/partseditor.pri` and
+the test `.pro`). 4 new golden tests (`geom_pathAnchorsAbsolute`, `geom_editPathAnchorAbsoluteRoundtrip`,
+`geom_editPathAnchorRelativeConvention`, `geom_pathAnchorsEmptyForNonPathAndBadD`) lock the decode/edit semantics
+(absolute + relative-convention-preserving; empty for non-path / bad `d`).
+
+**Root-cause fix (`peitemplan`):** `isEditableGraphic` required `localBounds(el).isValid()`, but `localBounds` is
+deferred (empty) for `<path>` — so **a `<path>` was never selectable/movable**. Fixed: a `<path>` is editable iff
+its anchors decode (`!pathAnchors(el).isEmpty()`); other kinds keep the `localBounds` rule. Paths are now
+first-class selectable/editable, edited node-by-node (not by bbox — a `d` is not a box).
+
+**Controller half (`pesvgeditor`):** the selection now draws a dashed, cosmetic (zoom-independent, `pen`
+`setWidth(0)`+`setCosmetic`) marquee of the element's absolute bounds; a `<rect>` gets the **8 grips** (corners +
+edge midpoints); a `<path>` gets a square node mark at **each** decoded anchor. Grip size is `kGripPx / m_view
+->transform().m11()` so it stays a constant on-screen size and stays grabbable at any zoom. `handlePress` gives a
+grabbed grip/node of the *current* selection priority over re-hitting the body:
+- rect grip drag → on release `resizeRect(el, toBox)` where `toBox` moves only the grabbed edge(s);
+- path node drag → on release `editPathAnchor(el, i, scenePos)`;
+- otherwise body drag → `moveBy(el, delta)` (unchanged from C).
+`handleMove` previews via `item->setPos(delta)`; `handleRelease` folds the release point into the delta. Undo is
+now a **tagged** `UndoEntry` (Move: delta; Resize: from→to box; Anchor: segmentIndex + from→to anchor) so each
+kind replays/reverses exactly. `handlePress/Move/Release` made **public** (they're the controller entry points the
+thin `PESvgEditorView` forwards to; public = directly testable).
+
+**Crash caught + fixed:** `rebuildScene()` does `m_scene->clear()`, which deletes the chrome items too, but
+`m_handles` still held the dangling pointers → the next `updateSelectionVisual()` dereferenced freed memory
+(SIGSEGV at `QGraphicsItem::scene()`). Fix: after `clear()`, null `m_selection` AND `clear()` `m_handles` so the
+teardown loop never sees freed items.
+
+**Tests:** `test_pesvgeditor` now **links `pesvgeditor.cpp`** (no longer pulls QtSvg; the suite already had the
+widget stack). Two new controller tests (`chrome_rectGripResizeRoundTrip`, `chrome_pathAnchorNodeEditRoundTrip`)
+drive the real `PESvgEditor::handlePress/Move/Release` and assert the DOM edit + undo/redo round-trip. Suite green at
+**30/30**.
+
+**Verification (fresh dirs):** `test_pesvgeditor` 30/30; QtTest `test_panelizer` 6 / `test_gerberpreview` 8 /
+`test_peviewlayermap` 11 green; Boost `test_folderutils` "No errors detected". Full app `Fritzing` links clean and
+launches offscreen; standalone `peditor` builds + renders the real part to PNG (same bytes, no regression).
+
+**Next (E):** dead-code sweep of `pri/partseditor.pri` + confirm no stale QtSvg refs (likely already clean).
+
+---
+
+
+Slice B landed the self-paint render; this session made the **interaction** correct and golden-tested it, and
+caught a real `PEItemPlan` bug in the process.
+
+**Hit-test moved to a testable seam:** the editor's smallest-area selection logic was a file-local `static
+hitTestId(...)` in `pesvgeditor.cpp` (untestable headless). Moved it verbatim to **`PESelfPaintItem::hitTestId
+(scene, point)`** (public static), and `PESvgEditor::handlePress` now calls it. Returns the id of the
+smallest-area id-bearing (`data(0)`) item whose `boundingRect()` contains the point — so a pad drawn over a
+bigger layer box selects the pad, not the layer.
+
+**Root-cause bug Slice C caught — `PEItemPlan::plan` dropped top-level editable leaves.** The flat-pad
+interaction test (`<svg><circle id='pad'/></svg>`, a primitive that is a DIRECT child of `<svg>`) planned to
+**empty** — the old `plan` top loop descended INTO groups but never emitted a top-level leaf, so any primitive
+directly under `<svg>` (a flat part) was silently un-selectable/un-movable. Fixed: the top level now applies the
+same rule set to each root child (emit editable leaf / emit whole opaque group / descend into a
+group-with-editables), keeping the `visibleLayers` filter for top-level layer groups; `walk()` handles nested
+levels identically. The pre-existing nested-copper tests still pass (nesting had masked the bug).
+
+**New Slice C golden tests (`test_pesvgeditor`, now 24/24 green):**
+- `interaction_smallestAreaHitSelectsPadOverLayerBox`: a pad over a big layer box — hit at the pad centre
+  returns the pad id; off-pad on the box returns the layer; outside everything returns empty.
+- `interaction_moveCommitThenUndoRoundTrips`: select pad → `moveBy(el, delta)` (what `handleRelease` commits) →
+  rebuild → pad is now hit at the new spot and gone from the old, attrs rewritten; `moveBy(el, -delta)` (undo)
+  → back at the original spot. Proves the idempotent-flatten move/undo cycle is lossless (no double-bake).
+
+**Verification (fresh dirs):** `test_pesvgeditor` 24/24. QtTest `test_panelizer`/`test_gerberpreview`/
+`test_peviewlayermap` green. Standalone `peditor` builds clean and renders a real part (`parts/core/
+10x2-Epaper-Breakout-Board-v11.fzp`) to PNG with real substrate/silkscreen/copper colors — the flatten→self-paint
+path works on real part data. (The `auto.pro` aggregate link flakes documented in AGENTS.md §5 recurred — empty
+`.o`/`undefined reference to main`, NOT my change; standalone suites are green.)
+
+**Next (D–E):** D = selection chrome + 8 grips + path-anchor node edit (lift `PEGraphicsItem`'s chrome, DOM
+commit via existing `moveBy`/`resize`/`editPathAnchor`). E = dead-code sweep of `pri/partseditor.pri`.
+
+---
+
+## 2026-11-11 — Session 33 (Slice B: PESvgEditor rewired to self-paint — QtSvg-item path deleted)
+
+Session 32 landed `PESelfPaintItem` standalone. This session rewired `PESvgEditor` to use it and deleted the
+QtSvg-item isolation that caused the double-draw.
+
+**What changed in `PESvgEditor`:**
+- `rebuildScene()` now: `PEItemPlan::plan(root, visibleLayers)` → for each planned unit, `findById` the
+  element, `PETransform::flatten(el)` (idempotent: bake the inherited ancestor+own transforms into absolute
+  geometry attrs, drop the `transform`), then bind ONE `PESelfPaintItem` (editable leaf → `data(0)=id`,
+  selectable; opaque group → whole-subtree paint, not selectable). Added `petransform.h` + `peselfpaintitem.h`.
+- Deleted `QSvgRenderer`, `QGraphicsSvgItem`, `setElementId`, `applyDocToRenderer`, `m_renderer`,
+  `m_itemBasePos`, and the `transformForElement` mapping. Items carry identity transform (geometry is absolute
+  post-flatten), so `handleMove` previews by `item->setPos(sceneDelta)` and `handleRelease` commits
+  `PEPrimGeom::moveBy(el, sceneDelta)` + `rebuildScene()`. `undo`/`redo` call `rebuildScene()` directly.
+- **Key correctness point:** because planned elements are flattened to absolute (== scene) coords, the
+  scene-space drag delta maps straight onto the raw attrs (no inverse-transform needed) — the old
+  `item->mapFromScene` round-trip is gone and correct-by-construction.
+
+**Design decision (transform model):** chose **flatten-at-load** (the same idempotent bake `PEDocument::
+flattenInPlace` uses) over carrying per-item ancestor transforms. Simpler + removes an entire class of
+double-apply bugs (I traced two while prototyping). `PESelfPaintItem::setElement(element)` now takes just the
+element; item transform is always identity.
+
+**Verification (fresh dirs):** `test_pesvgeditor` now 22/22 green (added `pipeline_*` tests: nested-copper pad
+renders exactly once; flatten bakes an ancestor `translate` into absolute geometry and the composed render
+lands at the baked spot, old local spot stays blank). Standalone `tools/peditor` builds clean. Full app
+(`phoenix.pro`) links clean into `build-full/Fritzing`.
+
+
+## 2026-11-11 — Session 32 (Slice A: self-paint renderer `PESelfPaintItem` — the real double-draw fix)
+
+Session 31's hybrid `PEItemPlan` itemization is the correct *decision*, but it still feeds `PESvgEditor` a
+renderer (`QGraphicsSvgItem::setElementId`) that structurally cannot honor "draw only this subtree": Qt's
+`QSvgRenderer::render(p, elementId)` repaints the **whole doc clipped to that element's bbox** (proven), so a
+whole-group item + a leaf inside it still double-paint. Fix per `docs/design/pe-selfpaint-renderer.md`: stop
+using QtSvg item isolation; **self-paint** each planned unit into a `QPainterPath`.
+
+**Landed Slice A** (engine only; `PESvgEditor` is NOT yet rewired — that is Slice B):
+- `src/partseditor/peselfpaintitem.{h,cpp}` — a `QGraphicsObject` that decodes the primitives it *owns*
+  (one editable leaf, or the whole subtree of an opaque group) via `PETransform::shapeFromElement`, and in
+  `paint()` fills/strokes **only those** with each primitive's own fill/stroke/width. No clip-and-repaint, so
+  two items can never paint the same pixels — the double-draw class is structurally impossible.
+- Wired into `pri/partseditor.pri`; `test_pesvgeditor` switched to `QTEST_MAIN` (needs a QGuiApplication to
+  raster) + `-platform offscreen`, now linking `petransform`/`pepath`/`svgpath*`/`textutils`/`textmetrics`/
+  `misc`.
+- 3 new golden tests (20 total, all green): the keystone asserts a self-paint item for a pad paints the pad's
+  pixels and leaves a disjoint sibling's pixels (and the midpoint) untouched white — the exact thing QtSvg got
+  wrong.
+**Next (Slice B):** rewire `PESvgEditor::rebuildScene` to build `PESelfPaintItem`s from `PEItemPlan::plan`
+and delete the `QGraphicsSvgItem`/`setElementId` path.
+
+
+## 2026-11-11 — Session 31 (unify to a single hybrid render — kill the PCB double-draw)
+
+Session 30's "backdrop + on-top leaves" fix made Breadboard/Schematic show, but **PCB now painted its pads
+twice**: the copper layer group was drawn whole as the backdrop **and** each pad drew again as its own leaf
+item on top. The user confirmed the duplicate visibly. Root cause: two disjoint itemization strategies (whole-
+group backdrop *and* per-leaf) over the same subtree.
+
+**Decision (user-aligned): a single hybrid itemization, not two overlapping ones.** The DOM is walked once and
+each *disjoint* subtree becomes exactly one item:
+1. **editable leaf** (id'd primitive with computable bounds: rect/circle/ellipse/line/polyline/polygon) →
+   its own item, `data(0)=id` → selectable/movable.
+2. **opaque group** (subtree holds *no* editable graphic — breadboard body, pcb's non-id'd art, and any
+   `<path>`/`<text>` which are deferred) → rendered **whole** as one item, **no `data(0)`** → shows faithfully
+   but not selectable (breadboard element-editing deferred by design).
+3. **group that *does* contain editable descendants** (schematic's id'd art, pcb's `copper1 > connector0pad`) →
+   **descend** so each editable child becomes a rule-1 leaf.
+
+Because a group is either rendered whole OR descended into (never both), every id appears at most once →
+**no element is painted twice**. Empirically grounded: id-coverage per view on the sample part — pcb 7/58
+pads id'd (descend → pads editable), schematic 18/26 id'd (mostly editable art), breadboard 7/97 (only pin
+rings → opaque whole unit, correctly non-editable). `visibleLayers` still filters top-level groups (the fzp's
+`<layer layerId=...>` list; e.g. breadboard's top group `breadboard` ∈ `[breadboard]` → kept).
+
+**Refactor:** the pure decision logic moved out of `PESvgEditor::rebuildScene` into a new widget-free unit
+`src/partseditor/peitemplan.{h,cpp}` (`PEItemPlan::plan(root, visibleLayers) -> QVector<{id, editable}>`), so
+it is golden-tested headlessly without the QGraphicsView/QSvgRenderer stack. `rebuildScene` now just maps each
+planned entry to one `QGraphicsSvgItem` (editable leaves get `setPos(boundsOnElement.topLeft())` + `data(0)`;
+opaque groups get none). `hitTestId`/drag/undo unchanged (still keyed on `data(0)=id`).
+
+**Verified:** `test_pesvgeditor` extended with 3 goldens — `plan_decomposesGroupWithEditableLeaf_noGroupDup`
+(pads descended, group id NOT leaked → no double-draw), `plan_opaqueGroupRenderedWholeUneditable` (breadboard
+body → one non-editable whole item), `plan_noIdAppearsTwice` (the no-duplication guarantee) — **17 passed, 0
+failed**. Full app builds clean from a fresh dir; full test suite green (9 Boost + 3 QtTest + pesvgeditor).
+Offscreen harness screenshots confirm: **PCB** shows 7 gold pads + outline + holes with **no duplication**;
+**Breadboard** now shows the logo + pin rings (was blank) as a non-selectable unit. Added a `PED_SHOT` env +
+`argv[2]=view` capture hook to `tools/peditor` (grab central widget to PNG + quit) for CI-able visual diffing.
+
+---
+
 ## 2026-11-10 — Session 30 (fix: breadboard/schematic rendered blank — non-id'd artwork was never itemised)
 
 After Session 29 the four view tabs existed and **PCB** rendered, but **Breadboard/Schematic showed blank**.

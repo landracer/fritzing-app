@@ -31,7 +31,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pesvgeditor.h"
 
 class PEMetadataView;
-class PEToolView;
 class PaletteItem;
 
 // The Parts Editor, rebuilt around the sole-renderer (docs/design/pe-integration-plan.md). The central view
@@ -160,7 +159,6 @@ protected:
 
 	PEMetadataView * m_metadataView = nullptr;
 	PEConnectorsView * m_connectorsView = nullptr;
-	PEToolView * m_peToolView = nullptr;
 
 	// One sole-renderer surface per view (Breadboard / Schematic / PCB / Icon), each a tab, each editing
 	// its own view QDomDocument. Keyed by ViewID; tab order follows m_viewOrder.

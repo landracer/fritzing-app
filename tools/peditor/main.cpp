@@ -1,11 +1,19 @@
-// Standalone SVG part editor (docs/design/pe-sole-renderer.md).
+// Standalone SVG part editor (docs/design/pe-selfpaint-renderer.md; Slice F: save).
 //
 // Deliberately shares NOTHING with src/partseditor/pemainwindow.cpp or the Fritzing part-load
 // pipeline (ReferenceModel / PartBase / ModelItemManager). It opens a part the way a user does --
 // from a .fzp -- by resolving the fzp's <pcbView>/<breadboardView>/<schematicView><layers image=...>
-// to its svg, colourising that svg exactly like the app does, and handing the result to PESvgEditor,
-// which draws it through QtSvg with one QGraphicsSvgItem per top-level element. There is no ItemBase,
-// no ConnectorItem, no PE reload path in this render chain at all.
+// to its RAW svg and handing it to PESvgEditor, which draws it through the sole-renderer itemization
+// (PEItemPlan): a group that contains editable id'd primitives is descended so each pad/pin is its own
+// selectable item; a group of opaque (id-less/deferred) art is rendered whole as one non-selectable item.
+// No element is painted twice.
+//
+// RAW-SOURCE-OF-TRUTH (why this reads cleanly and Save is safe): library svgs already author each layer's
+// colour per layer-group (e.g. copper is authored fill/stroke #f7bd13). The editor therefore loads the svg
+// in its raw on-disk bytes -- no load-time recolouring -- and selects which layers to show via
+// PESvgEditor::setVisibleLayers. So editing mutates the real geometry and Save (File > Save / Save As) writes
+// those exact bytes back: geometry edits persist faithfully, and view colours never leak into the file. No
+// ItemBase, no ConnectorItem, no PE reload path in this render chain at all.
 #include <QApplication>
 #include <QMainWindow>
 #include <QMenuBar>
@@ -17,6 +25,9 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QStatusBar>
+#include <QTimer>
+#include <QMessageBox>
+#include <QCloseEvent>
 #include "pesvgeditor.h"
 #include "pesvgpartloader.h"
 
@@ -37,6 +48,29 @@ public:
         auto * openSvgAct = new QAction(tr("Open Raw &SVG..."), this);
         connect(openSvgAct, &QAction::triggered, this, [this]() { openSvgDialog(); });
         mFile->addAction(openSvgAct);
+
+        mFile->addSeparator();
+
+        // Slice F: persist edits. Save writes the edited DOM back to the file the part/svg was opened from
+        // (raw on-disk bytes, so geometry persists and no view colour leaks in). Save As lets the user pick a
+        // new path. Both drive PESvgEditor::saveToPath, which clears dirty on success.
+        auto * saveAct = new QAction(tr("&Save"), this);
+        saveAct->setShortcut(QKeySequence::Save);
+        connect(saveAct, &QAction::triggered, this, [this]() {
+            if (saveDocument(m_editor->currentFilepath()))
+                statusBar()->showMessage(tr("Saved %1").arg(m_editor->currentFilepath()));
+        });
+        mFile->addAction(saveAct);
+
+        auto * saveAsAct = new QAction(tr("Save &As..."), this);
+        saveAsAct->setShortcut(QKeySequence::SaveAs);
+        connect(saveAsAct, &QAction::triggered, this, [this]() {
+            const QString start = m_editor->currentFilepath().isEmpty() ? m_svgDirRoot : m_editor->currentFilepath();
+            const QString path = QFileDialog::getSaveFileName(this, tr("Save SVG"), start, tr("SVG files (*.svg)"));
+            if (!path.isEmpty() && saveDocument(path))
+                statusBar()->showMessage(tr("Saved %1").arg(path));
+        });
+        mFile->addAction(saveAsAct);
 
         mFile->addSeparator();
         auto * quitAct = new QAction(tr("&Quit"), this);
@@ -106,6 +140,37 @@ public:
         return loadFzp(fzpPath, m_activeView);
     }
 
+    // On close, if there are unsaved edits, offer Save / Discard / Cancel. Save writes to the current path
+    // (or prompts Save As when there is none); Cancel aborts the close.
+    void closeEvent(QCloseEvent * ev) override {
+        if (!m_dirty) { ev->accept(); return; }
+        const auto r = QMessageBox::question(this, tr("Unsaved changes"),
+            tr("You have unsaved changes. Save before closing?"),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+        if (r == QMessageBox::Cancel) { ev->ignore(); return; }
+        if (r == QMessageBox::Save) {
+            const QString cur = m_editor->currentFilepath();
+            const QString start = cur.isEmpty() ? m_svgDirRoot : cur;
+            const QString path = cur.isEmpty()
+                ? QFileDialog::getSaveFileName(this, tr("Save SVG"), start, tr("SVG files (*.svg)"))
+                : cur;
+            if (path.isEmpty() || !m_editor->saveToPath(path)) { ev->ignore(); return; }  // cancel/failed -> stay open
+        }
+        ev->accept();
+    }
+
+    // Switch the active view by name (pcb|breadboard|schematic) and reload the current part. Used by
+    // the headless capture path (argv[2]) so each view's sole-render can be captured.
+    void applyViewName(const QString & name) {
+        PESvgPartLoader::View v = m_activeView;
+        const QString n = name.toLower();
+        if (n == "pcb") v = PESvgPartLoader::PcbView;
+        else if (n == "breadboard") v = PESvgPartLoader::BreadboardView;
+        else if (n == "schematic") v = PESvgPartLoader::SchematicView;
+        m_activeView = v;
+        if (!m_currentFzp.isEmpty()) loadFzp(m_currentFzp, v);
+    }
+
     bool openSvg(const QString & svgPath) {
         QFile f(svgPath);
         if (!f.open(QIODevice::ReadOnly)) {
@@ -145,6 +210,20 @@ private:
         updateTitle();
         statusBar()->showMessage(tr("%1 — %2 (%3). Click a shape to select, drag to move, Ctrl+Z to undo.")
             .arg(title, r.svgLabel, viewName(view)));
+        return true;
+    }
+
+    // Drive the editor's save. Returns true on success (PESvgEditor clears dirty and re-emits dirtyChanged,
+    // which updates the title). On an empty path or a write failure it reports and returns false.
+    bool saveDocument(const QString & path) {
+        if (path.isEmpty()) {
+            statusBar()->showMessage(tr("Nothing to save (no file open)"));
+            return false;
+        }
+        if (!m_editor->saveToPath(path)) {
+            statusBar()->showMessage(tr("Save failed: %1").arg(path));
+            return false;
+        }
         return true;
     }
 
@@ -221,6 +300,20 @@ int main(int argc, char ** argv) {
         const QString a = QString::fromUtf8(argv[1]);
         if (a.endsWith(".fzp", Qt::CaseInsensitive)) win.openPart(a);
         else win.openSvg(a);
+    }
+
+    // Optional second arg selects the view to render (pcb|breadboard|schematic), used by the
+    // headless capture hook so each view's sole-render can be eyeballed/diffed.
+    if (argc >= 3) win.applyViewName(QString::fromUtf8(argv[2]));
+
+    // Headless capture hook: when PED_SHOT is set, render the window to that PNG once it has been
+    // mapped and painted, then quit. Lets the sole-renderer visual be diffed in CI without a human.
+    const QString shot = qEnvironmentVariable("PED_SHOT");
+    if (!shot.isEmpty()) {
+        QTimer::singleShot(600, [&win, shot]() {
+            win.grab().save(shot);
+            QCoreApplication::quit();
+        });
     }
     return app.exec();
 }

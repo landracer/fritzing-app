@@ -46,26 +46,20 @@ HEADERS += \
     \
     src/partseditor/pemainwindow.h \
     src/partseditor/pemetadataview.h \
-    src/partseditor/pedocument.h \
     src/partseditor/pepath.h \
-    src/partseditor/peprimitive.h \
-    src/partseditor/peconnector.h \
-    src/partseditor/peblankpart.h \
-    src/partseditor/pesvgimport.h \
     src/partseditor/peunits.h \
     src/partseditor/petransform.h \
     src/partseditor/peviewlayermap.h \
     src/partseditor/pesvgeditor.h \
     src/partseditor/pesvgpartloader.h \
     src/partseditor/peprimitivegeom.h \
+    src/partseditor/peitemplan.h \
+    src/partseditor/peselfpaintitem.h \
     src/partseditor/pehistoryentrydialog.h \
     src/partseditor/pecommands.h \
     src/partseditor/peviewwriter.h \
     src/partseditor/peconnectorsview.h \
-    src/partseditor/pesvgview.h \
-    src/partseditor/petoolview.h \
     src/partseditor/peutils.h \
-    src/partseditor/pegraphicsitem.h \
     src/partseditor/kicadmoduledialog.h \
     src/partseditor/hashpopulatewidget.h \
     src/partseditor/baseremovebutton.h \
@@ -96,26 +90,20 @@ SOURCES += \
      \
     src/partseditor/pemainwindow.cpp \
     src/partseditor/pemetadataview.cpp \
-    src/partseditor/pedocument.cpp \
     src/partseditor/pepath.cpp \
-    src/partseditor/peprimitive.cpp \
-    src/partseditor/peconnector.cpp \
-    src/partseditor/peblankpart.cpp \
-    src/partseditor/pesvgimport.cpp \
     src/partseditor/peunits.cpp \
     src/partseditor/peviewlayermap.cpp \
     src/partseditor/pesvgeditor.cpp \
     src/partseditor/pesvgpartloader.cpp \
     src/partseditor/peprimitivegeom.cpp \
+    src/partseditor/peitemplan.cpp \
     src/partseditor/petransform.cpp \
+    src/partseditor/peselfpaintitem.cpp \
     src/partseditor/pehistoryentrydialog.cpp \
     src/partseditor/pecommands.cpp \
     src/partseditor/peviewwriter.cpp \
     src/partseditor/peconnectorsview.cpp \
-    src/partseditor/pesvgview.cpp \
-    src/partseditor/petoolview.cpp \
     src/partseditor/peutils.cpp \
-    src/partseditor/pegraphicsitem.cpp \
     src/partseditor/kicadmoduledialog.cpp \
     src/partseditor/hashpopulatewidget.cpp \
     src/partseditor/tageditorwidget.cpp \

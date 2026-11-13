@@ -294,7 +294,11 @@ PESvgPartLoader::Result PESvgPartLoader::loadPart(const QString & fzpPath, View 
     }
     svg.close();
 
-    r.document = colouriseForView(svgDoc, view);
+    // RAW-SOURCE-OF-TRUTH: hand the editor the svg EXACTLY as authored on disk -- no recolouring. Library
+    // svgs already author each layer's colour per layer-group (e.g. copper stroke #f7bd13), so the raw DOM
+    // already displays correctly, and PEItemPlan's per-view layer filter selects what is shown. This is what
+    // lets Save write the bytes straight back without leaking any view colour into the file.
+    r.document = svgDoc;
     r.ok = true;
     return r;
 }

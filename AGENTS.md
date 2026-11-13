@@ -26,16 +26,53 @@ State-of-record at the time of writing:
   Session 9.
 - **Parts Editor sole-renderer (newest, standalone):** a clean PCB render/edit surface —
   `src/partseditor/pesvgeditor.*` (`PESvgEditor`), `pesvgpartloader.*` (loads a part via `.fzp`, colourises
-  the DOM in place, nested-copper confined), `peprimitivegeom.*` (per-kind move/resize geometry) — driven by
-  the standalone `tools/peditor` app. It renders one `QGraphicsSvgItem` per addressable leaf and supports
-  select / drag-move / undo/redo, bypassing the legacy `ItemBase`/`PEGraphicsItem` double-renderer. **Not yet
-  wired into `PEMainWindow`** — steps 1–5 (PCB) proven standalone. Design + status: `docs/design/pe-sole-renderer.md`;
-  engine logic golden-tested in `tests/auto/test_pesvgeditor`. **Integration plan (rewrite-not-retrofit,
-slices A–H): `docs/design/pe-integration-plan.md`** — the next-task entry point.
+  the DOM in place, nested-copper confined), `peprimitivegeom.*` (per-kind move/resize geometry),
+  `peitemplan.*` (`PEItemPlan::plan` — the pure, headless-tested itemization decision) — driven by
+  the standalone `tools/peditor` app. It renders via a **self-paint** model (Slices A–D, `peselfpaintitem.*`):
+  each planned unit from `PEItemPlan::plan` is flattened (absolute geometry, identity transform) and bound to one
+  `PESelfPaintItem` (a `QGraphicsObject`) that paints ONLY its own primitive(s) via `PETransform::shapeFromElement`
+  — a group of editable id'd primitives is descended so each pad/pin is its own selectable item (`data(0)=id`);
+  a group of opaque id-less art is rendered whole as one non-selectable item — never both, so no element is painted
+  twice. `PESelfPaintItem::hitTestId(scene, point)` is the smallest-area selection. Editing is **attribute-level**
+  via `PEPrimGeom`: body-drag → `moveBy(el,delta)`; a selected **resizable** primitive (rect/ellipse/line/polyline/
+  polygon — `isResizable(el)`) shows a dashed marquee + **8 grips** (corners + edge midpoints) → the drag live-writes
+  the resized box via generic `resizeTo(el, from, to)` (growing from the grabbed edge, not translating); a `<circle>`
+  is **not** resizable (a single `r` has no honest per-axis box resize, so it shows no grips and only moves); a selected
+  `<path>` shows each decoded **anchor as a node grip** → `editPathAnchor(el,i,point)` (a `<path>` is editable iff its
+  anchors decode — `isEditableGraphic` fixed in Slice D so paths are selectable). Grip/node size is zoom-independent
+  (`kGripPx / viewScale`). Undo is a tagged
+  `UndoEntry` (Move/Resize/Anchor) replayed/reversed exactly. Select / drag-move / resize / node-edit / undo,
+  bypassing (and, in Slice E, deleting) the legacy `ItemBase`/`PEGraphicsItem` double-renderer. **Not yet wired
+  into `PEMainWindow`'s graphic-edit path** — the sole-renderer surface + selection/move/resize/node-edit
+  interaction proven standalone (chrome golden-tested via the real controller). Design + status:
+  `docs/design/pe-selfpaint-renderer.md` (current, §2b/§3b/§4) / `docs/design/pe-sole-renderer.md` (original);
+  engine + interaction golden-tested in `tests/auto/test_pesvgeditor`. **Integration plan (rewrite-not-retrofit,
+slices A–H): `docs/design/pe-integration-plan.md`** — the MainWindow-wiring entry point.
+- **Parts Editor save + raw-source-of-truth (newest, Slice F):** the standalone `peditor` now has **File ▸ Save**
+  (Ctrl+S, writes back to the opened file) / **Save As…** (Ctrl+Shift+S) and a **closeEvent** that prompts
+  Save/Discard/Cancel when dirty. The editor exposes `PESvgEditor::saveToPath(path)` (serialises the owned
+  `QDomDocument` via `toString(0)` and writes UTF-8 through `TextUtils::writeUtf8`, then clears dirty and emits
+  `saved(path)`) and a `saved()` signal. **Raw-source-of-truth:** `PESvgPartLoader::loadPart` now returns the svg
+  in its **raw on-disk bytes** — it does *not* recolour on load. Library svgs already author each layer's colour
+  per layer-group (e.g. copper authored `stroke:#f7bd13`), so the raw DOM already displays correctly and
+  `PEItemPlan`'s per-view layer filter selects what is shown. That is what makes Save a **lossless** round-trip:
+  geometry edits persist in full and **no view colour is ever baked into the file** (the whole point — the raw file
+  is the single source of truth; colourisation was only ever a display transform). The old `colouriseForView`
+  display helper is retained (still golden-tested) but is no longer applied on the load path. Save is golden-tested
+  in `test_pesvgeditor` (`save_roundTripsThroughDisk`, `save_failsWithoutFilepath`).
+- **Parts Editor TOOLING roadmap (newest, the active front — read this to continue):** the sole-renderer spine
+  (render/select/move/undo/save) is DONE; what remains to make the editor *useful* is tracked as landable slices in
+  **`docs/design/pe-editor-roadmap.md`** — **R1** resize-that-actually-resizes (today a grip-drag translates instead of
+  resizing), **R2** measurement/units (px↔in/mm/mil via `peunits`; not yet surfaced), **R3** drag-in alignment guides /
+  snapping, **R4** zoom (wheel-at-cursor + slider), **R5** create/toolbox (add rect/circle/ellipse/line/path/text +
+  pull existing library shapes/footprints/parts), **R6** Metadata/Icon blank + Schematic-not-showing (root cause: the
+  no-palette-item fallback `retrieveModelPart("generic_ic_dip_8_300mil")` names a moduleId that **does not exist** in
+  the bundled tree → blank default launch). All still on `feature/vector-editor`, uncommitted.
 - **Tests:** all wired test suites build and pass on Qt 6.11.2 (see §5). `test_folderutils` was wired
   into `auto.pro` and the Boost-suite `.pro` files were converted to all-explicit `$$absolute_path()`
   source/headers (the path-keying hazard that made the aggregate `-j` build fail nondeterministically).
-  `test_pesvgeditor` (QtTest, `QTEST_GUILESS_MAIN`) was added for the sole-renderer engine.
+  `test_pesvgeditor` (QtTest, `QTEST_MAIN` — it links the widget/path-decode stack to raster-render the
+  self-paint item) was added for the sole-renderer engine + interaction.
 
 ## 2. How the project is laid out
 
@@ -62,6 +99,13 @@ Top-level:
   - `docs/design/pe-integration-plan.md` — the rewrite-not-retrofit plan for wiring the new `PESvgEditor`
     sole-renderer into `PEMainWindow`: explicit keep-vs-rewrite boundary, DOM-writer save design, and
     landable slices A–H. **Start the integration task here.**
+  - `docs/design/pe-selfpaint-renderer.md` — **the actual fix for the PCB double-draw**, with proven root
+    cause: QtSvg `render(id)` repaints the whole doc clipped to the bbox (proven this session), so per-element
+    isolation is impossible and whole-group+leaf items always double-paint. Fix = self-paint each element
+    (`PETransform::shapeFromElement` → fill/stroke the path), driven by `PEItemPlan`. Slices A–E (A–D landed
+    as above; E deleted the entire legacy QtSvg-isolation cluster — `PEGraphicsItem`/`PESvgView`/`PEToolView`/
+    `PEDocument`/`PEElement`/`PEPrimitive`/`PEConnector`/`PEBlankPart`/`PESvgImport` — now that `PEMainWindow`
+    drives `PESvgEditor`. This is where the editor work actually goes now.
   - `docs/internal/panelizer-progress.md` — newest-first working log for the panelizer/gerber effort.
   - `docs/internal/issue-triage-log.md` — newest-first log of upstream issues we investigated and **shot
     down** (closed as FIXED / NOT REPRODUCIBLE / USER ERROR / WONTFIX / DESIGN LIMITATION), with root cause
@@ -93,6 +137,10 @@ OpenSSL 3, **ngspice shared lib** (searched in standard dirs like `/usr/lib64`, 
 - **Golden-test the engine logic**, not just smoke tests (gerber bytes, SVG parse geometry).
 - **Commit style:** Conventional Commits (`feat(scope):`, `fix(scope):`, `test(scope):`, `docs(scope):`).
   Small, landable, reviewable slices — reviewable diff size is the maintainer bottleneck.
+- **Never destroy uncommitted work.** Before any destructive Git command (`git checkout --`, `git restore`,
+  `git reset`, `git clean`, patch reversals), commit the current work or save a snapshot/patch to the backup
+  location. A path-level `git checkout --` on uncommitted code permanently erases the only copy. Use
+  `git clean -fd` only for ignored scratch; do not use `-fdx` unless scratch is backed up.
 - **New feature work:** prefer a new `feature/*` branch from `develop`, land as its own slice, and
   open a PR into `develop`. Update the relevant `docs/design/*` and append to `docs/internal/*`.
 
@@ -119,15 +167,16 @@ make -j"$(nproc)"
 ./test_panelizer/test_panelizer         -platform offscreen
 ./test_gerberpreview/test_gerberpreview -platform offscreen
 ./test_peviewlayermap/test_peviewlayermap -platform offscreen
-# QtTest suite with a GUI-less QGuiApplication-free main (QTEST_GUILESS_MAIN): takes NO -platform arg.
-./test_pesvgeditor/test_pesvgeditor
+# test_pesvgeditor is now QTEST_MAIN (widgets raster render), so it also takes -platform offscreen.
+./test_pesvgeditor/test_pesvgeditor     -platform offscreen
 ```
 
-- **Boost suites:** "no assertion failures were found" == pass. `test_pedocument` is a Boost suite
-  despite the `test_pe*` prefix — run it bare (no `-platform offscreen`; that arg is QtTest-only).
-- **QtTest suites:** print a `Totals: N passed, 0 failed` line. `test_pesvgeditor` uses
-  `QTEST_GUILESS_MAIN` (pure DOM/colourise logic, no widgets), so run it **without** `-platform
-  offscreen` — a GUI-less binary treats an unknown `-platform` token as bad args and prints usage.
+- **Boost suites:** "no assertion failures were found" == pass (run bare, no `-platform offscreen`; that arg
+  is QtTest-only). Note: `test_pedocument` was **deleted** in Slice E (it tested the now-removed legacy
+  `PEElement`/`PEDocument` model); its live `PEPath` round-trip goldens were ported into `test_pesvgeditor`.
+- **QtTest suites:** print a `Totals: N passed, 0 failed` line, and all take `-platform offscreen`
+  (headless raster). `test_pesvgeditor` is now `QTEST_MAIN` because the self-paint renderer paints to a
+  `QImage` via the widget stack — it is no longer GUI-less-only.
 - `test_qsysinfo` is **intentionally not wired** into `auto.pro` — its golden hardcodes one specific
   machine (OS/kernel/arch), so it can only ever pass on that host. Do not wire it in; if revived,
   rewrite it to assert behavior, not a machine-specific golden.

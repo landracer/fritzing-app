@@ -98,3 +98,11 @@ bt/
 # local scratch / removed-from-project PE code kept out of git
 src/partseditor/obsolete/
 docs/internal/pe-findings.md
+
+# local scratch notes/screenshots and scratch directories (keep out of feature commits)
+homerun*.md
+pr-*.md
+screen.png
+dist/
+bt_dbg/
+parts/

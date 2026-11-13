@@ -3,25 +3,33 @@
 
 #include "pesvgeditor.h"
 #include "peprimitivegeom.h"
+#include "peitemplan.h"
+#include "petransform.h"
+#include "peselfpaintitem.h"
+#include "../utils/textutils.h"
 
 #include <QGraphicsScene>
 #include <QGraphicsView>
-#include <QGraphicsSvgItem>
 #include <QGraphicsRectItem>
-#include <QSvgRenderer>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QResizeEvent>
 #include <QDomElement>
 #include <QPen>
+#include <QLineF>
 #include <QtDebug>
 #include <functional>
 
-// One QGraphicsSvgItem per modelled graphic (a leaf with an id + computable localBounds), rendered
-// through a single shared QSvgRenderer by element id. Per-leaf items -- rather than one item per
-// layer group -- are what let the editor hit-test, select and move an INDIVIDUAL graphic (a pad)
-// instead of its whole layer. QtSvg still renders each leaf correctly, so the nested copper0>copper1
-// case that broke the old split renderer is still handled -- we just also address its children.
+// On-screen size (pixels) of a selection grip / node mark square. Zoom-independent: divided by the view
+// scale when placed in scene coords, so it stays this many device px regardless of zoom and is always grabbable.
+static constexpr qreal kGripPx = 7.0;
+
+// One PESelfPaintItem per planned unit (a leaf with an id, or an opaque art group), each self-painting its
+// own decoded QPainterPath. Per-leaf items -- rather than one item per layer group -- are what let the
+// editor hit-test, select and move an INDIVIDUAL graphic (a pad) instead of its whole layer. Because each
+// item paints ONLY the primitive(s) PEItemPlan assigned to it (no QtSvg whole-doc-clip repaint), the nested
+// copper0>copper1 case is handled without ever painting the same pixels twice -- the double-draw that QtSvg
+// isolation caused is structurally impossible here.
 
 // The view forwards mouse events to the editor in scene coordinates. It does NOT use Qt's built-in
 // item drag; the editor translates the element in the DOM itself so the document stays the source of
@@ -80,14 +88,11 @@ PESvgEditor::PESvgEditor(QWidget * parent)
 	m_layout->setContentsMargins(0, 0, 0, 0);
 	m_layout->addWidget(m_view, 1);
 	m_layout->addWidget(m_svgLabel);
-
-	m_renderer = nullptr;
 }
 
 PESvgEditor::~PESvgEditor()
 {
-	delete m_renderer;   // items reference but do not own it; destroy after the scene.
-	m_renderer = nullptr;
+	// No renderer member any more (self-paint items own their decoded geometry).
 }
 
 void PESvgEditor::setDocument(const QDomDocument & doc, const QString & svgLabel)
@@ -118,73 +123,40 @@ QDomElement PESvgEditor::selectedElement() const
 	if (m_selectedId.isEmpty()) return QDomElement();
 	return PEPrimGeom::findById(m_doc.documentElement(), m_selectedId);
 }
-// The view's whole graphic is painted by a single backdrop QGraphicsSvgItem over the full document, so
-// ALL art shows — including `<path>`/`<line>` artwork that (unlike pads/pins) has no id. On top of that
-// backdrop, each *addressable leaf* (a graphic with an id + computable bounds) also gets its own item so
-// it can be hit-tested and moved in place; those overlap their backdrop copy exactly, so no visual change.
-// `visibleLayers` (when non-empty) restricts which top-level layer groups are drawn (fzp-declared layers).
+
+// Sole-renderer (self-paint) itemization -- the one render, no duplication. PEItemPlan::plan() decides the
+// disjoint set of elements to draw (pure DOM, golden-tested); here each becomes exactly ONE PESelfPaintItem.
+// Before binding, each planned element is flattened (PETransform::flatten, idempotent) so its inherited
+// transform is baked into absolute geometry attrs and no 'transform' remains -- PESelfPaintItem then paints
+// its primitive(s) at the identity transform, so the decoded path IS the scene geometry. Editable leaves
+// carry their id under data(0) (hit-test/move resolve it) and are selectable; opaque group items carry no
+// data(0) -> they render faithfully but are not selectable (editing deferred). `visibleLayers` filters
+// top-level layer groups.
 void PESvgEditor::rebuildScene()
 {
-	m_scene->clear();                 // deletes items AND m_selection (they are scene items)
-	m_selection = nullptr;
-	delete m_renderer;
-	m_renderer = nullptr;
+	m_scene->clear();                 // deletes items AND the chrome (marquee + handles) -- they are scene items
+	m_selection = nullptr;            // clear() deleted them; drop the dangling pointers so updateSelectionVisual
+	m_handles.clear();                // (called at the end here) never iterates freed items.
 
 	if (m_doc.isNull()) {
 		return;
 	}
 
-	const QString svg = m_doc.toString();
-	m_renderer = new QSvgRenderer(svg.toUtf8());
-	if (!m_renderer->isValid()) {
-		qWarning() << "PESvgEditor: QSvgRenderer could not parse the part SVG";
-		return;
-	}
-
 	const QDomElement root = m_doc.documentElement();
-
-	// Backdrop: render each visible top-level layer group (or the whole doc) as one item so the part
-	// paints in full. Doing it per layer group (by id) keeps the visibleLayers filter meaningful.
-	for (QDomElement e = root.firstChildElement(); !e.isNull(); e = e.nextSiblingElement()) {
-		const QString gid = e.attribute(QStringLiteral("id"));
-		if (!m_visibleLayers.isEmpty() && !gid.isEmpty() && !m_visibleLayers.contains(gid)) {
-			continue;   // layer filter (fzp-declared layers for the active view)
+	const QVector<PEItemPlan::Planned> planned = PEItemPlan::plan(root, m_visibleLayers);
+	for (const PEItemPlan::Planned & p : planned) {
+		QDomElement el = PEPrimGeom::findById(root, p.id);
+		if (el.isNull()) continue;
+		// Make geometry absolute + transform-free so the self-paint item renders at identity. Non-destructive
+		// to the *logical* geometry: this is the established load-time bake (idempotent across re-renders).
+		PETransform::flatten(el);
+		auto * item = new PESelfPaintItem();
+		item->setElement(el);
+		if (p.editable) {
+			item->setData(0, p.id);   // id carried on the item for hit-testing/move
+			item->setEditable(true);
 		}
-		if (gid.isEmpty() || !m_renderer->elementExists(gid)) continue;
-		auto * backdrop = new QGraphicsSvgItem();
-		backdrop->setSharedRenderer(m_renderer);
-		backdrop->setElementId(gid);
-		backdrop->setZValue(-1);   // under the addressable leaf items
-		m_scene->addItem(backdrop);
-	}
-
-	// Addressable leaves (id + valid bounds) get their own selectable/movable item on top.
-	std::function<void(const QDomElement &)> walk = [&](const QDomElement & e) {
-		for (QDomElement c = e.firstChildElement(); !c.isNull(); c = c.nextSiblingElement()) {
-			const QString id = c.attribute(QStringLiteral("id"));
-			const bool graphic = PEPrimGeom::kindFor(c) != PEPrimGeom::Kind::Group
-			                     && PEPrimGeom::kindFor(c) != PEPrimGeom::Kind::Unknown;
-			if (!id.isEmpty() && graphic && PEPrimGeom::localBounds(c).isValid()
-			    && m_renderer->elementExists(id)) {
-				auto * item = new QGraphicsSvgItem();
-				item->setSharedRenderer(m_renderer);
-				item->setElementId(id);
-				const QRectF bb = m_renderer->boundsOnElement(id);
-				if (bb.isValid()) item->setPos(bb.topLeft());
-				item->setData(0, id);        // id carried on the item for hit-testing
-				m_scene->addItem(item);
-				continue;                    // rendered whole; its children are inside this item
-			}
-			walk(c);
-		}
-	};
-
-	for (QDomElement e = root.firstChildElement(); !e.isNull(); e = e.nextSiblingElement()) {
-		const QString id = e.attribute(QStringLiteral("id"));
-		if (!m_visibleLayers.isEmpty() && !id.isEmpty() && !m_visibleLayers.contains(id)) {
-			continue;   // layer filter (fzp-declared layers for the active view)
-		}
-		walk(e);
+		m_scene->addItem(item);
 	}
 
 	m_scene->setSceneRect(m_scene->itemsBoundingRect().adjusted(-8, -8, 8, 8));
@@ -196,27 +168,91 @@ void PESvgEditor::rebuildScene()
 	updateSelectionVisual();
 }
 
+QRectF PESvgEditor::selectionRect() const
+{
+	if (m_selectedId.isEmpty()) return QRectF();
+	return PEPrimGeom::localBounds(selectedElement());
+}
+
+// The 8 resize handles over the selection's absolute bounds, each a small square centred on a corner or
+// edge midpoint. Size is zoom-independent (a constant on-screen pixel size divided by the view scale), so a
+// grip is as grabbable zoomed out as zoomed in. Corner masks combine two edges (e.g. GripTop|GripLeft).
+QVector<PESvgEditor::GripHandle> PESvgEditor::resizeGrips() const
+{
+	QVector<GripHandle> out;
+	const QRectF b = selectionRect();
+	if (!b.isValid()) return out;
+	const qreal s = (m_view && m_view->transform().m11() != 0.0) ? m_view->transform().m11() : 1.0;
+	const qreal half = (kGripPx / s) / 2.0;
+	const qreal cx = b.center().x(), cy = b.center().y();
+	auto mk = [&](int mask, QPointF c) { return GripHandle{ mask, QRectF(c.x() - half, c.y() - half, half * 2, half * 2) }; };
+	out << mk(GripTop    | GripLeft,  b.topLeft())
+	    << mk(GripTop    | GripRight, b.topRight())
+	    << mk(GripBottom | GripLeft,  b.bottomLeft())
+	    << mk(GripBottom | GripRight, b.bottomRight())
+	    << mk(GripTop,    QPointF(cx, b.top()))
+	    << mk(GripBottom, QPointF(cx, b.bottom()))
+	    << mk(GripLeft,   QPointF(b.left(),  cy))
+	    << mk(GripRight,  QPointF(b.right(), cy));
+	return out;
+}
+
+// The decoded path anchors of the selection, in absolute scene coords (empty if not a path).
+QVector<QPointF> PESvgEditor::anchorGrips() const
+{
+	if (m_selectedId.isEmpty()) return QVector<QPointF>();
+	return PEPrimGeom::pathAnchors(selectedElement());
+}
+
+// Which resize-grip square the scene point is on. Nearest-center within half a grip wins.
+int PESvgEditor::hitResizeGrip(const QPointF & scenePoint) const
+{
+	const qreal s = (m_view && m_view->transform().m11() != 0.0) ? m_view->transform().m11() : 1.0;
+	const qreal tol = (kGripPx / s);
+	int best = GripNone;
+	qreal bestDist = 1e30;
+	for (const GripHandle & g : resizeGrips()) {
+		const QPointF c = g.rect.center();
+		const qreal d = QLineF(c, scenePoint).length();
+		if (d <= tol / 2.0 && d < bestDist) { bestDist = d; best = g.mask; }
+	}
+	return best;
+}
+
+// Which path-anchor node (segment index) is within `tolerance` (user units) of the scene point; -1 if none.
+int PESvgEditor::hitAnchorGrip(const QPointF & scenePoint, qreal tolerance) const
+{
+	const QVector<QPointF> pts = anchorGrips();
+	int best = -1;
+	qreal bestDist = 1e30;
+	for (int i = 0; i < pts.count(); ++i) {
+		const qreal d = QLineF(pts.at(i), scenePoint).length();
+		if (d <= tolerance && d < bestDist) { bestDist = d; best = i; }
+	}
+	return best;
+}
+
 void PESvgEditor::updateSelectionVisual()
 {
-	if (m_selection) {
-		m_selection->setParentItem(nullptr);
-		if (m_selection->scene()) m_selection->scene()->removeItem(m_selection);
-		delete m_selection;
-		m_selection = nullptr;
-	}
+	// Tear down the previous chrome (marquee + all grip/node squares).
+	auto removeItem = [this](QGraphicsItem * it) {
+		if (!it) return;
+		if (it->scene()) it->scene()->removeItem(it);
+		delete it;
+	};
+	removeItem(m_selection);
+	m_selection = nullptr;
+	for (QGraphicsRectItem * h : m_handles) removeItem(h);
+	m_handles.clear();
+
+	if (m_selectedId.isEmpty()) return;
 	const QDomElement el = selectedElement();
 	if (el.isNull()) return;
 
-	QRectF b = PEPrimGeom::localBounds(el);
+	// Marquee: a dashed, cosmetic (zoom-independent) outline of the element's absolute bounds. It lives at
+	// the scene (not parented) so it never inherits a transform -- geometry is already absolute.
+	const QRectF b = PEPrimGeom::localBounds(el);
 	if (!b.isValid()) return;
-
-	// Parent the outline to the selected item so it inherits the same element transform and stays
-	// glued to the shape even while the item is dragged (setPos on the item moves the outline too).
-	QGraphicsItem * owner = nullptr;
-	for (QGraphicsItem * it : m_scene->items()) {
-		if (it->data(0).toString() == m_selectedId) { owner = it; break; }
-	}
-
 	QPen pen(QColor(0x2a, 0xa0, 0xff));
 	pen.setWidth(0);
 	pen.setStyle(Qt::DashLine);
@@ -224,12 +260,38 @@ void PESvgEditor::updateSelectionVisual()
 	m_selection = new QGraphicsRectItem(b);
 	m_selection->setPen(pen);
 	m_selection->setBrush(Qt::NoBrush);
-	m_selection->setFlag(QGraphicsItem::ItemIsMovable, false);
-	if (owner) {
-		m_selection->setParentItem(owner);
-	} else {
-		m_selection->setZValue(1000);
-		m_scene->addItem(m_selection);
+	m_selection->setZValue(1000);
+	m_scene->addItem(m_selection);
+
+	const QColor fill = (PEPrimGeom::kindFor(el) == PEPrimGeom::Kind::Path) ? Qt::white
+	                                                                       : QColor(0x2a, 0xa0, 0xff);
+
+	// Resize grips: drawn for every kind PEPrimGeom::isResizable accepts (rect/ellipse/line/polyline/polygon; a
+	// circle is round so it is not resizable and gets none), not just rect -- a grip-drag resizes any of them (R1).
+	// A <path> is not box-resizable; it is edited node by node below.
+	if (PEPrimGeom::isResizable(el)) {
+		for (const GripHandle & g : resizeGrips()) {
+			auto * gi = new QGraphicsRectItem(g.rect);
+			gi->setPen(pen);
+			gi->setBrush(fill);
+			gi->setZValue(1001);
+			m_scene->addItem(gi);
+			m_handles.append(gi);
+		}
+	}
+
+	// Node grips: for a <path>, a small cosmetic square at each decoded segment anchor (draggable node).
+	if (PEPrimGeom::kindFor(el) == PEPrimGeom::Kind::Path) {
+		const qreal s = (m_view && m_view->transform().m11() != 0.0) ? m_view->transform().m11() : 1.0;
+		const qreal half = (kGripPx / s) / 2.0;
+		for (const QPointF & a : anchorGrips()) {
+			auto * ai = new QGraphicsRectItem(QRectF(a.x() - half, a.y() - half, half * 2, half * 2));
+			ai->setPen(pen);
+			ai->setBrush(fill);
+			ai->setZValue(1001);
+			m_scene->addItem(ai);
+			m_handles.append(ai);
+		}
 	}
 }
 
@@ -248,36 +310,45 @@ void PESvgEditor::resizeEvent(QResizeEvent * event)
 	}
 }
 
-
 // ---- interaction ---------------------------------------------------------------
 
-// Hit-test the topmost leaf item whose local bounds contain the scene point. Items carry their
-// element id under data(0); because each renders its element at its own local coordinates with the
-// item placed at scene origin, the element's local bounds == its scene bounds.
-static QString hitTestId(QGraphicsScene * scene, const QPointF & scenePos)
+void PESvgEditor::pushUndo(const UndoEntry & e)
 {
-	// QGraphicsSvgItem::boundingRect() is the element's bounds in ITEM-LOCAL space (origin at the
-	// element's own top-left), and each item now carries the element's ancestor transform, so
-	// item->mapFromScene + boundingRect is an exact local hit-test. Among every id-bearing item that
-	// contains the point, the SMALLEST-area one is the most specific (a pad drawn over a bigger
-	// mounting-hole box / layer background), so pick that -- this is what makes clicking a pad select
-	// the pad, not the hole or the layer it sits in.
-	QString best;
-	qreal bestArea = 1e30;
-	const QList<QGraphicsItem *> candidates = scene->items();
-	for (QGraphicsItem * it : candidates) {
-		if (it->data(0).isNull()) continue;              // skip selection outline etc.
-		const QPointF local = it->mapFromScene(scenePos);
-		if (!it->boundingRect().contains(local)) continue;
-		const qreal area = it->boundingRect().width() * it->boundingRect().height();
-		if (area < bestArea) { bestArea = area; best = it->data(0).toString(); }
-	}
-	return best;
+	m_undo.resize(m_undoPos);     // drop any redo tail
+	m_undo.append(e);
+	m_undoPos = m_undo.size();
+	m_dirty = true;
+	emit dirtyChanged(true);
+	emit undoRedoChanged();
 }
 
 void PESvgEditor::handlePress(const QPointF & scenePos)
 {
-	const QString id = hitTestId(m_scene, scenePos);
+	// If a grip/node of the CURRENT selection is grabbed, that takes priority over re-hitting the body.
+	if (!m_selectedId.isEmpty()) {
+		const QDomElement sel = selectedElement();
+		const PEPrimGeom::Kind k = PEPrimGeom::kindFor(sel);
+		// A <path> is node-edited, never box-resized; every other resizable kind gets the 8 grips.
+		if (k == PEPrimGeom::Kind::Path) {
+			const qreal s = (m_view && m_view->transform().m11() != 0.0) ? m_view->transform().m11() : 1.0;
+			const int a = hitAnchorGrip(scenePos, kGripPx / s);
+			if (a >= 0) {
+				m_dragging = true; m_dragAnchor = a;
+				m_dragSceneStart = scenePos; m_dragDeltaScene = QPointF(0, 0);
+				return;
+			}
+		} else if (PEPrimGeom::isResizable(sel)) {
+			const int grip = hitResizeGrip(scenePos);
+			if (grip != GripNone) {
+				m_dragging = true; m_draggingResize = true; m_dragGrip = grip;
+				m_dragSceneStart = scenePos; m_dragDeltaScene = QPointF(0, 0);
+				m_resizeOrigin = PEPrimGeom::localBounds(sel);
+				return;
+			}
+		}
+	}
+
+	const QString id = PESelfPaintItem::hitTestId(m_scene, scenePos);
 	if (id.isEmpty()) {
 		m_selectedId.clear();
 		updateSelectionVisual();
@@ -290,14 +361,6 @@ void PESvgEditor::handlePress(const QPointF & scenePos)
 	m_dragging = true;
 	m_dragSceneStart = scenePos;
 	m_dragDeltaScene = QPointF(0, 0);
-
-	// Remember the item's resting position (== its boundsOnElement top-left, set in rebuildScene) so
-	// the live preview can offset from it instead of replacing it. Without this a drag would teleport
-	// the item back toward the origin, since setPos() is absolute, not relative.
-	m_itemBasePos = QPointF(0, 0);
-	for (QGraphicsItem * it : m_scene->items()) {
-		if (it->data(0).toString() == id) { m_itemBasePos = it->pos(); break; }
-	}
 
 	const QDomElement el = selectedElement();
 	const QRectF b = PEPrimGeom::localBounds(el);
@@ -313,16 +376,38 @@ void PESvgEditor::handleMove(const QPointF & scenePos)
 {
 	if (!m_dragging || m_selectedId.isEmpty()) return;
 
-	m_dragDeltaScene = scenePos - m_dragSceneStart;
-
-	// Live preview: move the item (and, because the outline is parented to it, the outline too) by
-	// adding the scene-space delta to the item's resting position. The DOM is untouched until release
-	// so we never re-serialize per pixel.
-	QGraphicsItem * item = nullptr;
-	for (QGraphicsItem * it : m_scene->items()) {
-		if (it->data(0).toString() == m_selectedId) { item = it; break; }
+	// A resize-drag RESIZES live: write the new box into the DOM (not a translate) and re-bind, so the shape
+	// grows from the grabbed edge while dragging. m_resizeOrigin is the pre-drag box the point-list kinds scale
+	// from, so a mid-drag recompute against the current (already-resized) geometry stays stable.
+	if (m_draggingResize) {
+		const QPointF delta = scenePos - m_dragSceneStart;
+		qreal L = m_resizeOrigin.left(), R = m_resizeOrigin.right();
+		qreal T = m_resizeOrigin.top(),  B = m_resizeOrigin.bottom();
+		if (m_dragGrip & GripLeft)   L += delta.x();
+		if (m_dragGrip & GripRight)  R += delta.x();
+		if (m_dragGrip & GripTop)    T += delta.y();
+		if (m_dragGrip & GripBottom) B += delta.y();
+		const QRectF live = QRectF(QPointF(L, T), QPointF(R, B)).normalized();
+		QDomElement el = selectedElement();
+		if (el.isNull()) return;
+		// Live DOM write: refresh the item's geometry, then refresh the chrome so the marquee + grips track.
+		if (PEPrimGeom::resizeTo(el, m_resizeOrigin, live)) {
+			for (QGraphicsItem * it : m_scene->items()) {
+				if (it->data(0).toString() == m_selectedId) {
+					if (auto * spi = static_cast<PESelfPaintItem *>(it)) spi->setElement(el);
+					break;
+				}
+			}
+			updateSelectionVisual();
+		}
+		return;
 	}
-	if (item) item->setPos(m_itemBasePos + m_dragDeltaScene);
+
+	// Body/move preview is a position offset on the item (absolute==scene); the DOM commit happens on release.
+	m_dragDeltaScene = scenePos - m_dragSceneStart;
+	for (QGraphicsItem * it : m_scene->items()) {
+		if (it->data(0).toString() == m_selectedId) { it->setPos(m_dragDeltaScene); break; }
+	}
 }
 
 void PESvgEditor::handleRelease(const QPointF & scenePos)
@@ -330,107 +415,127 @@ void PESvgEditor::handleRelease(const QPointF & scenePos)
 	if (!m_dragging) return;
 	m_dragging = false;
 
-	Q_UNUSED(scenePos);
-	if (m_selectedId.isEmpty()) return;
+	const QString id = m_selectedId;
+	if (id.isEmpty()) return;
+	QDomElement el = selectedElement();
+	if (el.isNull()) return;
 
-	const QPointF sceneDelta = m_dragDeltaScene;
-	if (qAbs(sceneDelta.x()) < 1e-6 && qAbs(sceneDelta.y()) < 1e-6) {
-		// No real drag: leave the item where it was (it never moved).
+	// The release point finalises the drag: fold it into the delta so a press-release with no intervening
+	// move (or a move to an earlier point) still commits up to the real release position.
+	m_dragDeltaScene = scenePos - m_dragSceneStart;
+
+	// Anchor node edit: commit the dragged anchor to the segment's new absolute point.
+	if (m_dragAnchor >= 0) {
+		const int seg = m_dragAnchor; m_dragAnchor = -1;
+		const QVector<QPointF> before = PEPrimGeom::pathAnchors(el);
+		const QPointF from = (seg < before.count()) ? before.at(seg) : QPointF();
+		const QPointF to = scenePos;
+		if (to != from && PEPrimGeom::editPathAnchor(el, seg, to)) {
+			UndoEntry e; e.kind = UndoEntry::Kind::Anchor; e.id = id;
+			e.segmentIndex = seg; e.anchorFrom = from; e.anchorTo = to;
+			pushUndo(e);
+			rebuildScene();
+		}
 		return;
 	}
 
-	// The DOM geometry lives in the element's LOCAL user-unit space, which is the selected item's
-	// own coordinate space (item->setTransform was set to transformForElement(id), and the view adds
-	// fitInView's scale on top). Map the accumulated scene-space drag delta straight into that local
-	// space via the item's scene transform -- this is exact for any nesting/scale, unlike dividing by
-	// the view scale alone (which ignores the element's ancestor transform and the viewBox scale).
-	QGraphicsItem * item = nullptr;
-	for (QGraphicsItem * it : m_scene->items()) {
-		if (it->data(0).toString() == m_selectedId) { item = it; break; }
+	// Resize commit. handleMove already wrote the live box into the DOM during the drag; re-apply the fit to
+	// the FINAL release point so a press-release with no intervening move (or a move to an earlier point) still
+	// commits up to the real release position. The element's current box == the live box, so this is idempotent.
+	if (m_draggingResize) {
+		m_draggingResize = false;
+		const int grip = m_dragGrip; m_dragGrip = GripNone;
+		const QPointF delta = m_dragDeltaScene;
+		const QRectF cur = PEPrimGeom::localBounds(el);
+		qreal L = m_resizeOrigin.left(), R = m_resizeOrigin.right();
+		qreal T = m_resizeOrigin.top(),  B = m_resizeOrigin.bottom();
+		if (grip & GripLeft)   L += delta.x();
+		if (grip & GripRight)  R += delta.x();
+		if (grip & GripTop)    T += delta.y();
+		if (grip & GripBottom) B += delta.y();
+		const QRectF to = QRectF(QPointF(L, T), QPointF(R, B)).normalized();
+		if (to != cur && PEPrimGeom::resizeTo(el, cur, to)) {
+			UndoEntry e; e.kind = UndoEntry::Kind::Resize; e.id = id; e.from = m_resizeOrigin; e.to = to;
+			pushUndo(e);
+			rebuildScene();
+		}
+		return;
 	}
-	if (!item) return;
-	const QPointF localStart = item->mapFromScene(m_dragSceneStart);
-	const QPointF localEnd   = item->mapFromScene(m_dragSceneStart + m_dragDeltaScene);
-	QPointF userDelta = localEnd - localStart;
 
-	// Restore the item to its resting position (undo the transient preview), then commit the move to
-	// the DOM by id and reload so the render is exactly the file again.
-	item->setPos(m_itemBasePos);
-	QDomElement el = selectedElement();
-	if (el.isNull()) return;
+	// Body move commit.
+	const QPointF userDelta = m_dragDeltaScene;
+	if (qAbs(userDelta.x()) < 1e-6 && qAbs(userDelta.y()) < 1e-6) return;
 	if (!PEPrimGeom::moveBy(el, userDelta)) {
-		// Non-translatable (e.g. <path> for now): snap the preview back, no-op.
+		for (QGraphicsItem * it : m_scene->items())
+			if (it->data(0).toString() == id) { it->setPos(QPointF(0, 0)); break; }
 		updateSelectionVisual();
 		return;
 	}
-
-	MoveUndo mu{ m_selectedId, userDelta };
-	// Drop any redo tail, push, advance.
-	m_undo.resize(m_undoPos);
-	m_undo.append(mu);
-	m_undoPos = m_undo.size();
-	m_dirty = true;
-	emit dirtyChanged(true);
-	emit undoRedoChanged();
-
-	applyDocToRenderer();   // re-render from the committed document
+	UndoEntry e; e.kind = UndoEntry::Kind::Move; e.id = id; e.delta = userDelta;
+	pushUndo(e);
+	rebuildScene();
 }
 
-void PESvgEditor::commitDrag()
-{
-	// Reserved: resize commits will use this alongside moveBy/resizeRect. Move commits inline in
-	// handleRelease() because it needs the view scale to map the delta.
-}
-
-void PESvgEditor::applyDocToRenderer()
-{
-	// Reload the shared renderer from the (now edited) document without disturbing selection.
-	const QString keepSel = m_selectedId;
-	if (m_renderer) {
-		m_renderer->load(m_doc.toString().toUtf8());
-	}
-	// Re-apply each leaf's position from the reloaded renderer: after a move the element's
-	// boundsOnElement changed, so its item must move to the new top-left. Clearing then resetting the
-	// element id forces QGraphicsSvgItem to re-render the changed geometry.
-	const QList<QGraphicsItem *> all = m_scene->items();
-	for (QGraphicsItem * it : all) {
-		if (it->data(0).isNull()) continue;
-		auto * svg = dynamic_cast<QGraphicsSvgItem *>(it);
-		if (!svg) continue;
-		const QString id = it->data(0).toString();
-		svg->setElementId(QString());        // clear then reset forces a re-render of the new geometry
-		svg->setElementId(id);
-		const QRectF bb = m_renderer ? m_renderer->boundsOnElement(id) : QRectF();
-		svg->setPos(bb.isValid() ? bb.topLeft() : QPointF(0, 0));
-	}
-	m_selectedId = keepSel;
-	updateSelectionVisual();
-}
 
 void PESvgEditor::undo()
 {
 	if (!canUndo()) return;
-	const MoveUndo mu = m_undo.at(m_undoPos - 1);
+	const UndoEntry e = m_undo.at(m_undoPos - 1);
 	m_undoPos--;
-	QDomElement el = PEPrimGeom::findById(m_doc.documentElement(), mu.id);
-	if (!el.isNull()) PEPrimGeom::moveBy(el, -mu.delta);
-	m_selectedId = mu.id;
+	QDomElement el = PEPrimGeom::findById(m_doc.documentElement(), e.id);
+	if (!el.isNull()) {
+		switch (e.kind) {
+			case UndoEntry::Kind::Move:   PEPrimGeom::moveBy(el, -e.delta); break;
+			// Restore the pre-resize box: fit the current (after) geometry back to e.from.
+			case UndoEntry::Kind::Resize: PEPrimGeom::resizeTo(el, PEPrimGeom::localBounds(el), e.from); break;
+			case UndoEntry::Kind::Anchor: PEPrimGeom::editPathAnchor(el, e.segmentIndex, e.anchorFrom); break;
+		}
+	}
+	m_selectedId = e.id;
 	m_dirty = true;
 	emit undoRedoChanged();
-	applyDocToRenderer();
+	rebuildScene();
 }
 
 void PESvgEditor::redo()
 {
 	if (!canRedo()) return;
-	const MoveUndo mu = m_undo.at(m_undoPos);
+	const UndoEntry e = m_undo.at(m_undoPos);
 	m_undoPos++;
-	QDomElement el = PEPrimGeom::findById(m_doc.documentElement(), mu.id);
-	if (!el.isNull()) PEPrimGeom::moveBy(el, mu.delta);
-	m_selectedId = mu.id;
+	QDomElement el = PEPrimGeom::findById(m_doc.documentElement(), e.id);
+	if (!el.isNull()) {
+		switch (e.kind) {
+			case UndoEntry::Kind::Move:   PEPrimGeom::moveBy(el, e.delta); break;
+			// Re-apply the resize box: fit the current (restored) geometry to e.to.
+			case UndoEntry::Kind::Resize: PEPrimGeom::resizeTo(el, PEPrimGeom::localBounds(el), e.to); break;
+			case UndoEntry::Kind::Anchor: PEPrimGeom::editPathAnchor(el, e.segmentIndex, e.anchorTo); break;
+		}
+	}
+	m_selectedId = e.id;
 	m_dirty = true;
 	emit undoRedoChanged();
-	applyDocToRenderer();
+	rebuildScene();
+}
+
+// Serialise the current DOM to disk. `path` empty -> write back to the file the part/svg was opened from.
+// The DOM is serialised whole (toString(0), byte-faithful, no re-indent) and written UTF-8 via the app's
+// TextUtils::writeUtf8 (same helper the app's own model/save path uses). Because the editor always holds the
+// svg's RAW on-disk bytes -- colourisation is applied at render time (PEItemPlan/PETransform), never baked
+// into m_doc -- this round-trips the file faithfully: geometry edits persist, view colours never leak in.
+bool PESvgEditor::saveToPath(const QString & path)
+{
+	const QString target = path.isEmpty() ? m_filepath : path;
+	if (target.isEmpty()) return false;          // nothing to save to (no current filepath) and none given
+	if (m_doc.isNull()) return false;            // nothing loaded
+
+	if (!TextUtils::writeUtf8(target, m_doc.toString(0))) return false;
+
+	m_filepath = target;
+	m_dirty = false;
+	emit dirtyChanged(false);
+	emit undoRedoChanged();
+	emit saved(target);
+	return true;
 }
 
 

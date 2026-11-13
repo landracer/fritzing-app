@@ -24,7 +24,6 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "peconnectorsview.h"
 #include "pecommands.h"
 #include "pehistoryentrydialog.h"
-#include "petoolview.h"
 #include "pesvgpartloader.h"
 #include "peviewwriter.h"
 
@@ -683,7 +682,6 @@ void PEMainWindow::initConnectors(bool updateConnectorsView) {
 	if (updateConnectorsView && m_connectorsView) {
 		m_connectorsView->initConnectors(&m_connectorList);
 	}
-	if (m_peToolView) m_peToolView->initConnectors(&m_connectorList);
 	updateAssignedConnectors();
 }
 
