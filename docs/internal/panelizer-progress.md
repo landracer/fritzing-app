@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-11-13 — Session 40 (R1 landed + data-loss recovery verified; committed to protect the spine)
+
+R1 was implemented on the sole-renderer spine: generic `PEPrimGeom::resizeTo(el, from, to)` replaces the rect-only
+`resizeRect`, `isResizable` drives grips, and `PESvgEditor` now live-writes the resized box during a grip drag rather
+than translating the item. `<circle>` was deliberately made **not box-resizable**: it has only one `r`, so it only
+moves; `<path>` remains node-edited through `editPathAnchor`.
+
+Root cause was confirmed against Qt behavior: `QRectF` does not make an invalid/zero-size box valid, and the previous
+polyline/polygon bounds accumulation used degenerate per-point rectangles. `localBounds` now accumulates min/max over
+the point list, so polygon resize works correctly.
+
+During this effort, an earlier destructive `git checkout --` on an uncommitted sole-renderer path permanently erased
+Slice-D `pathAnchors`/`editPathAnchor` source from the working tree. The backup at
+`/run/media/sysadmin/Backups/home/Documents/git/fritzing-app` was used to verify that the reconstructed path functions
+match the recovered behavior: same `PEPath::fromD` decode, same cursor-tracking relative/absolute re-encode, same
+empty/undecodable rejection. The only meaningful difference was the intended R1 change from `resizeRect` to generic
+`resizeTo`/`isResizable`.
+
+**Safety change:** the feature tree is now committed and pushed to `landracer/feature/vector-editor`; scratch notes,
+screenshots, `dist/`, `bt_dbg/`, and embedded `parts/` are ignored. Future sessions must not use destructive Git
+restore commands against uncommitted work — commit first.
+
+
 ## 2026-11-12 — Session 39 (tooling/feature scope review → roadmap handoff; NOT an implementation session)
 
 User QA'd the new sole-renderer editor and listed what's still missing to make it *useful*. This session did **not**
