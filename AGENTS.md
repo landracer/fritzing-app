@@ -24,11 +24,11 @@ State-of-record at the time of writing:
   right, and recents housekeeping (Remove / Purge-all). Opening a file loads into the *current* blank
   window (second file → new window). Full arc + learnings: `docs/internal/panelizer-progress.md`,
   Session 9.
-- **Parts Editor sole-renderer (newest, standalone):** a clean PCB render/edit surface —
-  `src/partseditor/pesvgeditor.*` (`PESvgEditor`), `pesvgpartloader.*` (loads a part via `.fzp`, colourises
-  the DOM in place, nested-copper confined), `peprimitivegeom.*` (per-kind move/resize geometry),
-  `peitemplan.*` (`PEItemPlan::plan` — the pure, headless-tested itemization decision) — driven by
-  the standalone `tools/peditor` app. It renders via a **self-paint** model (Slices A–D, `peselfpaintitem.*`):
+- **Parts Editor sole-renderer (newest, main app and standalone):** a clean vector render/edit surface —
+  `src/partseditor/pesvgeditor.*` (`PESvgEditor`), `pesvgpartloader.*` (loads a part via `.fzp`, raw source of truth;
+  nested-copper confined), `peprimitivegeom.*` (per-kind move/resize geometry),
+  `peitemplan.*` (`PEItemPlan::plan` — the pure, headless-tested itemization decision) — driven by both
+  `PEMainWindow` and the standalone `tools/peditor` app. It renders via a **self-paint** model (Slices A–D, `peselfpaintitem.*`):
   each planned unit from `PEItemPlan::plan` is flattened (absolute geometry, identity transform) and bound to one
   `PESelfPaintItem` (a `QGraphicsObject`) that paints ONLY its own primitive(s) via `PETransform::shapeFromElement`
   — a group of editable id'd primitives is descended so each pad/pin is its own selectable item (`data(0)=id`);
@@ -42,12 +42,11 @@ State-of-record at the time of writing:
   anchors decode — `isEditableGraphic` fixed in Slice D so paths are selectable). Grip/node size is zoom-independent
   (`kGripPx / viewScale`). Undo is a tagged
   `UndoEntry` (Move/Resize/Anchor) replayed/reversed exactly. Select / drag-move / resize / node-edit / undo,
-  bypassing (and, in Slice E, deleting) the legacy `ItemBase`/`PEGraphicsItem` double-renderer. **Not yet wired
-  into `PEMainWindow`'s graphic-edit path** — the sole-renderer surface + selection/move/resize/node-edit
-  interaction proven standalone (chrome golden-tested via the real controller). Design + status:
+  bypassing (and, in Slice E, deleting) the legacy `ItemBase`/`PEGraphicsItem` double-renderer. This surface is now
+  wired into the Parts Editor app shell (`PEMainWindow::init` creates one `PESvgEditor` per view tab). Design + status:
   `docs/design/pe-selfpaint-renderer.md` (current, §2b/§3b/§4) / `docs/design/pe-sole-renderer.md` (original);
-  engine + interaction golden-tested in `tests/auto/test_pesvgeditor`. **Integration plan (rewrite-not-retrofit,
-slices A–H): `docs/design/pe-integration-plan.md`** — the MainWindow-wiring entry point.
+  engine + interaction golden-tested in `tests/auto/test_pesvgeditor`. Original MainWindow-wiring context:
+  `docs/design/pe-integration-plan.md`.
 - **Parts Editor save + raw-source-of-truth (newest, Slice F):** the standalone `peditor` now has **File ▸ Save**
   (Ctrl+S, writes back to the opened file) / **Save As…** (Ctrl+Shift+S) and a **closeEvent** that prompts
   Save/Discard/Cancel when dirty. The editor exposes `PESvgEditor::saveToPath(path)` (serialises the owned
@@ -61,13 +60,14 @@ slices A–H): `docs/design/pe-integration-plan.md`** — the MainWindow-wiring 
   display helper is retained (still golden-tested) but is no longer applied on the load path. Save is golden-tested
   in `test_pesvgeditor` (`save_roundTripsThroughDisk`, `save_failsWithoutFilepath`).
 - **Parts Editor TOOLING roadmap (newest, the active front — read this to continue):** the sole-renderer spine
-  (render/select/move/undo/save) is DONE; what remains to make the editor *useful* is tracked as landable slices in
-  **`docs/design/pe-editor-roadmap.md`** — **R1** resize-that-actually-resizes (today a grip-drag translates instead of
-  resizing), **R2** measurement/units (px↔in/mm/mil via `peunits`; not yet surfaced), **R3** drag-in alignment guides /
-  snapping, **R4** zoom (wheel-at-cursor + slider), **R5** create/toolbox (add rect/circle/ellipse/line/path/text +
-  pull existing library shapes/footprints/parts), **R6** Metadata/Icon blank + Schematic-not-showing (root cause: the
-  no-palette-item fallback `retrieveModelPart("generic_ic_dip_8_300mil")` names a moduleId that **does not exist** in
-  the bundled tree → blank default launch). All still on `feature/vector-editor`, uncommitted.
+  (render/select/move/undo/save) is DONE and **committed + pushed** to `feature/vector-editor`; **R1**
+  resize-that-actually-resizes is DONE: generic `resizeTo` live-writes the selected box from the grabbed edge, and
+  `<circle>` is intentionally move-only with no resize grips. Remaining roadmap slices: **R2** measurement/units
+  (px↔in/mm/mil via `peunits`; not yet surfaced), **R3** drag-in alignment guides / snapping, **R4** zoom
+  (wheel-at-cursor + slider), **R5** create/toolbox (add rect/circle/ellipse/line/path/text + pull existing library
+  shapes/footprints/parts), **R6** Metadata/Icon blank + Schematic-not-showing (root cause: the no-palette-item fallback
+  `retrieveModelPart("generic_ic_dip_8_300mil")` names a moduleId that **does not exist** in the bundled tree → blank
+  default launch).
 - **Tests:** all wired test suites build and pass on Qt 6.11.2 (see §5). `test_folderutils` was wired
   into `auto.pro` and the Boost-suite `.pro` files were converted to all-explicit `$$absolute_path()`
   source/headers (the path-keying hazard that made the aggregate `-j` build fail nondeterministically).

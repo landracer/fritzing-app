@@ -1,18 +1,18 @@
 # Parts Editor — feature roadmap (the "make it useful" build file)
 
 > **Read me first (fresh session).** The sole-renderer Parts Editor spine is DONE and green: it renders each view's
-> SVG through the self-paint itemizer, and select/move/undo/redo/save round-trip. What is MISSING is the *tooling*
-> that makes a real vector editor useful: a **correct resize**, a **measurement/units system**, **drag-in alignment
-> guides**, **zoom (slider + wheel)**, and a **create/toolbox** to add shapes and pull in existing shapes/parts. This
-> file is the complete, buildable scope for that. Work the slices in order; each lands green + golden-tested + a named
-> manual check, committed as its own slice (AGENTS.md §4). Do NOT regress the raw-source-of-truth model or the
+> SVG through the self-paint itemizer, and select/move/undo/redo/save round-trip. **R1 resize-that-actually-resizes is
+> DONE and committed/pushed.** What is missing now is the remaining *tooling* that makes a real vector editor useful:
+> a **measurement/units system**, **drag-in alignment guides**, **zoom (slider + wheel)**, and a **create/toolbox** to
+> add shapes and pull in existing shapes/parts. Work the remaining slices in order; each lands green + golden-tested +
+> a named manual check, committed as its own slice (AGENTS.md §4). Do NOT regress the raw-source-of-truth model or the
 > no-double-paint guarantee.
 
 ---
 
 ## 0. What already exists (do not rebuild this — build ON it)
 
-Current sole-renderer surface (`src/partseditor/`), all green on `feature/vector-editor`:
+Current sole-renderer surface (`src/partseditor/`), all green on `feature/vector-editor` and committed/pushed:
 - **`PESvgEditor`** (`pesvgeditor.{h,cpp}`) — the editing widget. Owns a `QDomDocument m_doc` (the sole model), a
   `QGraphicsScene`/`PESvgEditorView`, a selection marquee + 8 resize grips (only for `isResizable` kinds; a circle/
   path shows no resize grips) + path-anchor node grips. Interaction entry
@@ -42,7 +42,7 @@ Current sole-renderer surface (`src/partseditor/`), all green on `feature/vector
   `.fzp` into `m_fzpDocument`, then `loadViewDocument(viewID)` reads each `<viewName><layers image="fam/xxx.svg">`
   (resolved against `<partsroot>/svg/<family>`) into `viewDocument(viewID)` and `editor->setDocument(...)`. `saveAs`
   serializes each editor's live doc via `PEViewWriter` and repoints `<layers image>`; fzp save-gate does history+version.
-- Golden suite `tests/auto/test_pesvgeditor/test_pesvgeditor.cpp` (**36 tests, QTEST_MAIN, `-platform offscreen`**):
+- Golden suite `tests/auto/test_pesvgeditor/test_pesvgeditor.cpp` (**40 tests, QTEST_MAIN, `-platform offscreen`**):
   colourise, geom kind/move/resize/find, path decode/anchor, plan (no-dup, opaque-whole), self-paint (paints-only-own,
   selectable-leaf, subtree-order), pipeline (nested copper once, flatten absolute), interaction (smallest-area select,
   move+undo round-trip), chrome (rect grip round-trip, path node round-trip), save (round-trips, fails w/o path).
@@ -177,7 +177,7 @@ tab shows editable fields; Icon tab shows the icon; Schematic tab shows the sche
 
 ## 3. Definition of done for "editor is useful"
 
-- Resize resizes (all supported kinds), live preview, undoable.
+- ✅ Resize resizes (all supported kinds), live preview, undoable.
 - Units in/mm/mil readout for selection + cursor; unit switchable + pinned in tests.
 - Drag-in alignment guides + snap (edge/center, optional grid), golden-tested.
 - Zoom via wheel (at cursor) + slider; chrome stays zoom-independent.
@@ -187,10 +187,10 @@ tab shows editable fields; Icon tab shows the icon; Schematic tab shows the sche
 
 ## 4. Order of attack (suggested)
 
-R1 (resize) → R4 (zoom) → R2 (units) → R3 (alignment) → R6 (blank tabs fix — unblocks real-part QA) → R5 (toolbox, the
-biggest). R1/R4/R2 are quick wins that make manual QA of the rest possible, so do them first. Everything is on
-`feature/vector-editor`; commit each slice as you go (Conventional Commits, `feat(partseditor):`/`fix(partseditor):`/
-`test(partseditor):`).
+R1 is done. Remaining: R4 (zoom) → R2 (units) → R3 (alignment) → R6 (blank tabs fix — unblocks real-part QA) → R5
+(toolbox, the biggest). R4/R2 are quick wins that make manual QA of the rest possible, so do them next. Everything is
+on `feature/vector-editor`; commit each remaining slice as you go (Conventional Commits, `feat(partseditor):`/
+`fix(partseditor):`/`test(partseditor):`).
 
 ## 5. Gotchas / hazards to not repeat
 
