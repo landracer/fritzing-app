@@ -25,6 +25,7 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 #include "pecommands.h"
 #include "pehistoryentrydialog.h"
 #include "pesvgpartloader.h"
+#include "peunits.h"
 #include "peviewwriter.h"
 
 #include "../debugdialog.h"
@@ -104,6 +105,10 @@ PEMainWindow::PEMainWindow(ReferenceModel * referenceModel, QWidget * parent)
 
 	m_userPartsFolderPath = FolderUtils::getLocalPartsPath() + "/user/";
 	m_userPartsFolderSvgPath = m_userPartsFolderPath;
+
+	// R2: the readout unit is a real preference; seed it before any editor exists so the first tab
+	// already shows the user's chosen unit rather than px.
+	m_readoutUnits = PEUnits::readPreference();
 }
 
 PEMainWindow::~PEMainWindow()
@@ -124,6 +129,13 @@ void PEMainWindow::init(ReferenceModel * referenceModel, bool)
 	m_referenceModel = referenceModel;
 
 	initSketchWidgets(false);
+
+	// R2: build the shared readout + unit selector once the central tab host exists, then wire it into
+	// the editors that initSketchWidgets just created.
+	initUnitsReadout();
+	Q_FOREACH (ViewLayer::ViewID viewID, m_viewOrder) {
+		wireEditorUnits(editorFor(viewID));
+	}
 
 	m_undoView = new QUndoView();
 	m_undoGroup = new QUndoGroup(this);
@@ -232,6 +244,69 @@ QString PEMainWindow::viewName(ViewLayer::ViewID viewID) {
 	default:                        return tr("Graphic");
 	}
 }
+
+////////////////////////////////////////////////////
+// R2: measurement / units readout
+
+// Build (once) the status-bar coordinate readout and the px/in/mm/mil selector. The selector is a real
+// preference control: choosing a unit persists it (PEUnits::writePreference) and re-seeds every editor.
+void PEMainWindow::initUnitsReadout() {
+	if (m_readoutLabel != nullptr) return;      // idempotent -- called once from init()
+
+	if (m_statusBar == nullptr) return;         // no status bar to host the readout (base never built one)
+
+	m_readoutLabel = new QLabel(this);
+	m_readoutLabel->setObjectName("PEReadoutLabel");
+	m_readoutLabel->setText(tr("no selection"));
+	m_statusBar->addPermanentWidget(m_readoutLabel);
+
+	m_unitsCombo = new QComboBox(this);
+	m_unitsCombo->setObjectName("PEUnitsCombo");
+	m_unitsCombo->setToolTip(tr("Units for the position / size readout"));
+	const QStringList units = PEUnits::availableUnits();
+	for (const QString & u : units) m_unitsCombo->addItem(u, u);
+	const int idx = units.indexOf(m_readoutUnits);
+	if (idx >= 0) m_unitsCombo->setCurrentIndex(idx);
+	connect(m_unitsCombo, &QComboBox::activated, this, [this](int) {
+		applyUnitsToAll(m_unitsCombo->currentData().toString());
+	});
+	m_statusBar->addPermanentWidget(m_unitsCombo);
+}
+
+QString PEMainWindow::readoutUnits() const {
+	return m_readoutUnits;
+}
+
+// Connect one editor's readout signals to the shared status bar and seed it with the current unit.
+// The editor already carries its own (preference-seeded) unit; setUnits here is what keeps every tab in
+// lock-step once the user changes the selector.
+void PEMainWindow::wireEditorUnits(PESvgEditor * editor) {
+	if (editor == nullptr) return;
+
+	connect(editor, &PESvgEditor::selectionInfo, this, [this](const QString & text) {
+		if (m_readoutLabel) m_readoutLabel->setText(text.isEmpty() ? tr("no selection") : text);
+	});
+	connect(editor, &PESvgEditor::cursorMoved, this, [this](const QPointF &, const QString & formatted) {
+		if (m_readoutLabel) m_readoutLabel->setText(formatted);
+	});
+
+	editor->setUnits(m_readoutUnits);
+}
+
+// Apply a unit choice app-wide: keep the selector in sync, push it into every editor (which persists the
+// preference and re-formats any live selection), and record it as the source of truth here.
+void PEMainWindow::applyUnitsToAll(const QString & unit) {
+	if (!PEUnits::isKnownUnit(unit)) return;    // honest no-op; the combo can only offer known units
+	m_readoutUnits = unit;
+	if (m_unitsCombo) {
+		const int idx = PEUnits::availableUnits().indexOf(unit);
+		if (idx >= 0 && m_unitsCombo->currentIndex() != idx) m_unitsCombo->setCurrentIndex(idx);
+	}
+	Q_FOREACH (ViewLayer::ViewID viewID, m_viewOrder) {
+		if (PESvgEditor * editor = editorFor(viewID)) editor->setUnits(unit);
+	}
+}
+
 
 bool PEMainWindow::loadViewDocument(ViewLayer::ViewID viewID) {
 	QDomElement root = m_fzpDocument.documentElement();

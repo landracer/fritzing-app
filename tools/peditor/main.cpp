@@ -30,6 +30,7 @@
 #include <QCloseEvent>
 #include "pesvgeditor.h"
 #include "pesvgpartloader.h"
+#include "peunits.h"
 
 class EditorWindow : public QMainWindow {
 public:
@@ -78,6 +79,7 @@ public:
         mFile->addAction(quitAct);
 
         auto * mView = menuBar()->addMenu(tr("&View"));
+
         auto * viewGroup = new QActionGroup(this);
         viewGroup->setExclusive(true);
 
@@ -113,9 +115,32 @@ public:
         connect(m_redoAct, &QAction::triggered, m_editor, &PESvgEditor::redo);
         mEdit->addAction(m_redoAct);
 
+        // R2: the readout unit selector (px / in / mm / mil). Choosing one pushes it into the editor,
+        // which persists the preference and re-formats the live selection readout.
+        auto * unitsGroup = new QActionGroup(this);
+        unitsGroup->setExclusive(true);
+        for (const QString & u : PEUnits::availableUnits()) {
+            auto * a = new QAction(u, this);
+            a->setCheckable(true);
+            a->setData(u);
+            if (u == m_editor->units()) a->setChecked(true);
+            unitsGroup->addAction(a);
+            mView->addAction(a);
+        }
+        connect(unitsGroup, &QActionGroup::triggered, this, [this](QAction * a) {
+            m_editor->setUnits(a->data().toString());
+        });
+
         // Selection readout + dirty/undo state drive the status bar and Edit menu.
         connect(m_editor, &PESvgEditor::selectionInfo, this, [this](const QString & text) {
             if (!text.isEmpty()) statusBar()->showMessage(tr("Selected: %1").arg(text));
+        });
+        // R2: the cursor position, in the current unit. A hover is not a selection, so it is shown as-is.
+        connect(m_editor, &PESvgEditor::cursorMoved, this, [this](const QPointF &, const QString & formatted) {
+            statusBar()->showMessage(tr("Cursor: %1").arg(formatted));
+        });
+        connect(m_editor, &PESvgEditor::unitsChanged, this, [this](const QString & unit) {
+            statusBar()->showMessage(tr("Units: %1").arg(unit));
         });
         connect(m_editor, &PESvgEditor::undoRedoChanged, this, [this]() {
             m_undoAct->setEnabled(m_editor->canUndo());

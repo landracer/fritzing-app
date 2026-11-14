@@ -2,9 +2,10 @@
 
 > **Read me first (fresh session).** The sole-renderer Parts Editor spine is DONE and green: it renders each view's
 > SVG through the self-paint itemizer, and select/move/undo/redo/save round-trip. **R1 resize-that-actually-resizes is
-> DONE and committed/pushed.** What is missing now is the remaining *tooling* that makes a real vector editor useful:
-> a **measurement/units system**, **drag-in alignment guides**, **zoom (slider + wheel)**, and a **create/toolbox** to
-> add shapes and pull in existing shapes/parts. Work the remaining slices in order; each lands green + golden-tested +
+> DONE. R2 measurement/units is DONE** (px/in/mm/mil readout of the selection box + cursor, a real pinned preference,
+> display-only — never rewrites geometry). What is missing now is the remaining *tooling* that makes a real vector editor
+> useful: **drag-in alignment guides**, **zoom (slider + wheel)**, and a **create/toolbox** to
+> add shapes and pull in existing shapes/parts. Work the remaining slices (R3/R4/R5/R6); each lands green + golden-tested +
 > a named manual check, committed as its own slice (AGENTS.md §4). Do NOT regress the raw-source-of-truth model or the
 > no-double-paint guarantee.
 
@@ -31,8 +32,10 @@ Current sole-renderer surface (`src/partseditor/`), all green on `feature/vector
 - **`PEPath`** (`pepath.{h,cpp}`) — `<path d>` decode/encode, relative-aware, stable round-trip.
 - **`PETransform::flatten(el)`** (`petransform.{h,cpp}`) — bake ancestor transforms into absolute attrs at load;
   `shapeFromElement` is the self-paint shape source.
-- **`peunits.{h,cpp}`** — **already** converts px↔in/mm at 90 dpi (`SvgDpi=90`, `pxToUnits`, `pxToUnitsStr`). Wire it
-  into the UI (R2).
+- **`peunits.{h,cpp}`** — the R2 units core. px↔in/mm/mil at 90 dpi (`SvgDpi=90`, `pxToUnits`/`unitsToPx`,
+  `pxToUnitsStr`), the closed unit registry (`availableUnits`/`isKnownUnit`, `px` and unknown = identity), `convertBox`,
+  deterministic `formatBox`/`formatPoint` (`'g',4`), and the preference gate (`readPreference`/`writePreference` on
+  QSettings `partsEditorDisplayUnits`, default `mm`). Wired into `PESvgEditor` (R2, done).
 - **`PEViewWriter::writeViewSvg(doc, path)`** (`peviewwriter.{h,cpp}`) — atomic serialize on save.
 - **`PESvgPartLoader`** (`pesvgpartloader.{h,cpp}`) — `loadPart(fzp/path, View)` returns the **RAW** svg (no recolour;
   colourise is dead on the load path). `View` = {PcbView, BreadboardView, SchematicView}.
@@ -42,10 +45,12 @@ Current sole-renderer surface (`src/partseditor/`), all green on `feature/vector
   `.fzp` into `m_fzpDocument`, then `loadViewDocument(viewID)` reads each `<viewName><layers image="fam/xxx.svg">`
   (resolved against `<partsroot>/svg/<family>`) into `viewDocument(viewID)` and `editor->setDocument(...)`. `saveAs`
   serializes each editor's live doc via `PEViewWriter` and repoints `<layers image>`; fzp save-gate does history+version.
-- Golden suite `tests/auto/test_pesvgeditor/test_pesvgeditor.cpp` (**40 tests, QTEST_MAIN, `-platform offscreen`**):
+- Golden suite `tests/auto/test_pesvgeditor/test_pesvgeditor.cpp` (**44 tests, QTEST_MAIN, `-platform offscreen`**):
   colourise, geom kind/move/resize/find, path decode/anchor, plan (no-dup, opaque-whole), self-paint (paints-only-own,
   selectable-leaf, subtree-order), pipeline (nested copper once, flatten absolute), interaction (smallest-area select,
-  move+undo round-trip), chrome (rect grip round-trip, path node round-trip), save (round-trips, fails w/o path).
+  move+undo round-trip), chrome (rect grip round-trip, path node round-trip), save (round-trips, fails w/o path), and the
+  R2 units wiring (selection readout uses the unit, unit switch re-formats live, unit switch is display-only, hover emits
+  cursor in-unit). The pure units core has its own `tests/auto/test_peunits` suite (13, core+xml only).
 - Launch path: `MainWindow::openNewPartsEditor(paletteItem)` (`src/mainwindow/mainwindow_menu.cpp`) → `new
   PEMainWindow` → `init` → `setInitialItem`. Standalone tool: `tools/peditor/main.cpp` (File open/Save/Save As, Undo/
   Redo, `PED_SHOT` headless capture).
@@ -98,17 +103,30 @@ width **or** height is 0, and `united` of equal-point rects does not widen.) Fix
 grab corner → width/height grow from that corner, x/y pinned; undo/redo replay). Manual: select a rect/polygon, drag a
 grip → it resizes live from that edge; a circle shows no grips and only moves; a path shows node grips.
 
-### R2 — Measurement / units system
-**Reuse** `peunits.{h,cpp}` (already px↔in/mm @ 90 dpi).
-**Build.**
-- A unit preference (in / mm / mil; default mm) as a real preference (pin it in tests — AGENTS.md §4).
-- Status bar / readout showing the **selection** origin+size and the **cursor** position in the chosen unit (convert
-  the current `selectionInfo` px values through `pxToUnits`).
-- A visible coordinate/size readout near the selection (a small always-on panel or the existing `m_svgLabel`).
-- Optional: a ruler along the top/left in the chosen unit (later; mark as sub-slice).
-**Golden tests:** `pxToUnits` conversions already partly covered; add: selection info formats a known px box to the
-expected mm/in/mil string; unit switch changes the readout deterministically.
-**Manual:** open a part, select a pad → readout shows the pad's w×h in mm and in inches correctly; switch unit → updates.
+### R2 — Measurement / units system  **[DONE]**
+**Reuse** `peunits.{h,cpp}` (already px↔in/mm @ 90 dpi; extended to mil + the box/point formatters here).
+**Build (landed).**
+- `PEUnits` gained the closed unit registry `px/in/mil/mm` (`availableUnits`/`isKnownUnit`), `convertBox`, and
+  deterministic `formatBox`/`formatPoint` (`'g',4`, unit name appended so the readout never lies about scale).
+  `pxToUnits`/`unitsToPx` now handle `mil` (×1000/90) and `px` (identity); an unknown name is still identity passthrough.
+- The unit is a **real preference**: `PEUnits::readPreference`/`writePreference` on QSettings key
+  `partsEditorDisplayUnits` (default `mm`); an unknown/corrupt stored value falls back to the default, and an
+  unknown write is refused (never poisons the store).
+- `PESvgEditor` carries a per-editor `units()`/`setUnits(unit)` (+ `defaultUnits()`, `unitsChanged`); the selection
+  readout (`handlePress`) is now `"<id> · <kind> · <formatBox(bounds, unit)>"`. `handleHover` emits `cursorMoved(px, formatted)`
+  — a hover never selects and never dirties. **Display-only:** switching unit rewrites NO geometry attribute (golden-tested).
+- `PEMainWindow`: `initUnitsReadout()` builds a status-bar readout label + a px/in/mm/mil selector once; `wireEditorUnits`
+  connects each view editor's `selectionInfo`/`cursorMoved` to it, and `applyUnitsToAll` keeps every tab + the selector in
+  lock-step (persisting the choice). `tools/peditor` mirrors this on its View menu + status bar.
+- **Optional ruler:** still deferred (unchanged from the original note) — not part of this slice.
+**Golden tests (green):** new `test_peunits` suite (13) — exact per-unit conversion at 90 dpi, round-trip per unit,
+identity for px/unknown, the closed registry, `isKnownUnit` case-sensitivity, `formatPoint`/`formatBox` exact strings,
+empty for an invalid box, preference default/round-trip/garbage-rejection (pinned to a scratch ini, AGENTS.md §4), and a
+**real bundled part** (`11LC010` schematic body) reading back its authored size. `test_pesvgeditor` gained 4: the
+selection readout uses the current unit, a unit switch re-formats the live selection, a unit switch is display-only (DOM
+byte-identical, never dirty), and hover emits the cursor in-unit without selecting/dirtying.
+**Manual (done):** launched `peditor` on a real part under Xvfb (renders green); selecting a shape shows its position+size
+in the current unit and switching px/in/mm/mil updates it and persists.
 
 
 ### R3 — Drag-in alignment guides / snapping
@@ -178,7 +196,7 @@ tab shows editable fields; Icon tab shows the icon; Schematic tab shows the sche
 ## 3. Definition of done for "editor is useful"
 
 - ✅ Resize resizes (all supported kinds), live preview, undoable.
-- Units in/mm/mil readout for selection + cursor; unit switchable + pinned in tests.
+- ✅ Units px/in/mm/mil readout for selection + cursor; unit switchable + pinned in tests (R2).
 - Drag-in alignment guides + snap (edge/center, optional grid), golden-tested.
 - Zoom via wheel (at cursor) + slider; chrome stays zoom-independent.
 - Toolbox creates rect/circle/ellipse/line/path/text into the DOM (undoable) and inserts existing part graphics.
@@ -187,8 +205,8 @@ tab shows editable fields; Icon tab shows the icon; Schematic tab shows the sche
 
 ## 4. Order of attack (suggested)
 
-R1 is done. Remaining: R4 (zoom) → R2 (units) → R3 (alignment) → R6 (blank tabs fix — unblocks real-part QA) → R5
-(toolbox, the biggest). R4/R2 are quick wins that make manual QA of the rest possible, so do them next. Everything is
+R1 and R2 are done. Remaining: R4 (zoom) → R3 (alignment) → R6 (blank tabs fix — unblocks real-part QA) → R5
+(toolbox, the biggest). R4 is the next quick win that makes manual QA of the rest easier. Everything is
 on `feature/vector-editor`; commit each remaining slice as you go (Conventional Commits, `feat(partseditor):`/
 `fix(partseditor):`/`test(partseditor):`).
 

@@ -23,6 +23,8 @@ along with Fritzing.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <QList>
 #include <QDomDocument>
+class QLabel;
+class QComboBox;
 
 #include "../mainwindow/mainwindow.h"
 #include "../model/modelpartshared.h"
@@ -147,6 +149,18 @@ protected:
 	void changeSpecialProperty(const QString & name, const QString & value);
 	bool canSave();
 
+	// ---- R2: measurement / units readout -----------------------------------------
+	// A status-bar readout for the CURRENT tab's editor: the selection's position+size, and the cursor
+	// position -- both in the chosen unit. Built once (idempotent) and shared by all view editors.
+	void initUnitsReadout();
+	// Connect a freshly created editor's selection/cursor readout to the shared status-bar readout, and
+	// seed it with the current unit.
+	void wireEditorUnits(PESvgEditor * editor);
+	// The unit the readout shows (the stored preference until the user picks another).
+	QString readoutUnits() const;
+	// Apply a unit choice to the readout, every editor, and the preference (persisted for next launch).
+	void applyUnitsToAll(const QString & unit);
+
 
 protected:
 	// m_fzpDocument is the authoritative module metadata. Each view QDomDocument is the authoritative
@@ -179,6 +193,13 @@ protected:
 	QStringList m_filesToDelete;
 	QList<QDomElement> m_connectorList;
 	QString m_removedConnector;
+
+	// R2: the shared status-bar readout ("(x, y) (w, h) mm") and the unit selector (px / in / mm / mil).
+	// m_readoutUnits is the single source of truth here; each editor is seeded from it and re-seeded on
+	// change, so every view tab shows the same unit.
+	QLabel * m_readoutLabel = nullptr;
+	QComboBox * m_unitsCombo = nullptr;
+	QString m_readoutUnits;
 };
 
 

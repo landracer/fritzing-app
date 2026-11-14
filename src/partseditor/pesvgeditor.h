@@ -61,11 +61,26 @@ public:
 	void setVisibleLayers(const QStringList & layerGroupIds);
 	void fitToWindow();
 
+	// ---- R2: measurement / units -------------------------------------------------
+	// The unit the readout (selection bounds + cursor position) is expressed in. Every editor starts
+	// in PEUnits::readPreference() (the stored preference, or its mm default); setUnits() switches it
+	// live, persists it via PEUnits::writePreference() so the whole app agrees on the next launch, and
+	// re-formats the current selection's readout. The unit is DISPLAY ONLY -- geometry in the DOM stays
+	// in svg user units (px at 90 dpi); changing it never rewrites an attribute.
+	QString units() const { return m_units; }
+	void setUnits(const QString & unit);
+	// The unit a newly created editor starts in (the stored preference / mm default). The shells read
+	// this once so they can seed every editor identically.
+	static QString defaultUnits();
+
 	// Interaction entry points -- called by PESvgEditorView with scene-space points. Public so the
 	// selection/move/resize/anchor behavior is directly testable as a controller (the view is a thin forwarder).
 	void handlePress(const QPointF & scenePos);
 	void handleMove(const QPointF & scenePos);
 	void handleRelease(const QPointF & scenePos);
+	// R2: a hover (no button held) point. Emits cursorMoved() with the scene point so the shell can show
+	// it in the current unit; never mutates the DOM or the selection.
+	void handleHover(const QPointF & scenePos);
 
 	// True when there is an undoable move committed.
 	bool canUndo() const;
@@ -91,10 +106,16 @@ public Q_SLOTS:
 
 Q_SIGNALS:
 	void elementSelected(const QString & elementId);
-	void selectionInfo(const QString & text);   // "id · kind · (x,y) w×h" for the status bar
+	void selectionInfo(const QString & text);   // "id · kind · <bounds in the current unit>" for the status bar
 	void dirtyChanged(bool dirty);
 	void undoRedoChanged();
 	void saved(const QString & path);            // emitted after a successful saveToPath
+	// R2: the pointer's scene position in svg user units, alongside the same position pre-formatted for
+	// the current unit. Kept as raw px too so a shell that wants the numbers (a future field editor)
+	// does not have to re-parse the string.
+	void cursorMoved(const QPointF & pxPoint, const QString & formatted);
+	// R2: the readout unit changed (the shells re-seed any dependent chrome).
+	void unitsChanged(const QString & unit);
 
 protected:
 	void rebuildScene();
@@ -161,6 +182,8 @@ private:
 	QString m_label;
 	QString m_filepath;
 	QStringList m_visibleLayers;
+	// R2: the readout unit for this editor (never affects stored geometry).
+	QString m_units = defaultUnits();
 
 	// Selection / drag state.
 	QString m_selectedId;

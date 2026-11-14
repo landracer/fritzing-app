@@ -6,6 +6,7 @@
 #include "peitemplan.h"
 #include "petransform.h"
 #include "peselfpaintitem.h"
+#include "peunits.h"
 #include "../utils/textutils.h"
 
 #include <QGraphicsScene>
@@ -50,11 +51,15 @@ protected:
 		QGraphicsView::mousePressEvent(ev);
 	}
 	void mouseMoveEvent(QMouseEvent * ev) override {
+		// R2: the cursor readout follows the pointer whether or not a drag is in progress, so the
+		// position is always live. Only the drag itself is consumed; plain hover falls through.
 		if (ev->buttons() & Qt::LeftButton) {
 			m_editor->handleMove(mapToScene(ev->pos()));
+			m_editor->handleHover(mapToScene(ev->pos()));
 			ev->accept();
 			return;
 		}
+		m_editor->handleHover(mapToScene(ev->pos()));
 		QGraphicsView::mouseMoveEvent(ev);
 	}
 	void mouseReleaseEvent(QMouseEvent * ev) override {
@@ -80,6 +85,8 @@ PESvgEditor::PESvgEditor(QWidget * parent)
 	m_view->setRenderHint(QPainter::SmoothPixmapTransform, true);
 	m_view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
 	m_view->setBackgroundBrush(QColor(0x40, 0x40, 0x40));
+	// R2: hover (no button held) must reach mouseMoveEvent so the cursor readout stays live.
+	m_view->setMouseTracking(true);
 
 	m_svgLabel = new QLabel(this);
 	m_svgLabel->setTextFormat(Qt::PlainText);
@@ -117,6 +124,38 @@ void PESvgEditor::setVisibleLayers(const QStringList & layerGroupIds)
 
 bool PESvgEditor::canUndo() const { return m_undoPos > 0; }
 bool PESvgEditor::canRedo() const { return m_undoPos < m_undo.size(); }
+
+// R2: the unit a fresh editor starts in is the stored preference (or its mm default). Read once per
+// construction; PEUnits::readPreference already maps an unknown/corrupt stored value back to the default.
+QString PESvgEditor::defaultUnits()
+{
+	return PEUnits::readPreference();
+}
+
+// R2: switch the readout unit. Persist it so every editor (and the next launch) agrees, re-format the
+// CURRENT selection so the marquee's readout updates without a re-select, and announce the change.
+// Display-only: no geometry attribute is touched, so this never dirties the document.
+void PESvgEditor::setUnits(const QString & unit)
+{
+	if (!PEUnits::isKnownUnit(unit)) return;   // honest no-op, never a silent wrong scale
+	if (unit == m_units) return;
+	m_units = unit;
+	PEUnits::writePreference(unit);
+	if (!m_selectedId.isEmpty() && !selectedElement().isNull()) {
+		const QDomElement el = selectedElement();
+		emit selectionInfo(QStringLiteral("%1 · %2 · %3")
+			.arg(m_selectedId, PEPrimGeom::kindName(PEPrimGeom::kindFor(el)),
+			     PEUnits::formatBox(PEPrimGeom::localBounds(el), m_units)));
+	}
+	emit unitsChanged(m_units);
+}
+
+// R2: hover is read-only -- it feeds the cursor coordinate readout and nothing else. Explicitly NOT
+// a DOM edit: it never touches m_dragging/m_selectedId, so hovering can neither select nor dirty.
+void PESvgEditor::handleHover(const QPointF & scenePos)
+{
+	emit cursorMoved(scenePos, PEUnits::formatPoint(scenePos, m_units));
+}
 
 QDomElement PESvgEditor::selectedElement() const
 {
@@ -363,12 +402,13 @@ void PESvgEditor::handlePress(const QPointF & scenePos)
 	m_dragDeltaScene = QPointF(0, 0);
 
 	const QDomElement el = selectedElement();
+	// R2: the bounds are converted+formatted by the pure, golden-tested PEUnits, in the editor's
+	// current unit -- the readout is a projection of the stored px geometry, never a re-scaled model.
 	const QRectF b = PEPrimGeom::localBounds(el);
 	emit elementSelected(id);
-	emit selectionInfo(QStringLiteral("%1 · %2 · (%3, %4) %5×%6")
-		.arg(id, PEPrimGeom::kindName(PEPrimGeom::kindFor(el)))
-		.arg(b.x(), 0, 'g', 5).arg(b.y(), 0, 'g', 5)
-		.arg(b.width(), 0, 'g', 5).arg(b.height(), 0, 'g', 5));
+	emit selectionInfo(QStringLiteral("%1 · %2 · %3")
+		.arg(id, PEPrimGeom::kindName(PEPrimGeom::kindFor(el)),
+		     PEUnits::formatBox(b, m_units)));
 	updateSelectionVisual();
 }
 

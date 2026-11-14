@@ -134,6 +134,13 @@ private slots:
 	// Slice F: save -- serialise the edited DOM back to disk and re-parse (raw-source-of-truth round-trip).
 	void save_roundTripsThroughDisk();
 	void save_failsWithoutFilepath();
+
+	// R2: the units system wired into the editor controller. The readout is a *projection* of the stored
+	// px geometry -- switching unit must re-format the readout and must NEVER rewrite a geometry attribute.
+	void editor_selectionReadoutUsesTheCurrentUnit();
+	void editor_unitSwitchReformatsTheLiveSelectionReadout();
+	void editor_unitSwitchIsDisplayOnly();
+	void editor_hoverEmitsCursorInUnitAndDoesNotSelect();
 };
 
 void TestPESvgEditor::colourise_recognisesPcbLayers()
@@ -872,6 +879,97 @@ void TestPESvgEditor::save_failsWithoutFilepath()
 	QVERIFY(!ed.saveToPath());              // empty path + no currentFilepath -> false
 	QCOMPARE(savedSpy.count(), 0);          // nothing saved
 }
+
+// ---- R2: units wired into the editor ---------------------------------------------
+
+// A 90x45 user-unit rect: exactly 25.4mm x 12.7mm, or 1in x 0.5in at 90 dpi.
+static const char * kUnitsSvg =
+	"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 90 45'>"
+	"<rect id='box' x='0' y='0' width='90' height='45' fill='#00ff00'/>"
+	"</svg>";
+
+void TestPESvgEditor::editor_selectionReadoutUsesTheCurrentUnit()
+{
+	PESvgEditor ed;
+	QDomDocument d; QVERIFY(d.setContent(QString::fromUtf8(kUnitsSvg)));
+	ed.setUnits("in");
+	ed.setDocument(d, "t");
+
+	QSignalSpy selSpy(&ed, &PESvgEditor::selectionInfo);
+	ed.handlePress(QPointF(1, 1));                       // select the rect by its body
+	QCOMPARE(selSpy.count(), 1);
+	// The id and kind lead, then the box in the chosen unit (position then size), with the unit named.
+	QCOMPARE(selSpy.at(0).at(0).toString(),
+	         QStringLiteral("box · rect · (0, 0) (1, 0.5) in"));
+}
+
+void TestPESvgEditor::editor_unitSwitchReformatsTheLiveSelectionReadout()
+{
+	// Selecting under mm then switching to in must re-emit the readout WITHOUT a re-select, proving the
+	// readout tracks the unit rather than being frozen at selection time.
+	PESvgEditor ed;
+	QDomDocument d; QVERIFY(d.setContent(QString::fromUtf8(kUnitsSvg)));
+	ed.setUnits("mm");
+	ed.setDocument(d, "t");
+	ed.handlePress(QPointF(1, 1));
+
+	QSignalSpy selSpy(&ed, &PESvgEditor::selectionInfo);
+	QSignalSpy unitsSpy(&ed, &PESvgEditor::unitsChanged);
+	ed.setUnits("in");
+	QCOMPARE(unitsSpy.count(), 1);
+	QCOMPARE(unitsSpy.at(0).at(0).toString(), QStringLiteral("in"));
+	QCOMPARE(selSpy.count(), 1);
+	QCOMPARE(selSpy.at(0).at(0).toString(),
+	         QStringLiteral("box · rect · (0, 0) (1, 0.5) in"));
+}
+
+void TestPESvgEditor::editor_unitSwitchIsDisplayOnly()
+{
+	// The core R2 guarantee: a unit change is a projection change, never a geometry write. The stored
+	// width/height attrs must be byte-identical before and after, and the document must stay clean
+	// (setUnits must NOT mark the doc dirty -- nothing was edited).
+	PESvgEditor ed;
+	QDomDocument d; QVERIFY(d.setContent(QString::fromUtf8(kUnitsSvg)));
+	ed.setUnits("px");
+	ed.setDocument(d, "t");
+	ed.handlePress(QPointF(1, 1));
+
+	const QDomElement before = PEPrimGeom::findById(ed.document().documentElement(), "box");
+	QString beforeXml;		// QDomElement has no toString(); serialize via QDomNode::save
+	{ QTextStream ts(&beforeXml); before.save(ts, 0); }
+	QSignalSpy dirtySpy(&ed, &PESvgEditor::dirtyChanged);
+	ed.setUnits("mil");
+	QCOMPARE(dirtySpy.count(), 0);                       // display-only: never dirtying
+
+	const QDomElement after = PEPrimGeom::findById(ed.document().documentElement(), "box");
+	QString afterXml;
+	{ QTextStream ts(&afterXml); after.save(ts, 0); }
+	QCOMPARE(afterXml, beforeXml);                       // geometry untouched
+	QCOMPARE(after.attribute("width"), QStringLiteral("90"));
+	QCOMPARE(after.attribute("height"), QStringLiteral("45"));
+}
+
+void TestPESvgEditor::editor_hoverEmitsCursorInUnitAndDoesNotSelect()
+{
+	// Hover is read-only: it announces the cursor in the current unit but must not select, must not
+	// dirty, and must not move anything.
+	PESvgEditor ed;
+	QDomDocument d; QVERIFY(d.setContent(QString::fromUtf8(kUnitsSvg)));
+	ed.setUnits("in");
+	ed.setDocument(d, "t");
+
+	QSignalSpy curSpy(&ed, &PESvgEditor::cursorMoved);
+	QSignalSpy selElSpy(&ed, &PESvgEditor::elementSelected);
+	QSignalSpy dirtySpy(&ed, &PESvgEditor::dirtyChanged);
+	ed.handleHover(QPointF(90, 45));
+
+	QCOMPARE(curSpy.count(), 1);
+	QCOMPARE(curSpy.at(0).at(0).toPointF(), QPointF(90, 45));   // raw px carried through unchanged
+	QCOMPARE(curSpy.at(0).at(1).toString(), QStringLiteral("(1, 0.5) in"));
+	QCOMPARE(selElSpy.count(), 0);                              // hover selected nothing
+	QCOMPARE(dirtySpy.count(), 0);                              // and dirtied nothing
+}
+
 
 // ---- R1: resize that actually resizes (generic resizeTo + grips on every resizable kind) ----------------
 

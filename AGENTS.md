@@ -167,8 +167,12 @@ make -j"$(nproc)"
 ./test_panelizer/test_panelizer         -platform offscreen
 ./test_gerberpreview/test_gerberpreview -platform offscreen
 ./test_peviewlayermap/test_peviewlayermap -platform offscreen
+./test_peunits/test_peunits             -platform offscreen
 # test_pesvgeditor is now QTEST_MAIN (widgets raster render), so it also takes -platform offscreen.
 ./test_pesvgeditor/test_pesvgeditor     -platform offscreen
+# test_peviewwriter uses QTEST_GUILESS_MAIN (core-only, no gui platform plugin registered), so it takes
+# NO -platform arg -- pass it one and it prints its help and exits. Run it bare:
+./test_peviewwriter/test_peviewwriter
 ```
 
 - **Boost suites:** "no assertion failures were found" == pass (run bare, no `-platform offscreen`; that arg

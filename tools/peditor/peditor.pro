@@ -11,6 +11,7 @@ SOURCES += main.cpp \
            $$PWD/../../src/partseditor/petransform.cpp \
            $$PWD/../../src/partseditor/peselfpaintitem.cpp \
            $$PWD/../../src/partseditor/pepath.cpp \
+           $$PWD/../../src/partseditor/peunits.cpp \
            $$PWD/../../src/svg/svgpathlexer.cpp \
            $$PWD/../../src/svg/svgpathgrammar.cpp \
            $$PWD/../../src/svg/svgpathparser.cpp \
@@ -25,6 +26,7 @@ HEADERS += $$PWD/../../src/partseditor/pesvgeditor.h \
            $$PWD/../../src/partseditor/petransform.h \
            $$PWD/../../src/partseditor/peselfpaintitem.h \
            $$PWD/../../src/partseditor/pepath.h \
+           $$PWD/../../src/partseditor/peunits.h \
            $$PWD/../../src/svg/svgpathlexer.h \
            $$PWD/../../src/svg/svgpathgrammar_p.h \
            $$PWD/../../src/svg/svgpathparser.h \
